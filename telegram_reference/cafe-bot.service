@@ -1,0 +1,17 @@
+[Unit]
+Description=Barbershop Telegram Bot (%i)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bots/%i
+EnvironmentFile=/opt/bots/%i/.env
+ExecStart=/opt/bots/%i/venv/bin/python -m app.main
+Restart=always
+RestartSec=1
+StartLimitBurst=5
+StartLimitIntervalSec=60
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+flow_id,step_id,screen_name,user_action,bot_response,callback_data,next_step_id,role_required,notes
+onboarding,1,start,/start,Приветствие и стартовая навигация,,2,any,Новый пользователь
+onboarding,2,registration,Заполнить шаги регистрации,Переход в главное меню,,3,any,Проверить валидации
+main,1,main_menu,Открыть запись,Старт flow записи,book:*,2,any,YClients runtime
+main,2,main_menu,Открыть мои записи,Показ списка записей,my_bookings:open,3,any,YClients runtime
+main,3,main_menu,Открыть контакты,Показ контактов,contacts:open,4,any,Локальный/конфиг источник
+main,4,main_menu,Открыть поддержку,Экран поддержки,support:open,5,any,Проверка UX
+broadcast,1,broadcast_root,Открыть рассылки,Меню рассылок,broadcast:section:one_time,2,manager/admin/developer,ACL
+broadcast,2,segment_root,Выбрать сегмент,Сегмент выбран,broadcast:segments:*,3,manager/admin/developer,Проверить пустые сегменты
+broadcast,3,segment_result,Использовать для рассылки,Переход в one-time,broadcast:use_segment:*,4,manager/admin/developer,Без placeholder
+reminder,1,dev_tests,Тест 48h,event создан,broadcast:dev_tests:booking_confirm_2d,2,developer,Повторяемость
+reminder,2,dev_tests,Тест 2h,event создан,broadcast:dev_tests:booking_reminder_2h,3,developer,Не должен трогать YClients
+nav,1,any,Нажать Назад,Возврат на 1 шаг,nav:back,2,any,Стек навигации
+nav,2,any,Нажать Главное меню,Role-aware home,nav:home,3,any,FSM cleanup

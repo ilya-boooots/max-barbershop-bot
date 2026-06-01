@@ -1,0 +1,12 @@
+# Codex project instructions
+- User-facing reports should be in Russian when requested.
+- UI text in Telegram must stay Russian + emojis.
+- Prompts/comments may be English when matching existing style.
+- For fixes: one bug -> root cause -> minimal patch.
+- No placeholder fixes.
+- Do not stop at service-only fix when Telegram UI wiring is required.
+- YCLIENTS REST API.pdf is source of truth for YClients fields/endpoints.
+- Local DB is cache/mapping/logs, not source of truth for historical YClients data.
+- Always validate callback_data type and <= 64 bytes.
+- Always report exact changed files and commands/tests run.
+- Never mark manual Telegram/YClients runtime checks as PASS unless they were actually executed.
