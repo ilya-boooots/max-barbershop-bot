@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from os import getenv
+
 from max_barbershop_bot.core import state
+from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import RouterContext
+from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
+from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.ui.screens import main_menu_screen, placeholder_screen
 
 
@@ -43,8 +48,25 @@ async def render_screen(context: RouterContext, screen_id: str) -> None:
     """Render a known screen id."""
 
     if screen_id == state.MAIN_MENU_SCREEN:
-        screen = main_menu_screen()
+        screen = main_menu_screen(_current_role(context))
     else:
         screen = placeholder_screen()
 
     await context.send_text(screen.text, keyboard=screen.keyboard)
+
+
+def _current_role(context: RouterContext) -> str:
+    platform_user_id = context.event.platform_user_id
+    if platform_user_id is None:
+        return "user"
+
+    database_path = _database_path()
+    users = UsersRepository(database_path)
+    user = users.find_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+    if user is None:
+        return "user"
+    return StaffRolesRepository(database_path).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+
+
+def _database_path() -> str:
+    return getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH

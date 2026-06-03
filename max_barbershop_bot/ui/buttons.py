@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from max_barbershop_bot.core.permissions import (
+    can_view_broadcasts,
+    can_view_settings,
+    can_view_staff,
+    can_view_statistics,
+    can_view_yclients,
+    normalize_role,
+)
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 
 MENU_BOOKING_PAYLOAD = "menu:booking"
@@ -9,6 +17,11 @@ MENU_MY_BOOKINGS_PAYLOAD = "menu:my_bookings"
 MENU_MASTERS_PAYLOAD = "menu:masters"
 MENU_CONTACTS_PAYLOAD = "menu:contacts"
 MENU_SUPPORT_PAYLOAD = "menu:support"
+ADMIN_STAFF_PAYLOAD = "admin:staff"
+ADMIN_SETTINGS_PAYLOAD = "admin:settings"
+ADMIN_BROADCASTS_PAYLOAD = "admin:broadcasts"
+ADMIN_STATISTICS_PAYLOAD = "admin:statistics"
+ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
 
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
@@ -25,22 +38,37 @@ MENU_PAYLOADS = frozenset(
         MENU_MASTERS_PAYLOAD,
         MENU_CONTACTS_PAYLOAD,
         MENU_SUPPORT_PAYLOAD,
+        ADMIN_STAFF_PAYLOAD,
+        ADMIN_SETTINGS_PAYLOAD,
+        ADMIN_BROADCASTS_PAYLOAD,
+        ADMIN_STATISTICS_PAYLOAD,
+        ADMIN_YCLIENTS_PAYLOAD,
     }
 )
 
 
-def main_menu_keyboard() -> MaxInlineKeyboard:
-    """Build the main menu inline keyboard."""
+def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
+    """Build the main menu inline keyboard for the current role."""
 
-    return MaxInlineKeyboard.from_rows(
-        [
-            [MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)],
-            [MaxButton(text="📅 Мои записи", payload=MENU_MY_BOOKINGS_PAYLOAD)],
-            [MaxButton(text="👥 Мастера", payload=MENU_MASTERS_PAYLOAD)],
-            [MaxButton(text="📍 Контакты", payload=MENU_CONTACTS_PAYLOAD)],
-            [MaxButton(text="🆘 Поддержка", payload=MENU_SUPPORT_PAYLOAD)],
-        ]
-    )
+    normalized_role = normalize_role(role)
+    rows = [
+        [MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)],
+        [MaxButton(text="📅 Мои записи", payload=MENU_MY_BOOKINGS_PAYLOAD)],
+        [MaxButton(text="👥 Мастера", payload=MENU_MASTERS_PAYLOAD)],
+        [MaxButton(text="📍 Контакты", payload=MENU_CONTACTS_PAYLOAD)],
+        [MaxButton(text="🆘 Поддержка", payload=MENU_SUPPORT_PAYLOAD)],
+    ]
+    if can_view_staff(normalized_role):
+        rows.append([MaxButton(text="👥 Персонал", payload=ADMIN_STAFF_PAYLOAD)])
+    if can_view_settings(normalized_role):
+        rows.append([MaxButton(text="⚙️ Настройки", payload=ADMIN_SETTINGS_PAYLOAD)])
+    if can_view_broadcasts(normalized_role):
+        rows.append([MaxButton(text="📣 Рассылка", payload=ADMIN_BROADCASTS_PAYLOAD)])
+    if can_view_statistics(normalized_role):
+        rows.append([MaxButton(text="📊 Статистика", payload=ADMIN_STATISTICS_PAYLOAD)])
+    if can_view_yclients(normalized_role):
+        rows.append([MaxButton(text="🧩 YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
 
 
 def navigation_keyboard() -> MaxInlineKeyboard:
