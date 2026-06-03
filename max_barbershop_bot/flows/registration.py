@@ -68,10 +68,26 @@ async def handle_consent_accept(context: RouterContext) -> None:
 
     await context.answer_callback("Продолжаем регистрацию ✅")
     platform_user_id = context.event.platform_user_id
-    chat_id = context.event.chat_id
+    chat_id = _registration_state_chat_id(platform_user_id, context.event.chat_id)
+    old_screen = state.get_current_screen(platform_user_id, chat_id)
     state.set_state_data_value(platform_user_id, chat_id, _CONSENT_KEY, True)
-    state.push_screen(platform_user_id, chat_id, state.REGISTRATION_CONSENT_SCREEN)
+    previous_screen = old_screen
+    if old_screen not in state.REGISTRATION_SCREENS:
+        previous_screen = state.REGISTRATION_CONSENT_SCREEN
+    if old_screen != state.REGISTRATION_PHONE_SCREEN:
+        state.push_screen(platform_user_id, chat_id, previous_screen)
     state.set_current_screen(platform_user_id, chat_id, state.REGISTRATION_PHONE_SCREEN)
+    new_screen = state.get_current_screen(platform_user_id, chat_id)
+    logger.info(
+        "MAX registration state transition: callback_payload=%s old_screen=%s "
+        "new_screen=%s platform_user_id_present=%s chat_id_present=%s state_key=%s",
+        context.event.callback_payload,
+        old_screen,
+        new_screen,
+        platform_user_id is not None,
+        chat_id is not None,
+        state.build_state_key(platform_user_id, chat_id),
+    )
     screen = registration_phone_screen()
     await context.send_text(screen.text, keyboard=screen.keyboard)
 
@@ -180,6 +196,12 @@ async def _show_phone(context: RouterContext) -> None:
     )
     screen = registration_phone_screen()
     await context.send_text(screen.text, keyboard=screen.keyboard)
+
+
+def _registration_state_chat_id(platform_user_id: str | None, event_chat_id: str | None) -> str | None:
+    if event_chat_id is not None:
+        return event_chat_id
+    return state.find_chat_id_for_current_screen(platform_user_id, state.REGISTRATION_CONSENT_SCREEN)
 
 
 def _database_path() -> str:
