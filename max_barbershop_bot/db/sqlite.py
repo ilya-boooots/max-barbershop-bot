@@ -40,13 +40,12 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             platform_user_id TEXT NOT NULL,
             max_user_id TEXT,
             chat_id TEXT,
-            first_name TEXT,
-            last_name TEXT,
-            username TEXT,
+            display_name TEXT,
             phone TEXT,
             role TEXT NOT NULL DEFAULT 'user',
             yclients_client_id TEXT,
             notifications_enabled INTEGER NOT NULL DEFAULT 1,
+            notification_settings_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(platform, platform_user_id)
@@ -114,4 +113,26 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON state_storage(state_key);
         """
     )
+    _ensure_column(connection, "users", "display_name", "TEXT")
+    _ensure_column(
+        connection,
+        "users",
+        "notification_settings_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
     connection.commit()
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_definition: str,
+) -> None:
+    """Add a missing column for databases created before the current schema."""
+
+    existing_columns = {
+        str(row[1]) for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name not in existing_columns:
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
