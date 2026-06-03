@@ -10,6 +10,17 @@ MY_BOOKINGS_PLACEHOLDER_SCREEN = "my_bookings_placeholder"
 MASTERS_PLACEHOLDER_SCREEN = "masters_placeholder"
 CONTACTS_PLACEHOLDER_SCREEN = "contacts_placeholder"
 SUPPORT_PLACEHOLDER_SCREEN = "support_placeholder"
+REGISTRATION_CONSENT_SCREEN = "registration_consent"
+REGISTRATION_PHONE_SCREEN = "registration_phone"
+REGISTRATION_NAME_SCREEN = "registration_name"
+
+REGISTRATION_SCREENS = frozenset(
+    {
+        REGISTRATION_CONSENT_SCREEN,
+        REGISTRATION_PHONE_SCREEN,
+        REGISTRATION_NAME_SCREEN,
+    }
+)
 
 
 @dataclass
@@ -18,6 +29,7 @@ class UserNavigationState:
 
     current_screen: str = MAIN_MENU_SCREEN
     screen_stack: list[str] = field(default_factory=list)
+    state_data: dict[str, object] = field(default_factory=dict)
 
 
 _user_states: dict[str, UserNavigationState] = {}
@@ -65,12 +77,43 @@ def pop_previous_screen(platform_user_id: str | None, chat_id: str | None) -> st
     return previous_screen
 
 
+def set_state_data_value(
+    platform_user_id: str | None,
+    chat_id: str | None,
+    key: str,
+    value: object,
+) -> None:
+    """Store temporary in-memory data for one user chat."""
+
+    state = _get_state(platform_user_id, chat_id)
+    state.state_data[key] = value
+
+
+def get_state_data_value(
+    platform_user_id: str | None,
+    chat_id: str | None,
+    key: str,
+) -> object | None:
+    """Read temporary in-memory data for one user chat."""
+
+    state = _get_state(platform_user_id, chat_id)
+    return state.state_data.get(key)
+
+
+def clear_state_data(platform_user_id: str | None, chat_id: str | None) -> None:
+    """Clear temporary in-memory data for one user chat."""
+
+    state = _get_state(platform_user_id, chat_id)
+    state.state_data.clear()
+
+
 def reset_to_home(platform_user_id: str | None, chat_id: str | None) -> None:
     """Reset navigation to the main menu and clear the back stack."""
 
     state = _get_state(platform_user_id, chat_id)
     state.current_screen = MAIN_MENU_SCREEN
     state.screen_stack.clear()
+    state.state_data.clear()
 
 
 def clear_user_state(platform_user_id: str | None, chat_id: str | None) -> None:

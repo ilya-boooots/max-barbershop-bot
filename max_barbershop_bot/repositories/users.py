@@ -24,6 +24,9 @@ class User:
     max_user_id: str | None
     chat_id: str | None
     display_name: str | None
+    first_name: str | None
+    last_name: str | None
+    username: str | None
     phone: str | None
     role: str
     yclients_client_id: str | None
@@ -41,6 +44,9 @@ class UserCreate:
     max_user_id: str | None = None
     chat_id: str | None = None
     display_name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    username: str | None = None
     phone: str | None = None
     role: str = DEFAULT_USER_ROLE
     yclients_client_id: str | None = None
@@ -56,6 +62,9 @@ class UserProfileUpdate:
     max_user_id: str | None = None
     chat_id: str | None = None
     display_name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    username: str | None = None
     phone: str | None = None
     role: str | None = None
     yclients_client_id: str | None = None
@@ -85,13 +94,16 @@ class UsersRepository:
                     max_user_id,
                     chat_id,
                     display_name,
+                    first_name,
+                    last_name,
+                    username,
                     phone,
                     role,
                     yclients_client_id,
                     notifications_enabled,
                     notification_settings_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     platform,
@@ -99,6 +111,9 @@ class UsersRepository:
                     _optional_text(user.max_user_id),
                     _optional_text(user.chat_id),
                     _optional_text(user.display_name),
+                    _optional_text(user.first_name),
+                    _optional_text(user.last_name),
+                    _optional_text(user.username),
                     _optional_text(user.phone),
                     _required_text(user.role, "role"),
                     _optional_text(user.yclients_client_id),
@@ -108,6 +123,49 @@ class UsersRepository:
             )
             connection.commit()
             return self._get_by_id(connection, cursor.lastrowid)
+
+    def create_or_update_user(
+        self,
+        *,
+        platform_user_id: str,
+        max_user_id: str | None = None,
+        chat_id: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        username: str | None = None,
+        platform: str = PLATFORM_MAX,
+    ) -> User:
+        """Create or refresh a base platform identity without erasing profile data."""
+
+        existing = self.find_by_platform_user_id(platform_user_id, platform=platform)
+        if existing is not None:
+            update = UserProfileUpdate(
+                max_user_id=max_user_id,
+                chat_id=chat_id,
+                first_name=first_name if existing.first_name is None else None,
+                last_name=last_name if existing.last_name is None else None,
+                username=username if existing.username is None else None,
+                display_name=(
+                    _join_display_name(first_name, last_name) if existing.display_name is None else None
+                ),
+            )
+            updated = self.update_profile(platform_user_id, update, platform=platform)
+            if updated is None:
+                raise RuntimeError("Пользователь не найден после обновления")
+            return updated
+
+        return self.create(
+            UserCreate(
+                platform=platform,
+                platform_user_id=platform_user_id,
+                max_user_id=max_user_id,
+                chat_id=chat_id,
+                first_name=first_name,
+                last_name=last_name,
+                username=username,
+                display_name=_join_display_name(first_name, last_name),
+            )
+        )
 
     def find_by_platform_user_id(
         self,
@@ -177,6 +235,9 @@ class UsersRepository:
             "max_user_id": update.max_user_id,
             "chat_id": update.chat_id,
             "display_name": update.display_name,
+            "first_name": update.first_name,
+            "last_name": update.last_name,
+            "username": update.username,
             "phone": update.phone,
             "role": update.role,
             "yclients_client_id": update.yclients_client_id,
@@ -266,6 +327,9 @@ def _row_to_user(row: sqlite3.Row | None) -> User | None:
         max_user_id=_row_optional_text(row, "max_user_id"),
         chat_id=_row_optional_text(row, "chat_id"),
         display_name=_row_optional_text(row, "display_name"),
+        first_name=_row_optional_text(row, "first_name"),
+        last_name=_row_optional_text(row, "last_name"),
+        username=_row_optional_text(row, "username"),
         phone=_row_optional_text(row, "phone"),
         role=str(row["role"]),
         yclients_client_id=_row_optional_text(row, "yclients_client_id"),
@@ -274,6 +338,11 @@ def _row_to_user(row: sqlite3.Row | None) -> User | None:
         created_at=_row_optional_text(row, "created_at"),
         updated_at=_row_optional_text(row, "updated_at"),
     )
+
+
+def _join_display_name(first_name: str | None, last_name: str | None) -> str | None:
+    parts = [part.strip() for part in (first_name, last_name) if part and part.strip()]
+    return " ".join(parts) or None
 
 
 def _required_text(value: str, field_name: str) -> str:
