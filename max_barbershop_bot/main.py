@@ -10,6 +10,7 @@ from collections.abc import Iterable
 
 from max_barbershop_bot.core.config import ConfigError, load_config
 from max_barbershop_bot.core.logging import configure_logging
+from max_barbershop_bot.max_api.client import MaxApiClient, MaxApiError
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,30 @@ async def run() -> None:
     config = load_config()
     configure_logging(config.log_level)
 
-    logger.info("🚀 MAX Barbershop Bot запускается: env=%s, dev_tg_id=%s", config.app_env, config.dev_tg_id)
+    client = MaxApiClient(config)
+    logger.info(
+        "🚀 MAX Barbershop Bot запускается: env=%s, dev_tg_id=%s",
+        config.app_env,
+        config.dev_tg_id,
+    )
     try:
+        await client.start()
+        try:
+            bot_info = await client.get_me()
+            logger.info(
+                "✅ MAX API авторизация проверена: bot_id=%s, username=%s",
+                bot_info.get("user_id"),
+                bot_info.get("username"),
+            )
+        except MaxApiError as error:
+            logger.warning(
+                "⚠️ MAX API startup-check не пройден: status=%s code=%s",
+                error.status,
+                error.code,
+            )
         await _run_placeholder_runtime()
     finally:
+        await client.close()
         logger.info("🛑 MAX Barbershop Bot остановлен")
 
 
