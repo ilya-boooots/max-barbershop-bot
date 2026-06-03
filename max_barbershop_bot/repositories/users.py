@@ -219,6 +219,38 @@ class UsersRepository:
             ).fetchone()
             return _row_to_user(row)
 
+    def get_by_phone(self, phone: str) -> User | None:
+        """Find a user by normalized phone number."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM users
+                WHERE phone = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (_required_text(phone, "phone"),),
+            ).fetchone()
+            return _row_to_user(row)
+
+    def find_by_identifier(
+        self,
+        identifier: str,
+        *,
+        platform: str = PLATFORM_MAX,
+    ) -> User | None:
+        """Find a user by platform id, MAX user id or normalized phone."""
+
+        clean = _required_text(identifier, "identifier")
+        user = self.find_by_platform_user_id(clean, platform=platform)
+        if user is not None:
+            return user
+        user = self.find_by_max_user_id(clean)
+        if user is not None:
+            return user
+        return self.get_by_phone(clean)
+
     def update_profile(
         self,
         platform_user_id: str,

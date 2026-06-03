@@ -32,3 +32,19 @@ REGISTRATION_NAME_TEXT = "Как вас зовут? 🙂"
 REGISTRATION_NAME_INVALID_TEXT = "Введите имя текстом, минимум 2 символа 🙂"
 REGISTRATION_COMPLETE_TEXT = "Готово! Вы зарегистрированы ✅"
 REGISTRATION_REQUIRED_TEXT = "Сначала нужно завершить регистрацию 🙏"
+
+
+STAFF_MENU_TEXT = """👥 Персонал
+
+Выберите действие:"""
+STAFF_LIST_EMPTY_TEXT = "Сотрудники пока не добавлены 👥"
+STAFF_ASSIGN_IDENTIFIER_TEXT = "Введите MAX user_id или телефон пользователя, которому нужно выдать роль 👇"
+STAFF_REMOVE_IDENTIFIER_TEXT = "Введите MAX user_id или телефон пользователя, у которого нужно снять роль 👇"
+STAFF_USER_NOT_FOUND_TEXT = """Пользователь не найден 😕
+
+Сначала он должен открыть бота и пройти регистрацию."""
+STAFF_ASSIGN_ROLE_TEXT = "Какую роль выдать пользователю?"
+STAFF_NO_EXTRA_ROLES_TEXT = "У пользователя нет дополнительных ролей 👥"
+STAFF_ROLE_ASSIGNED_TEXT = "Роль успешно выдана ✅"
+STAFF_ROLE_REMOVED_TEXT = "Роль успешно снята ✅"
+STAFF_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
