@@ -64,6 +64,19 @@ def push_screen(platform_user_id: str | None, chat_id: str | None, screen_id: st
     state.screen_stack.append(screen_id)
 
 
+def find_chat_id_for_current_screen(platform_user_id: str | None, screen_id: str) -> str | None:
+    """Find a chat id where the user currently has the given screen."""
+
+    if platform_user_id is None:
+        return None
+
+    user_prefix = f"{platform_user_id}:"
+    for state_key, navigation_state in _user_states.items():
+        if state_key.startswith(user_prefix) and navigation_state.current_screen == screen_id:
+            return state_key[len(user_prefix) :]
+    return None
+
+
 def pop_previous_screen(platform_user_id: str | None, chat_id: str | None) -> str | None:
     """Pop and return the previous screen, or None when the stack is empty."""
 
