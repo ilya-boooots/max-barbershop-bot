@@ -29,10 +29,10 @@ class Screen:
     keyboard: MaxInlineKeyboard | None = None
 
 
-def main_menu_screen() -> Screen:
-    """Build the main menu screen."""
+def main_menu_screen(role: str | None = None) -> Screen:
+    """Build the main menu screen for the current role."""
 
-    return Screen(text=MAIN_MENU_TEXT, keyboard=main_menu_keyboard())
+    return Screen(text=MAIN_MENU_TEXT, keyboard=main_menu_keyboard(role))
 
 
 def placeholder_screen() -> Screen:

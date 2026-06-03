@@ -5,9 +5,11 @@ from __future__ import annotations
 from os import getenv
 
 from max_barbershop_bot.core import state
+from max_barbershop_bot.core.permissions import is_protected_developer
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.flows.registration import start_registration
+from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.services.registration import is_registered
 from max_barbershop_bot.ui.screens import main_menu_screen
@@ -45,13 +47,34 @@ async def _show_start_screen(context: RouterContext) -> None:
         username=context.event.username,
     )
 
+    staff_repository = StaffRolesRepository(_database_path())
+    _ensure_protected_developer(context, staff_repository)
+
     if not is_registered(user):
         await start_registration(context)
         return
 
     state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
-    screen = main_menu_screen()
+    role = staff_repository.get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+    screen = main_menu_screen(role)
     await context.send_text(f"{START_GREETING_TEXT}\n\n{screen.text}", keyboard=screen.keyboard)
+
+
+def _ensure_protected_developer(
+    context: RouterContext,
+    staff_repository: StaffRolesRepository,
+) -> None:
+    dev_max_user_id = getenv("DEV_MAX_USER_ID", "").strip() or None
+    if is_protected_developer(
+        context.event.platform_user_id,
+        dev_max_user_id,
+        max_user_id=context.event.max_user_id,
+    ):
+        staff_repository.ensure_developer(
+            context.event.platform_user_id or dev_max_user_id,
+            assigned_by_platform_user_id=context.event.platform_user_id,
+            platform=PLATFORM_MAX,
+        )
 
 
 def _database_path() -> str:
