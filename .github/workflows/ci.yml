@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  max-code-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+
+      - name: Compile MAX package
+        run: python -m compileall max_barbershop_bot
+
+      - name: Import MAX transport modules
+        run: |
+          python - <<'PY'
+          from max_barbershop_bot.core.events import NormalizedEvent, normalize_update
+          from max_barbershop_bot.max_api.client import MaxApiClient
+          from max_barbershop_bot.max_api.models import MaxUpdate, MaxMessage, MaxCallback, MaxButton, MaxInlineKeyboard
+          print("imports ok")
+          PY
+
+      - name: Ensure MAX code does not import aiogram
+        run: |
+          if rg -n "import aiogram|from aiogram" max_barbershop_bot; then
+            echo "aiogram imports are not allowed in max_barbershop_bot"
+            exit 1
+          fi
