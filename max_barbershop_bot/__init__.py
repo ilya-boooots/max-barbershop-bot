@@ -1,0 +1,1 @@
+"""MAX Barbershop Bot package."""
