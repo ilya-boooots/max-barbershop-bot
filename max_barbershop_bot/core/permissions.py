@@ -105,7 +105,7 @@ def can_remove_role(actor_role: str, target_role: str) -> bool:
     actor = normalize_role(actor_role)
     target = normalize_role(target_role)
     if actor == ROLE_DEVELOPER:
-        return True
+        return target in {ROLE_ADMIN, ROLE_MANAGER, ROLE_USER}
     if actor == ROLE_ADMIN:
         return target in {ROLE_MANAGER, ROLE_USER}
     return False

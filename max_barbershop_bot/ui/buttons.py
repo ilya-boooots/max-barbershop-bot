@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from max_barbershop_bot.core.permissions import (
+    ROLE_ADMIN,
+    ROLE_DEVELOPER,
+    ROLE_MANAGER,
+    can_assign_role,
+    can_manage_roles,
     can_view_broadcasts,
     can_view_settings,
     can_view_staff,
@@ -25,6 +30,16 @@ ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
 
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
+
+STAFF_LIST_PAYLOAD = "staff:list"
+STAFF_ASSIGN_START_PAYLOAD = "staff:assign:start"
+STAFF_REMOVE_START_PAYLOAD = "staff:remove:start"
+STAFF_ASSIGN_MANAGER_PAYLOAD = "staff:assign:role:manager"
+STAFF_ASSIGN_ADMIN_PAYLOAD = "staff:assign:role:admin"
+STAFF_ASSIGN_DEVELOPER_PAYLOAD = "staff:assign:role:developer"
+STAFF_REMOVE_MANAGER_PAYLOAD = "staff:remove:role:manager"
+STAFF_REMOVE_ADMIN_PAYLOAD = "staff:remove:role:admin"
+STAFF_REMOVE_DEVELOPER_PAYLOAD = "staff:remove:role:developer"
 
 REGISTRATION_CONSENT_ACCEPT_PAYLOAD = "registration:consent:accept"
 REGISTRATION_CONSENT_DECLINE_PAYLOAD = "registration:consent:decline"
@@ -82,6 +97,59 @@ def navigation_keyboard() -> MaxInlineKeyboard:
             ]
         ]
     )
+
+
+def staff_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
+    """Build staff management menu buttons."""
+
+    rows = [[MaxButton(text="📋 Список сотрудников", payload=STAFF_LIST_PAYLOAD)]]
+    if can_manage_roles(normalize_role(role)):
+        rows.extend(
+            [
+                [MaxButton(text="➕ Назначить роль", payload=STAFF_ASSIGN_START_PAYLOAD)],
+                [MaxButton(text="➖ Снять роль", payload=STAFF_REMOVE_START_PAYLOAD)],
+            ]
+        )
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def staff_role_assign_keyboard(role: str | None = None) -> MaxInlineKeyboard:
+    """Build role picker for assigning staff roles."""
+
+    normalized_role = normalize_role(role)
+    role_payloads = [
+        (ROLE_MANAGER, STAFF_ASSIGN_MANAGER_PAYLOAD),
+        (ROLE_ADMIN, STAFF_ASSIGN_ADMIN_PAYLOAD),
+        (ROLE_DEVELOPER, STAFF_ASSIGN_DEVELOPER_PAYLOAD),
+    ]
+    rows = [
+        [MaxButton(text=target_role, payload=payload)]
+        for target_role, payload in role_payloads
+        if can_assign_role(normalized_role, target_role)
+    ]
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def staff_role_remove_keyboard(roles: list[str]) -> MaxInlineKeyboard:
+    """Build role picker for removing staff roles."""
+
+    payloads = {
+        ROLE_MANAGER: STAFF_REMOVE_MANAGER_PAYLOAD,
+        ROLE_ADMIN: STAFF_REMOVE_ADMIN_PAYLOAD,
+        ROLE_DEVELOPER: STAFF_REMOVE_DEVELOPER_PAYLOAD,
+    }
+    rows = [
+        [MaxButton(text=role, payload=payloads[role])]
+        for role in roles
+        if role in payloads
+    ]
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
 
 
 def registration_consent_keyboard() -> MaxInlineKeyboard:

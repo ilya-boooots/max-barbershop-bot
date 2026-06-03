@@ -149,7 +149,12 @@ class StaffRolesRepository:
                 """
                 SELECT * FROM staff_roles
                 WHERE platform = ?
-                ORDER BY platform_user_id ASC, role ASC
+                ORDER BY CASE role
+                    WHEN 'developer' THEN 1
+                    WHEN 'admin' THEN 2
+                    WHEN 'manager' THEN 3
+                    ELSE 4
+                END, platform_user_id ASC
                 """,
                 (_required_text(platform, "platform"),),
             ).fetchall()

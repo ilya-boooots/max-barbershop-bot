@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.ui.buttons import (
     main_menu_keyboard,
+    staff_menu_keyboard,
     navigation_keyboard,
     registration_consent_keyboard,
     registration_navigation_keyboard,
@@ -18,6 +19,7 @@ from max_barbershop_bot.ui.texts import (
     REGISTRATION_PHONE_TEXT,
     REGISTRATION_WELCOME_TEXT,
     SECTION_SOON_TEXT,
+    STAFF_MENU_TEXT,
 )
 
 
@@ -33,6 +35,12 @@ def main_menu_screen(role: str | None = None) -> Screen:
     """Build the main menu screen for the current role."""
 
     return Screen(text=MAIN_MENU_TEXT, keyboard=main_menu_keyboard(role))
+
+
+def staff_menu_screen(role: str | None = None) -> Screen:
+    """Build staff management screen."""
+
+    return Screen(text=STAFF_MENU_TEXT, keyboard=staff_menu_keyboard(role))
 
 
 def placeholder_screen() -> Screen:
