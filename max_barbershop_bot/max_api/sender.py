@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from max_barbershop_bot.max_api.client import MaxApiClient
-from max_barbershop_bot.max_api.models import MaxInlineKeyboard, MaxMessage
+from max_barbershop_bot.max_api.keyboards import MaxInlineKeyboard
+from max_barbershop_bot.max_api.models import MaxMessage
 
 
 class MaxMessageSender:

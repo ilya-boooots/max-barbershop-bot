@@ -8,10 +8,9 @@ from max_barbershop_bot.max_api.client import (
     MaxApiNetworkError,
     MaxApiRateLimitError,
 )
+from max_barbershop_bot.max_api.keyboards import MaxButton, MaxInlineKeyboard
 from max_barbershop_bot.max_api.models import (
-    MaxButton,
     MaxCallback,
-    MaxInlineKeyboard,
     MaxMessage,
     MaxUpdate,
     MaxUser,

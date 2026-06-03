@@ -9,7 +9,8 @@ from typing import Any
 import aiohttp
 
 from max_barbershop_bot.core.config import Config, load_config
-from max_barbershop_bot.max_api.models import MaxInlineKeyboard, MaxMessage, MaxUpdate
+from max_barbershop_bot.max_api.keyboards import MaxInlineKeyboard
+from max_barbershop_bot.max_api.models import MaxMessage, MaxUpdate
 
 logger = logging.getLogger(__name__)
 
