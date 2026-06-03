@@ -3,65 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
-
-ButtonType = Literal[
-    "callback",
-    "link",
-    "request_contact",
-    "request_geo_location",
-    "open_app",
-    "message",
-    "clipboard",
-]
+from max_barbershop_bot.max_api.keyboards import ButtonType, MaxButton, MaxInlineKeyboard
 
 
 def _int_or_none(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-@dataclass(frozen=True)
-class MaxButton:
-    """Inline keyboard button for MAX message attachments."""
-
-    text: str
-    type: ButtonType = "callback"
-    payload: str | None = None
-    url: str | None = None
-
-    def to_payload(self) -> dict[str, Any]:
-        """Convert the button into MAX API inline keyboard format."""
-
-        data: dict[str, Any] = {"type": self.type, "text": self.text}
-        if self.payload is not None:
-            data["payload"] = self.payload
-        if self.url is not None:
-            data["url"] = self.url
-        return data
-
-
-@dataclass(frozen=True)
-class MaxInlineKeyboard:
-    """Inline keyboard attachment payload grouped by rows."""
-
-    rows: tuple[tuple[MaxButton, ...], ...]
-
-    @classmethod
-    def from_rows(cls, rows: list[list[MaxButton]] | tuple[tuple[MaxButton, ...], ...]) -> "MaxInlineKeyboard":
-        """Build an immutable keyboard from button rows."""
-
-        return cls(rows=tuple(tuple(row) for row in rows))
-
-    def to_attachment(self) -> dict[str, Any]:
-        """Convert keyboard into MAX API attachment format."""
-
-        return {
-            "type": "inline_keyboard",
-            "payload": {
-                "buttons": [[button.to_payload() for button in row] for row in self.rows],
-            },
-        }
 
 
 @dataclass(frozen=True)
