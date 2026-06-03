@@ -9,6 +9,7 @@ import sys
 from collections.abc import Iterable
 
 from max_barbershop_bot.core.config import ConfigError, load_config
+from max_barbershop_bot.core.events import NormalizedEvent, normalize_update
 from max_barbershop_bot.core.logging import configure_logging
 from max_barbershop_bot.max_api.client import MaxApiClient, MaxApiError
 
@@ -27,12 +28,92 @@ def _install_signal_handlers(stop_event: asyncio.Event, signals: Iterable[signal
             continue
 
 
-async def _run_placeholder_runtime() -> None:
-    """Keep the application alive until a graceful shutdown is requested."""
+START_SMOKE_RESPONSE = "✅ MAX-бот работает. Я получил /start."
+
+
+async def _run_dev_polling_runtime(client: MaxApiClient) -> None:
+    """Run minimal development/test Long Polling until graceful shutdown."""
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event, (signal.SIGINT, signal.SIGTERM))
-    await stop_event.wait()
+
+    polling_task = asyncio.create_task(_poll_dev_updates(client, stop_event))
+    try:
+        await stop_event.wait()
+    finally:
+        polling_task.cancel()
+        try:
+            await polling_task
+        except asyncio.CancelledError:
+            pass
+
+
+async def _poll_dev_updates(client: MaxApiClient, stop_event: asyncio.Event) -> None:
+    """Receive MAX updates and handle only a minimal /start smoke check."""
+
+    marker: int | None = None
+    while not stop_event.is_set():
+        try:
+            updates, marker = await client.get_updates(
+                limit=100,
+                timeout=30,
+                marker=marker,
+            )
+        except asyncio.CancelledError:
+            raise
+        except MaxApiError as error:
+            logger.warning(
+                "⚠️ MAX updates polling error: status=%s code=%s",
+                error.status,
+                error.code,
+            )
+            await _sleep_until_stop(stop_event, 1.0)
+            continue
+
+        for update in updates:
+            try:
+                event = normalize_update(update)
+                await _handle_dev_event(client, event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("⚠️ MAX update processing failed safely")
+
+        if not updates:
+            await _sleep_until_stop(stop_event, 0.1)
+
+
+async def _handle_dev_event(client: MaxApiClient, event: NormalizedEvent) -> None:
+    """Handle only temporary smoke-check commands."""
+
+    if event.update_type == "unknown":
+        return
+    if event.text != "/start":
+        return
+
+    chat_id = _int_from_string(event.chat_id)
+    user_id = _int_from_string(event.max_user_id)
+    if chat_id is not None:
+        await client.send_message(chat_id=chat_id, text=START_SMOKE_RESPONSE)
+        return
+    if user_id is not None:
+        await client.send_message(user_id=user_id, text=START_SMOKE_RESPONSE)
+
+
+async def _sleep_until_stop(stop_event: asyncio.Event, timeout: float) -> None:
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=timeout)
+    except TimeoutError:
+        pass
+
+
+def _int_from_string(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 async def run() -> None:
@@ -62,7 +143,7 @@ async def run() -> None:
                 error.status,
                 error.code,
             )
-        await _run_placeholder_runtime()
+        await _run_dev_polling_runtime(client)
     finally:
         await client.close()
         logger.info("🛑 MAX Barbershop Bot остановлен")
