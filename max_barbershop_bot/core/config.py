@@ -8,7 +8,8 @@ from dataclasses import dataclass
 
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_APP_ENV = "local"
-DEFAULT_DEV_TG_ID = "378881880"
+DEFAULT_DEV_LEGACY_ID = "378881880"
+DEFAULT_DATABASE_PATH = "data/max_barbershop_bot.sqlite3"
 
 
 class ConfigError(RuntimeError):
@@ -22,8 +23,9 @@ class Config:
     max_bot_token: str
     log_level: str = DEFAULT_LOG_LEVEL
     app_env: str = DEFAULT_APP_ENV
-    dev_tg_id: str = DEFAULT_DEV_TG_ID
+    dev_legacy_user_id: str = DEFAULT_DEV_LEGACY_ID
     dev_max_user_id: str | None = None
+    database_path: str = DEFAULT_DATABASE_PATH
 
 
 def load_config() -> Config:
@@ -40,8 +42,11 @@ def load_config() -> Config:
         max_bot_token=max_bot_token,
         log_level=os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL).strip() or DEFAULT_LOG_LEVEL,
         app_env=os.getenv("APP_ENV", DEFAULT_APP_ENV).strip() or DEFAULT_APP_ENV,
-        dev_tg_id=os.getenv("DEV_TG_ID", DEFAULT_DEV_TG_ID).strip() or DEFAULT_DEV_TG_ID,
+        dev_legacy_user_id=os.getenv("DEV_TG_ID", DEFAULT_DEV_LEGACY_ID).strip()
+        or DEFAULT_DEV_LEGACY_ID,
         dev_max_user_id=_optional_env("DEV_MAX_USER_ID"),
+        database_path=os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip()
+        or DEFAULT_DATABASE_PATH,
     )
 
 
