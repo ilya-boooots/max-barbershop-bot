@@ -68,6 +68,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             partner_token TEXT,
             user_token TEXT,
             branch_timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
+            branch_title TEXT,
             contacts_override_json TEXT,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -120,6 +121,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         "notification_settings_json",
         "TEXT NOT NULL DEFAULT '{}'",
     )
+    _ensure_column(connection, "yclients_settings", "branch_title", "TEXT")
     connection.commit()
 
 
