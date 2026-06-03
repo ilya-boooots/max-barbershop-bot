@@ -29,6 +29,7 @@ def _install_signal_handlers(stop_event: asyncio.Event, signals: Iterable[signal
 
 
 START_SMOKE_RESPONSE = "✅ MAX-бот работает. Я получил /start."
+STARTUP_NOTIFICATION_TEXT = "✅ Бот запущен и активен"
 
 
 async def _run_dev_polling_runtime(client: MaxApiClient) -> None:
@@ -91,6 +92,11 @@ async def _handle_dev_event(client: MaxApiClient, event: NormalizedEvent) -> Non
     if event.text != "/start":
         return
 
+    logger.info(
+        "Получен /start в MAX: max_user_id=%s, chat_id=%s",
+        event.max_user_id,
+        event.chat_id,
+    )
     chat_id = _int_from_string(event.chat_id)
     user_id = _int_from_string(event.max_user_id)
     if chat_id is not None:
@@ -98,6 +104,29 @@ async def _handle_dev_event(client: MaxApiClient, event: NormalizedEvent) -> Non
         return
     if user_id is not None:
         await client.send_message(user_id=user_id, text=START_SMOKE_RESPONSE)
+
+
+async def _send_startup_notification(client: MaxApiClient, dev_max_user_id: str | None) -> None:
+    """Notify developer that the MAX bot runtime started successfully."""
+
+    if dev_max_user_id is None:
+        logger.info("DEV_MAX_USER_ID is not set; startup notification skipped")
+        return
+
+    user_id = _int_from_string(dev_max_user_id)
+    if user_id is None:
+        logger.warning("DEV_MAX_USER_ID is invalid; startup notification skipped")
+        return
+
+    try:
+        await client.send_message(user_id=user_id, text=STARTUP_NOTIFICATION_TEXT)
+        logger.info("✅ Startup notification sent to developer in MAX")
+    except Exception as error:
+        logger.warning(
+            "⚠️ Startup notification failed safely: %s: %s",
+            type(error).__name__,
+            error,
+        )
 
 
 async def _sleep_until_stop(stop_event: asyncio.Event, timeout: float) -> None:
@@ -124,9 +153,9 @@ async def run() -> None:
 
     client = MaxApiClient(config)
     logger.info(
-        "🚀 MAX Barbershop Bot запускается: env=%s, dev_tg_id=%s",
+        "🚀 MAX Barbershop Bot запускается: env=%s, dev_max_user_id_set=%s",
         config.app_env,
-        config.dev_tg_id,
+        config.dev_max_user_id is not None,
     )
     try:
         await client.start()
@@ -143,6 +172,7 @@ async def run() -> None:
                 error.status,
                 error.code,
             )
+        await _send_startup_notification(client, config.dev_max_user_id)
         await _run_dev_polling_runtime(client)
     finally:
         await client.close()

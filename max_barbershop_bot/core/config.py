@@ -23,6 +23,7 @@ class Config:
     log_level: str = DEFAULT_LOG_LEVEL
     app_env: str = DEFAULT_APP_ENV
     dev_tg_id: str = DEFAULT_DEV_TG_ID
+    dev_max_user_id: str | None = None
 
 
 def load_config() -> Config:
@@ -40,4 +41,15 @@ def load_config() -> Config:
         log_level=os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL).strip() or DEFAULT_LOG_LEVEL,
         app_env=os.getenv("APP_ENV", DEFAULT_APP_ENV).strip() or DEFAULT_APP_ENV,
         dev_tg_id=os.getenv("DEV_TG_ID", DEFAULT_DEV_TG_ID).strip() or DEFAULT_DEV_TG_ID,
+        dev_max_user_id=_optional_env("DEV_MAX_USER_ID"),
     )
+
+
+def _optional_env(name: str) -> str | None:
+    """Return a stripped optional environment variable value."""
+
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None

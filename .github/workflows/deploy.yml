@@ -50,6 +50,7 @@ jobs:
           LOG_LEVEL=INFO
           APP_ENV=production
           DEV_TG_ID=378881880
+          DEV_MAX_USER_ID=${{ secrets.DEV_MAX_USER_ID }}
           ENVEOF
 
             systemctl daemon-reload
