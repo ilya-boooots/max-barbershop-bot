@@ -41,3 +41,20 @@ class MaxMessageSender:
             text=text,
             keyboard=keyboard,
         )
+
+    async def answer_callback(
+        self,
+        callback_id: str,
+        *,
+        notification: str | None = None,
+        text: str | None = None,
+        keyboard: MaxInlineKeyboard | None = None,
+    ) -> dict[str, object]:
+        """Answer a MAX callback event through the existing API client."""
+
+        return await self._client.answer_callback(
+            callback_id=callback_id,
+            notification=notification,
+            text=text,
+            keyboard=keyboard,
+        )
