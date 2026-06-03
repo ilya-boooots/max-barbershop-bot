@@ -1,0 +1,58 @@
+name: Deploy MAX bot
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload project to server
+        run: |
+          rsync -az --delete \
+            --exclude ".git" \
+            --exclude ".github" \
+            --exclude ".venv" \
+            --exclude ".env" \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/bots/max-barbershop-bot/"
+
+      - name: Install dependencies and restart bot
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << 'EOF'
+            set -e
+
+            cd /opt/bots/max-barbershop-bot
+
+            python3 -m venv .venv
+            .venv/bin/pip install --upgrade pip
+
+            if [ -f requirements.txt ]; then
+              .venv/bin/pip install -r requirements.txt
+            fi
+
+            cat > .env << ENVEOF
+          MAX_BOT_TOKEN=${{ secrets.MAX_BOT_TOKEN }}
+          LOG_LEVEL=INFO
+          APP_ENV=production
+          DEV_TG_ID=378881880
+          ENVEOF
+
+            systemctl daemon-reload
+            systemctl restart max-barbershop-bot.service
+            systemctl status max-barbershop-bot.service --no-pager
+          EOF
