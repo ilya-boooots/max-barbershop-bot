@@ -24,6 +24,9 @@ class NormalizedEvent:
     text: str | None
     callback_payload: str | None
     callback_id: str | None
+    first_name: str | None = None
+    last_name: str | None = None
+    username: str | None = None
     attachments: list[Any] = field(default_factory=list)
     raw_update: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
@@ -65,6 +68,9 @@ def _message_created_event(update: MaxUpdate, raw_update: dict[str, Any]) -> Nor
         text=message.text if message is not None else None,
         callback_payload=None,
         callback_id=None,
+        first_name=message.first_name if message is not None else None,
+        last_name=message.last_name if message is not None else None,
+        username=message.username if message is not None else None,
         attachments=list(message.attachments) if message is not None else [],
         raw_update=raw_update,
     )
@@ -83,6 +89,9 @@ def _message_callback_event(update: MaxUpdate, raw_update: dict[str, Any]) -> No
         text=message.text if message is not None else None,
         callback_payload=callback.payload if callback is not None else None,
         callback_id=callback.callback_id if callback is not None else None,
+        first_name=message.first_name if message is not None else None,
+        last_name=message.last_name if message is not None else None,
+        username=message.username if message is not None else None,
         attachments=list(message.attachments) if message is not None else [],
         raw_update=raw_update,
     )
@@ -98,6 +107,9 @@ def _bot_started_event(update: MaxUpdate, raw_update: dict[str, Any]) -> Normali
         text=None,
         callback_payload=_payload_to_str(raw_update.get("payload")),
         callback_id=None,
+        first_name=update.user.first_name if update.user is not None else None,
+        last_name=update.user.last_name if update.user is not None else None,
+        username=update.user.username if update.user is not None else None,
         attachments=[],
         raw_update=raw_update,
     )
@@ -112,6 +124,9 @@ def _unknown_event(raw_update: dict[str, Any]) -> NormalizedEvent:
         text=None,
         callback_payload=None,
         callback_id=None,
+        first_name=update.user.first_name if update.user is not None else None,
+        last_name=update.user.last_name if update.user is not None else None,
+        username=update.user.username if update.user is not None else None,
         attachments=[],
         raw_update=raw_update,
     )

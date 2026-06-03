@@ -69,6 +69,8 @@ class MaxUser:
     """Transport subset of a MAX User object."""
 
     user_id: int | None
+    first_name: str | None = None
+    last_name: str | None = None
     username: str | None = None
     _raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
@@ -79,9 +81,13 @@ class MaxUser:
         if not isinstance(payload, dict):
             return None
 
+        first_name = payload.get("first_name")
+        last_name = payload.get("last_name")
         username = payload.get("username")
         return cls(
             user_id=_int_or_none(payload.get("user_id")),
+            first_name=first_name if isinstance(first_name, str) else None,
+            last_name=last_name if isinstance(last_name, str) else None,
             username=username if isinstance(username, str) else None,
             _raw=payload,
         )
@@ -96,6 +102,9 @@ class MaxMessage:
     user_id: int | None
     text: str | None
     timestamp: int | None
+    first_name: str | None = None
+    last_name: str | None = None
+    username: str | None = None
     attachments: list[Any] = field(default_factory=list)
     _raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
@@ -113,6 +122,9 @@ class MaxMessage:
         message_id = body.get("mid") or payload.get("message_id") or payload.get("id")
         text = body.get("text") if isinstance(body, dict) else None
         attachments = body.get("attachments") if isinstance(body, dict) else None
+        first_name = sender.get("first_name")
+        last_name = sender.get("last_name")
+        username = sender.get("username")
         chat_id = recipient.get("chat_id") or payload.get("chat_id")
         user_id = sender.get("user_id") or payload.get("user_id")
 
@@ -122,6 +134,9 @@ class MaxMessage:
             user_id=_int_or_none(user_id),
             text=text if isinstance(text, str) else None,
             timestamp=_int_or_none(payload.get("timestamp")),
+            first_name=first_name if isinstance(first_name, str) else None,
+            last_name=last_name if isinstance(last_name, str) else None,
+            username=username if isinstance(username, str) else None,
             attachments=attachments if isinstance(attachments, list) else [],
             _raw=payload,
         )
