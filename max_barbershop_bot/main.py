@@ -159,6 +159,7 @@ async def run() -> None:
     )
     try:
         await client.start()
+        startup_check_passed = False
         try:
             bot_info = await client.get_me()
             logger.info(
@@ -166,13 +167,17 @@ async def run() -> None:
                 bot_info.get("user_id"),
                 bot_info.get("username"),
             )
+            startup_check_passed = True
         except MaxApiError as error:
             logger.warning(
                 "⚠️ MAX API startup-check не пройден: status=%s code=%s",
                 error.status,
                 error.code,
             )
-        await _send_startup_notification(client, config.dev_max_user_id)
+        if startup_check_passed:
+            await _send_startup_notification(client, config.dev_max_user_id)
+        else:
+            logger.info("Startup notification skipped because MAX API startup-check failed")
         await _run_dev_polling_runtime(client)
     finally:
         await client.close()
