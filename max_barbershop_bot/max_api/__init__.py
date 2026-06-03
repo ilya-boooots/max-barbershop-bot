@@ -14,6 +14,7 @@ from max_barbershop_bot.max_api.models import (
     MaxInlineKeyboard,
     MaxMessage,
     MaxUpdate,
+    MaxUser,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "MaxInlineKeyboard",
     "MaxMessage",
     "MaxUpdate",
+    "MaxUser",
 ]

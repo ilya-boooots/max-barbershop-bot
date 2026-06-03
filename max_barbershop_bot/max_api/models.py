@@ -17,6 +17,10 @@ ButtonType = Literal[
 ]
 
 
+def _int_or_none(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 @dataclass(frozen=True)
 class MaxButton:
     """Inline keyboard button for MAX message attachments."""
@@ -61,6 +65,29 @@ class MaxInlineKeyboard:
 
 
 @dataclass(frozen=True)
+class MaxUser:
+    """Transport subset of a MAX User object."""
+
+    user_id: int | None
+    username: str | None = None
+    _raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any] | None) -> "MaxUser | None":
+        """Parse only transport-level fields from a MAX User object."""
+
+        if not isinstance(payload, dict):
+            return None
+
+        username = payload.get("username")
+        return cls(
+            user_id=_int_or_none(payload.get("user_id")),
+            username=username if isinstance(username, str) else None,
+            _raw=payload,
+        )
+
+
+@dataclass(frozen=True)
 class MaxMessage:
     """Transport subset of a MAX message."""
 
@@ -69,6 +96,7 @@ class MaxMessage:
     user_id: int | None
     text: str | None
     timestamp: int | None
+    attachments: list[Any] = field(default_factory=list)
     _raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
@@ -84,15 +112,17 @@ class MaxMessage:
 
         message_id = body.get("mid") or payload.get("message_id") or payload.get("id")
         text = body.get("text") if isinstance(body, dict) else None
+        attachments = body.get("attachments") if isinstance(body, dict) else None
         chat_id = recipient.get("chat_id") or payload.get("chat_id")
         user_id = sender.get("user_id") or payload.get("user_id")
 
         return cls(
             message_id=str(message_id) if message_id is not None else None,
-            chat_id=int(chat_id) if isinstance(chat_id, int) else None,
-            user_id=int(user_id) if isinstance(user_id, int) else None,
+            chat_id=_int_or_none(chat_id),
+            user_id=_int_or_none(user_id),
             text=text if isinstance(text, str) else None,
-            timestamp=payload.get("timestamp") if isinstance(payload.get("timestamp"), int) else None,
+            timestamp=_int_or_none(payload.get("timestamp")),
+            attachments=attachments if isinstance(attachments, list) else [],
             _raw=payload,
         )
 
@@ -125,7 +155,7 @@ class MaxCallback:
         return cls(
             callback_id=callback_id,
             payload=payload_value if isinstance(payload_value, str) else None,
-            user_id=int(user_id) if isinstance(user_id, int) else None,
+            user_id=_int_or_none(user_id),
             message=MaxMessage.from_payload(payload.get("message")),
             _raw=payload,
         )
@@ -138,6 +168,7 @@ class MaxUpdate:
     update_type: str
     timestamp: int | None
     chat_id: int | None
+    user: MaxUser | None
     message: MaxMessage | None
     callback: MaxCallback | None
     _raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
@@ -152,8 +183,9 @@ class MaxUpdate:
 
         return cls(
             update_type=str(payload.get("update_type", "")),
-            timestamp=payload.get("timestamp") if isinstance(payload.get("timestamp"), int) else None,
-            chat_id=int(chat_id) if isinstance(chat_id, int) else None,
+            timestamp=_int_or_none(payload.get("timestamp")),
+            chat_id=_int_or_none(chat_id),
+            user=MaxUser.from_payload(payload.get("user")),
             message=MaxMessage.from_payload(message_payload),
             callback=MaxCallback.from_payload(callback_payload),
             _raw=payload,
