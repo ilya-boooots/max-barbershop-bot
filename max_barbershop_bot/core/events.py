@@ -74,9 +74,27 @@ def _message_created_event(update: MaxUpdate, raw_update: dict[str, Any]) -> Nor
         first_name=message.first_name if message is not None else None,
         last_name=message.last_name if message is not None else None,
         username=message.username if message is not None else None,
-        attachments=list(message.attachments) if message is not None else [],
+        attachments=_message_attachments(message, raw_update),
         raw_update=raw_update,
     )
+
+
+def _message_attachments(message: object, raw_update: dict[str, Any]) -> list[Any]:
+    if message is not None:
+        attachments = getattr(message, "attachments", None)
+        if isinstance(attachments, list) and attachments:
+            return list(attachments)
+
+    raw_message = raw_update.get("message") if isinstance(raw_update.get("message"), dict) else {}
+    body = raw_message.get("body") if isinstance(raw_message.get("body"), dict) else {}
+    body_attachments = body.get("attachments")
+    if isinstance(body_attachments, list) and body_attachments:
+        return list(body_attachments)
+
+    message_attachments = raw_message.get("attachments")
+    if isinstance(message_attachments, list):
+        return list(message_attachments)
+    return []
 
 
 def _message_callback_event(update: MaxUpdate, raw_update: dict[str, Any]) -> NormalizedEvent:

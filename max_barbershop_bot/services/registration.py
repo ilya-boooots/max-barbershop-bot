@@ -79,20 +79,34 @@ def save_registration_profile(
     return user
 
 
+def contains_contact_attachment(attachments: list[Any]) -> bool:
+    """Return True when attachments include a supported MAX contact payload."""
+
+    return any(_contact_payload(attachment) is not None for attachment in attachments)
+
+
 def extract_contact_phone(attachments: list[Any]) -> str | None:
     """Best-effort extraction of a contact phone from already normalized attachments."""
 
     for attachment in attachments:
-        if not isinstance(attachment, dict):
-            continue
-        payload = attachment.get("payload") if isinstance(attachment.get("payload"), dict) else attachment
-        attachment_type = attachment.get("type")
-        if attachment_type not in {"contact", "request_contact"} and not _looks_like_contact(payload):
+        payload = _contact_payload(attachment)
+        if payload is None:
             continue
         phone = _contact_phone_from_payload(payload)
         normalized_phone = normalize_phone(phone)
         if normalized_phone is not None:
             return normalized_phone
+    return None
+
+
+def _contact_payload(attachment: Any) -> dict[str, Any] | None:
+    if not isinstance(attachment, dict):
+        return None
+
+    payload = attachment.get("payload") if isinstance(attachment.get("payload"), dict) else attachment
+    attachment_type = attachment.get("type")
+    if attachment_type == "contact" or _looks_like_contact(payload):
+        return payload
     return None
 
 
@@ -105,7 +119,7 @@ def _contact_phone_from_payload(payload: dict[str, Any]) -> str | None:
     if not isinstance(vcf_info, str):
         return None
 
-    match = _VCARD_PHONE_RE.search(vcf_info.replace("\\r\\n", "\n"))
+    match = _VCARD_PHONE_RE.search(vcf_info.replace("\\r\\n", "\n").replace("\\n", "\n"))
     return match.group(1) if match is not None else None
 
 
