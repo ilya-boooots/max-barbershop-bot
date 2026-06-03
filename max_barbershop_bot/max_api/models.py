@@ -121,7 +121,13 @@ class MaxMessage:
 
         message_id = body.get("mid") or payload.get("message_id") or payload.get("id")
         text = body.get("text") if isinstance(body, dict) else None
-        attachments = body.get("attachments") if isinstance(body, dict) else None
+        body_attachments = body.get("attachments") if isinstance(body, dict) else None
+        payload_attachments = payload.get("attachments")
+        attachments = (
+            body_attachments
+            if isinstance(body_attachments, list) and body_attachments
+            else payload_attachments
+        )
         first_name = sender.get("first_name")
         last_name = sender.get("last_name")
         username = sender.get("username")

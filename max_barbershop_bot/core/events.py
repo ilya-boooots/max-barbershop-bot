@@ -58,7 +58,10 @@ def normalize_update(update: MaxUpdate | dict[str, Any]) -> NormalizedEvent:
 
 def _message_created_event(update: MaxUpdate, raw_update: dict[str, Any]) -> NormalizedEvent:
     message = update.message
-    user_id = _to_str(message.user_id if message is not None else None)
+    user_id = _to_str(
+        (message.user_id if message is not None else None)
+        or (update.user.user_id if update.user is not None else None)
+    )
     chat_id = _to_str((message.chat_id if message is not None else None) or update.chat_id)
     return NormalizedEvent(
         update_type="message_created",

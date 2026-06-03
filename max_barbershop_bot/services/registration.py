@@ -12,6 +12,7 @@ _MIN_PHONE_DIGITS = 10
 _MAX_PHONE_DIGITS = 15
 _MIN_NAME_LENGTH = 2
 _MAX_NAME_LENGTH = 60
+_VCARD_PHONE_RE = re.compile(r"(?:^|\r?\n)TEL[^:]*:([^\r\n]+)", re.IGNORECASE)
 
 
 def normalize_phone(raw_phone: str | None) -> str | None:
@@ -88,11 +89,24 @@ def extract_contact_phone(attachments: list[Any]) -> str | None:
         attachment_type = attachment.get("type")
         if attachment_type not in {"contact", "request_contact"} and not _looks_like_contact(payload):
             continue
-        phone = payload.get("phone") or payload.get("phone_number")
-        normalized_phone = normalize_phone(phone if isinstance(phone, str) else None)
+        phone = _contact_phone_from_payload(payload)
+        normalized_phone = normalize_phone(phone)
         if normalized_phone is not None:
             return normalized_phone
     return None
+
+
+def _contact_phone_from_payload(payload: dict[str, Any]) -> str | None:
+    phone = payload.get("phone") or payload.get("phone_number")
+    if isinstance(phone, str):
+        return phone
+
+    vcf_info = payload.get("vcf_info")
+    if not isinstance(vcf_info, str):
+        return None
+
+    match = _VCARD_PHONE_RE.search(vcf_info.replace("\\r\\n", "\n"))
+    return match.group(1) if match is not None else None
 
 
 def mask_phone(phone: str) -> str:
