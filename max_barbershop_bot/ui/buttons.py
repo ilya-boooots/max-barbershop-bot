@@ -13,6 +13,11 @@ MENU_SUPPORT_PAYLOAD = "menu:support"
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
 
+REGISTRATION_CONSENT_ACCEPT_PAYLOAD = "registration:consent:accept"
+REGISTRATION_CONSENT_DECLINE_PAYLOAD = "registration:consent:decline"
+REGISTRATION_BACK_PAYLOAD = "registration:nav:back"
+REGISTRATION_HOME_PAYLOAD = "registration:nav:home"
+
 MENU_PAYLOADS = frozenset(
     {
         MENU_BOOKING_PAYLOAD,
@@ -46,6 +51,45 @@ def navigation_keyboard() -> MaxInlineKeyboard:
             [
                 MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD),
                 MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD),
+            ]
+        ]
+    )
+
+
+def registration_consent_keyboard() -> MaxInlineKeyboard:
+    """Build consent buttons for the registration start screen."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Согласен", payload=REGISTRATION_CONSENT_ACCEPT_PAYLOAD)],
+            [MaxButton(text="❌ Не согласен", payload=REGISTRATION_CONSENT_DECLINE_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=REGISTRATION_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def registration_phone_keyboard() -> MaxInlineKeyboard:
+    """Build phone step buttons with contact request and safe navigation."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="📱 Отправить телефон", type="request_contact")],
+            [
+                MaxButton(text="⬅️ Назад", payload=REGISTRATION_BACK_PAYLOAD),
+                MaxButton(text="🏠 Главное меню", payload=REGISTRATION_HOME_PAYLOAD),
+            ],
+        ]
+    )
+
+
+def registration_navigation_keyboard() -> MaxInlineKeyboard:
+    """Build registration Back/Home navigation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [
+                MaxButton(text="⬅️ Назад", payload=REGISTRATION_BACK_PAYLOAD),
+                MaxButton(text="🏠 Главное меню", payload=REGISTRATION_HOME_PAYLOAD),
             ]
         ]
     )

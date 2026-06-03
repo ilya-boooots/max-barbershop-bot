@@ -41,6 +41,9 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             max_user_id TEXT,
             chat_id TEXT,
             display_name TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            username TEXT,
             phone TEXT,
             role TEXT NOT NULL DEFAULT 'user',
             yclients_client_id TEXT,
@@ -115,6 +118,9 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(connection, "users", "display_name", "TEXT")
+    _ensure_column(connection, "users", "first_name", "TEXT")
+    _ensure_column(connection, "users", "last_name", "TEXT")
+    _ensure_column(connection, "users", "username", "TEXT")
     _ensure_column(
         connection,
         "users",

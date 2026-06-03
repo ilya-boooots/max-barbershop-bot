@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from max_barbershop_bot.core import state
 from max_barbershop_bot.core.events import NormalizedEvent
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
@@ -63,6 +64,7 @@ class Router:
         self._update_handlers: dict[str, EventHandler] = {}
         self._text_handlers: dict[str, EventHandler] = {}
         self._callback_handlers: dict[str, EventHandler] = {}
+        self._screen_text_handlers: dict[str, EventHandler] = {}
         self._unknown_text_handler: EventHandler | None = None
         self._unknown_callback_handler: EventHandler | None = None
 
@@ -80,6 +82,11 @@ class Router:
         """Register a handler for an exact callback payload."""
 
         self._callback_handlers[payload] = handler
+
+    def on_screen_text(self, screen_id: str, handler: EventHandler) -> None:
+        """Register a text handler for the current in-memory screen."""
+
+        self._screen_text_handlers[screen_id] = handler
 
     def on_unknown_text(self, handler: EventHandler) -> None:
         """Register the fallback handler for unknown text messages."""
@@ -113,15 +120,19 @@ class Router:
 
     def _resolve_handler(self, event: NormalizedEvent) -> EventHandler | None:
         if event.update_type == "message_created":
-            return self._resolve_text_handler(event.text)
+            return self._resolve_text_handler(event)
         if event.update_type == "message_callback":
             return self._resolve_callback_handler(event.callback_payload)
         return self._update_handlers.get(event.update_type)
 
-    def _resolve_text_handler(self, text: str | None) -> EventHandler | None:
-        if text is None:
+    def _resolve_text_handler(self, event: NormalizedEvent) -> EventHandler | None:
+        if event.text is None and not event.attachments:
             return None
-        return self._text_handlers.get(text) or self._unknown_text_handler
+        if event.text is not None and event.text in self._text_handlers:
+            return self._text_handlers[event.text]
+
+        current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
+        return self._screen_text_handlers.get(current_screen) or self._unknown_text_handler
 
     def _resolve_callback_handler(self, payload: str | None) -> EventHandler | None:
         if payload is None:
