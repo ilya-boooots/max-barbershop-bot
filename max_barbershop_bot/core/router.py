@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from max_barbershop_bot.core.events import NormalizedEvent
+from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 
 logger = logging.getLogger(__name__)
@@ -23,17 +24,22 @@ class RouterContext:
     event: NormalizedEvent
     sender: MaxMessageSender
 
-    async def send_text(self, text: str) -> None:
+    async def send_text(
+        self,
+        text: str,
+        *,
+        keyboard: MaxInlineKeyboard | None = None,
+    ) -> None:
         """Send a text reply to the event chat or user when possible."""
 
         chat_id = _int_from_string(self.event.chat_id)
         if chat_id is not None:
-            await self.sender.send_to_chat(chat_id, text)
+            await self.sender.send_to_chat(chat_id, text, keyboard=keyboard)
             return
 
         user_id = _int_from_string(self.event.max_user_id or self.event.platform_user_id)
         if user_id is not None:
-            await self.sender.send_to_user(user_id, text)
+            await self.sender.send_to_user(user_id, text, keyboard=keyboard)
             return
 
         logger.warning(

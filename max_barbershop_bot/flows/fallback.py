@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 from max_barbershop_bot.core.router import RouterContext
-
-UNKNOWN_TEXT = """Я пока не знаю такую команду 🤔
-
-Нажмите /start, чтобы открыть главное меню."""
-UNKNOWN_CALLBACK = "Этот раздел скоро появится 🔧"
+from max_barbershop_bot.ui.texts import SECTION_SOON_TEXT, UNKNOWN_TEXT
 
 
 async def handle_unknown_text(context: RouterContext) -> None:
@@ -19,4 +15,4 @@ async def handle_unknown_text(context: RouterContext) -> None:
 async def handle_unknown_callback(context: RouterContext) -> None:
     """Answer a callback button that is not registered yet."""
 
-    await context.answer_callback(UNKNOWN_CALLBACK)
+    await context.answer_callback(SECTION_SOON_TEXT)
