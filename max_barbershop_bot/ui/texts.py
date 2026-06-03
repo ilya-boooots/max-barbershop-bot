@@ -25,6 +25,9 @@ REGISTRATION_PHONE_TEXT = """Отправьте ваш номер телефон
 
 Можно нажать кнопку ниже или ввести номер вручную в формате +79991234567."""
 REGISTRATION_PHONE_INVALID_TEXT = "Не получилось распознать номер 😕  \nВведите телефон в формате +79991234567."
+REGISTRATION_CONTACT_PHONE_MISSING_TEXT = """Не получилось получить номер телефона 😕
+
+Введите телефон вручную в формате +79991234567."""
 REGISTRATION_NAME_TEXT = "Как вас зовут? 🙂"
 REGISTRATION_NAME_INVALID_TEXT = "Введите имя текстом, минимум 2 символа 🙂"
 REGISTRATION_COMPLETE_TEXT = "Готово! Вы зарегистрированы ✅"

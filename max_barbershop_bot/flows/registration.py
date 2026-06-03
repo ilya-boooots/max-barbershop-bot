@@ -8,6 +8,7 @@ from max_barbershop_bot.core import state
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.users import UsersRepository
 from max_barbershop_bot.services.registration import (
+    contains_contact_attachment,
     extract_contact_phone,
     mask_phone,
     normalize_phone,
@@ -27,6 +28,7 @@ from max_barbershop_bot.ui.screens import (
 )
 from max_barbershop_bot.ui.texts import (
     REGISTRATION_COMPLETE_TEXT,
+    REGISTRATION_CONTACT_PHONE_MISSING_TEXT,
     REGISTRATION_DECLINED_TEXT,
     REGISTRATION_NAME_INVALID_TEXT,
     REGISTRATION_PHONE_INVALID_TEXT,
@@ -85,7 +87,12 @@ async def handle_consent_decline(context: RouterContext) -> None:
 async def handle_phone_input(context: RouterContext) -> None:
     """Validate a manual/contact phone and move to the name step."""
 
-    phone = extract_contact_phone(context.event.attachments) or normalize_phone(context.event.text)
+    phone = extract_contact_phone(context.event.attachments)
+    if phone is None and contains_contact_attachment(context.event.attachments):
+        await context.send_text(REGISTRATION_CONTACT_PHONE_MISSING_TEXT)
+        return
+
+    phone = phone or normalize_phone(context.event.text)
     if phone is None:
         await context.send_text(REGISTRATION_PHONE_INVALID_TEXT)
         return
