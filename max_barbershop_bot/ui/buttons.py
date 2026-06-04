@@ -251,6 +251,17 @@ def booking_success_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows([[MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)]])
 
 
+def my_bookings_keyboard(*, include_booking: bool = False) -> MaxInlineKeyboard:
+    """Build My bookings navigation buttons."""
+
+    rows: list[list[MaxButton]] = []
+    if include_booking:
+        rows.append([MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
 def staff_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     """Build staff management menu buttons."""
 
