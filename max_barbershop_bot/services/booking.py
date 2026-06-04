@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
-from max_barbershop_bot.integrations.yclients.dto import YClientsService, YClientsServiceCategory, YClientsStaff
+from max_barbershop_bot.integrations.yclients.dto import YClientsService, YClientsServiceCategory, YClientsSlot, YClientsStaff
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
-from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
+from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,10 @@ BOOKING_NOT_CONFIGURED_TEXT = "Запись пока не настроена �
 BOOKING_YCLIENTS_ERROR_TEXT = "Не получилось загрузить услуги для записи 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_MASTERS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить мастеров 🙏\n\nПожалуйста, попробуйте позже."
+BOOKING_SLOTS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
+BOOKING_SLOTS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить свободное время 🙏\n\nПожалуйста, попробуйте позже."
+
+_RU_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 
 class BookingServiceError(RuntimeError):
@@ -66,6 +72,15 @@ class BookingMasterItem:
 
 
 @dataclass(frozen=True)
+class BookingSlotItem:
+    """A YClients slot normalized for booking step 3."""
+
+    time: str
+    datetime_iso: str | None = None
+    raw: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class BookingCatalog:
     """Service categories and services loaded from YClients."""
 
@@ -78,6 +93,135 @@ class BookingService:
 
     def __init__(self, settings_repository: YClientsSettingsRepository) -> None:
         self._settings_repository = settings_repository
+
+
+    def get_branch_timezone(self) -> str:
+        """Return the active branch timezone with a safe repository default."""
+
+        try:
+            settings = self._settings_repository.get_active()
+        except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
+            logger.warning(
+                "Booking timezone lookup failed: operation=get_booking_timezone error_class=%s",
+                type(exc).__name__,
+            )
+            return DEFAULT_BRANCH_TIMEZONE
+        return _timezone_name(settings.branch_timezone if settings else None)
+
+    def get_available_dates(self, *, days: int = 14) -> list[date]:
+        """Return selectable dates in the active branch timezone."""
+
+        return build_booking_dates(days=days, timezone_name=self.get_branch_timezone())
+
+    async def get_available_slots(
+        self,
+        *,
+        yclients_service_id: str,
+        yclients_master_id: str,
+        booking_date: str | date,
+    ) -> list[BookingSlotItem]:
+        """Return YClients slots for the selected service, master and date."""
+
+        service_id = _clean_text(yclients_service_id)
+        master_id = _clean_text(yclients_master_id)
+        booking_date_value = _booking_date_iso(booking_date)
+        if not service_id or not master_id or not booking_date_value:
+            logger.warning(
+                "Booking slots unavailable: operation=get_booking_slots service_id_present=%s "
+                "master_id_present=%s date_present=%s",
+                bool(service_id),
+                bool(master_id),
+                bool(booking_date_value),
+            )
+            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT)
+
+        try:
+            settings = self._settings_repository.get_active()
+        except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
+            logger.warning(
+                "Booking settings lookup failed: operation=get_booking_slots service_id=%s master_id=%s "
+                "date=%s error_class=%s",
+                service_id,
+                master_id,
+                booking_date_value,
+                type(exc).__name__,
+            )
+            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT) from exc
+
+        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        if is_past_date(booking_date_value, timezone_name=timezone_name):
+            logger.info(
+                "Booking slots skipped for past date: operation=get_booking_slots service_id=%s master_id=%s date=%s",
+                service_id,
+                master_id,
+                booking_date_value,
+            )
+            return []
+
+        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+            logger.info(
+                "Booking slots unavailable: operation=get_booking_slots settings_present=%s "
+                "company_id_present=%s partner_token_present=%s user_token_present=%s service_id=%s master_id=%s date=%s",
+                settings is not None,
+                bool(settings and settings.company_id),
+                bool(settings and settings.partner_token),
+                bool(settings and settings.user_token),
+                service_id,
+                master_id,
+                booking_date_value,
+            )
+            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT)
+
+        try:
+            async with YClientsClient(
+                partner_token=settings.partner_token,
+                user_token=settings.user_token,
+                company_id=settings.company_id,
+            ) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                slots_payload = await yclients.get_available_slots(
+                    company_id=settings.company_id,
+                    service_id=service_id,
+                    staff_id=master_id,
+                    date=booking_date_value,
+                )
+        except YClientsError as exc:
+            logger.warning(
+                "Booking YClients error: operation=get_booking_slots service_id=%s master_id=%s date=%s "
+                "error_class=%s status_code=%s",
+                service_id,
+                master_id,
+                booking_date_value,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
+        except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
+            logger.warning(
+                "Booking unexpected YClients error: operation=get_booking_slots service_id=%s master_id=%s date=%s "
+                "error_class=%s",
+                service_id,
+                master_id,
+                booking_date_value,
+                type(exc).__name__,
+            )
+            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
+
+        slots = [_normalize_slot(item, timezone_name=timezone_name) for item in slots_payload]
+        now = datetime.now(_zoneinfo(timezone_name))
+        slots = [
+            item
+            for item in slots
+            if item.time and _slot_is_future(item, booking_date=booking_date_value, now=now)
+        ]
+        logger.info(
+            "Booking slots loaded: operation=get_booking_slots service_id=%s master_id=%s date=%s slots_count=%s",
+            service_id,
+            master_id,
+            booking_date_value,
+            len(slots),
+        )
+        return slots
 
     async def get_service_categories_and_services(self) -> BookingCatalog:
         """Return available service categories and services from active YClients settings."""
@@ -217,6 +361,125 @@ class BookingService:
         )
         return masters
 
+
+
+def build_booking_dates(*, days: int = 14, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> list[date]:
+    """Build today and future booking dates in the branch timezone."""
+
+    total_days = max(1, days)
+    today = datetime.now(_zoneinfo(timezone_name)).date()
+    return [today + timedelta(days=offset) for offset in range(total_days)]
+
+
+def format_date_button(value: date | str, *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+    """Format a date button in the Telegram reference style."""
+
+    current = _date_value(value)
+    today = datetime.now(_zoneinfo(timezone_name)).date()
+    if current == today:
+        return f"📅 Сегодня, {current.strftime('%d.%m')}"
+    if current == today + timedelta(days=1):
+        return f"📅 Завтра, {current.strftime('%d.%m')}"
+    return f"📅 {_RU_WEEKDAYS[current.weekday()]} {current.strftime('%d.%m')}"
+
+
+def format_slot_button(slot: BookingSlotItem | YClientsSlot | dict[str, Any]) -> str:
+    """Format a slot button in the Telegram reference style."""
+
+    normalized = _normalize_slot(slot, timezone_name=DEFAULT_BRANCH_TIMEZONE)
+    return f"🕒 {normalized.time}" if normalized.time else "🕒 —"
+
+
+def is_past_date(value: date | str, *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> bool:
+    """Return True when value is before today in branch timezone."""
+
+    return _date_value(value) < datetime.now(_zoneinfo(timezone_name)).date()
+
+
+def _normalize_slot(slot: BookingSlotItem | YClientsSlot | dict[str, Any], *, timezone_name: str) -> BookingSlotItem:
+    if isinstance(slot, BookingSlotItem):
+        return slot
+    if isinstance(slot, YClientsSlot):
+        datetime_iso = _clean_text(slot.datetime) or None
+        slot_time = _normalize_slot_time(slot.time or datetime_iso, timezone_name=timezone_name)
+        return BookingSlotItem(time=slot_time or "", datetime_iso=datetime_iso, raw=_safe_raw_slot(slot.raw))
+    datetime_iso = _clean_text(slot.get("datetime") or slot.get("date") or slot.get("time")) or None
+    slot_time = _normalize_slot_time(slot.get("time") or slot.get("datetime") or slot.get("date"), timezone_name=timezone_name)
+    return BookingSlotItem(time=slot_time or "", datetime_iso=datetime_iso, raw=_safe_raw_slot(slot))
+
+
+def _normalize_slot_time(value: Any, *, timezone_name: str) -> str | None:
+    raw = _clean_text(value)
+    if not raw:
+        return None
+    parsed = _parse_datetime(raw, timezone_name=timezone_name)
+    if parsed is not None:
+        return parsed.astimezone(_zoneinfo(timezone_name)).strftime("%H:%M")
+    for separator in ("T", " "):
+        if separator in raw:
+            raw = raw.split(separator, 1)[1]
+    raw = raw[:5]
+    if len(raw) == 5 and raw[2] == ":" and raw.replace(":", "").isdigit():
+        return raw
+    return None
+
+
+def _slot_is_future(slot: BookingSlotItem, *, booking_date: str, now: datetime) -> bool:
+    parsed = _parse_datetime(slot.datetime_iso, timezone_name=str(now.tzinfo) if now.tzinfo else DEFAULT_BRANCH_TIMEZONE)
+    if parsed is None:
+        parsed = _parse_datetime(f"{booking_date}T{slot.time}:00", timezone_name=str(now.tzinfo) if now.tzinfo else DEFAULT_BRANCH_TIMEZONE)
+    if parsed is None:
+        return False
+    return parsed.astimezone(now.tzinfo) > now
+
+
+def _parse_datetime(value: Any, *, timezone_name: str) -> datetime | None:
+    raw = _clean_text(value)
+    if not raw or len(raw) <= 5:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_zoneinfo(timezone_name))
+    return parsed
+
+
+def _booking_date_iso(value: date | str) -> str:
+    try:
+        return _date_value(value).isoformat()
+    except (TypeError, ValueError):
+        return ""
+
+
+def _date_value(value: date | str) -> date:
+    if isinstance(value, date):
+        return value
+    return datetime.fromisoformat(str(value)).date()
+
+
+def _timezone_name(value: str | None) -> str:
+    candidate = _clean_text(value) or DEFAULT_BRANCH_TIMEZONE
+    try:
+        ZoneInfo(candidate)
+    except ZoneInfoNotFoundError:
+        logger.warning("Booking invalid branch timezone: timezone=%s", candidate)
+        return DEFAULT_BRANCH_TIMEZONE
+    return candidate
+
+
+def _zoneinfo(timezone_name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo(DEFAULT_BRANCH_TIMEZONE)
+
+
+def _safe_raw_slot(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    return {key: raw.get(key) for key in ("time", "datetime", "date", "staff_id") if key in raw}
 
 def group_services_by_category(
     categories: list[BookingCategory] | list[dict[str, Any]],

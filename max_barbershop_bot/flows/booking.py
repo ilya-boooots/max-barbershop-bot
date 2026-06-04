@@ -15,8 +15,11 @@ from max_barbershop_bot.services.booking import (
     BookingServiceError,
     BookingMasterItem,
     BookingServiceItem,
+    BookingSlotItem,
+    format_date_button,
     format_master_title,
     format_service_title,
+    format_slot_button,
     has_available_masters,
     has_available_services,
 )
@@ -27,25 +30,32 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_CATEGORY_PAYLOAD_PREFIX,
     BOOKING_CATEGORY_PREV_PAYLOAD,
     BOOKING_MASTER_NEXT_PAYLOAD,
+    BOOKING_DATE_PAYLOAD_PREFIX,
     BOOKING_MASTER_PAYLOAD_PREFIX,
     BOOKING_MASTER_PREV_PAYLOAD,
     BOOKING_SERVICE_NEXT_PAYLOAD,
     BOOKING_SERVICE_PAYLOAD_PREFIX,
     BOOKING_SERVICE_PREV_PAYLOAD,
+    BOOKING_SLOT_PAYLOAD_PREFIX,
     MENU_BOOKING_PAYLOAD,
     booking_categories_keyboard,
+    booking_dates_keyboard,
     booking_masters_keyboard,
     booking_services_keyboard,
+    booking_slots_keyboard,
     navigation_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
     BOOKING_CATEGORY_EMPTY_TEXT,
     BOOKING_CATEGORY_TEXT,
+    BOOKING_DATES_TEXT,
     BOOKING_EMPTY_TEXT,
-    BOOKING_MASTER_SELECTED_TEXT,
     BOOKING_MASTER_TEXT,
     BOOKING_MASTERS_EMPTY_TEXT,
     BOOKING_SERVICE_TEXT,
+    BOOKING_SLOT_SELECTED_TEXT,
+    BOOKING_SLOTS_EMPTY_TEXT,
+    BOOKING_SLOTS_TEXT,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +65,11 @@ _CATALOG_STATE_KEY = "booking_catalog"
 _CATEGORY_MAP_STATE_KEY = "booking_category_payloads"
 _SERVICE_MAP_STATE_KEY = "booking_service_payloads"
 _MASTER_MAP_STATE_KEY = "booking_master_payloads"
+_DATE_MAP_STATE_KEY = "booking_date_payloads"
+_SLOT_MAP_STATE_KEY = "booking_slot_payloads"
 _MASTERS_STATE_KEY = "booking_masters"
+_DATES_STATE_KEY = "booking_dates"
+_SLOTS_STATE_KEY = "booking_slots"
 _CATEGORY_PAGE_STATE_KEY = "booking_category_page"
 _SERVICE_PAGE_STATE_KEY = "booking_service_page"
 _MASTER_PAGE_STATE_KEY = "booking_master_page"
@@ -65,6 +79,12 @@ _SELECTED_SERVICE_STATE_KEY = "selected_yclients_service_id"
 _SELECTED_SERVICE_NAME_STATE_KEY = "selected_service_name"
 _SELECTED_MASTER_STATE_KEY = "selected_yclients_master_id"
 _SELECTED_MASTER_NAME_STATE_KEY = "selected_master_name"
+_SELECTED_DATE_STATE_KEY = "selected_booking_date"
+_SELECTED_SLOT_TIME_STATE_KEY = "selected_booking_slot_time"
+_SELECTED_SLOT_DATETIME_STATE_KEY = "selected_booking_datetime"
+_SELECTED_SLOT_RAW_STATE_KEY = "selected_booking_slot_raw"
+_BOOKING_DATE_STATE_KEY = "booking_date"
+_BOOKING_SLOT_STATE_KEY = "booking_slot"
 
 
 def register_booking_routes(router: Router) -> None:
@@ -82,6 +102,8 @@ def register_booking_routes(router: Router) -> None:
         router.on_callback(f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}{index}", handle_booking_category)
         router.on_callback(f"{BOOKING_SERVICE_PAYLOAD_PREFIX}{index}", handle_booking_service)
         router.on_callback(f"{BOOKING_MASTER_PAYLOAD_PREFIX}{index}", handle_booking_master)
+        router.on_callback(f"{BOOKING_DATE_PAYLOAD_PREFIX}{index}", handle_booking_date)
+        router.on_callback(f"{BOOKING_SLOT_PAYLOAD_PREFIX}{index}", handle_booking_slot)
 
 
 async def handle_booking_start(context: RouterContext) -> None:
@@ -187,7 +209,7 @@ async def handle_booking_service_page(context: RouterContext) -> None:
 
 
 async def handle_booking_master(context: RouterContext) -> None:
-    """Save selected master and show a next-step placeholder."""
+    """Save selected master and show date selection."""
 
     await context.answer_callback("Мастер выбран ✅")
     master_id = _mapped_value(context, _MASTER_MAP_STATE_KEY, context.event.callback_payload)
@@ -207,9 +229,52 @@ async def handle_booking_master(context: RouterContext) -> None:
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, master.yclients_master_id)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, master.title)
-    _push_current_screen(context, state.BOOKING_MASTER_SELECTED_SCREEN)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_DATE_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, None)
+    await _show_booking_dates(context)
+
+
+async def handle_booking_date(context: RouterContext) -> None:
+    """Save selected date and load YClients slots."""
+
+    await context.answer_callback("Выбираем дату 📅")
+    booking_date = _mapped_value(context, _DATE_MAP_STATE_KEY, context.event.callback_payload)
+    if not booking_date:
+        await _show_booking_dates(context, push_current=False)
+        return
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_DATE_STATE_KEY, booking_date)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_DATE_STATE_KEY, booking_date)
+    await _open_booking_slots(context, booking_date)
+
+
+async def handle_booking_slot(context: RouterContext) -> None:
+    """Save selected slot and show the next-step placeholder."""
+
+    await context.answer_callback("Время выбрано ✅")
+    slot_time = _mapped_value(context, _SLOT_MAP_STATE_KEY, context.event.callback_payload)
+    slots = _slots(context)
+    booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
+    if not slot_time or slots is None or not isinstance(booking_date, str):
+        if isinstance(booking_date, str) and booking_date:
+            await _open_booking_slots(context, booking_date, push_current=False)
+            return
+        await _show_booking_dates(context, push_current=False)
+        return
+
+    slot = next((item for item in slots if item.time == slot_time), None)
+    if slot is None:
+        await _open_booking_slots(context, booking_date, push_current=False)
+        return
+
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, slot.time)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_SLOT_STATE_KEY, slot.time)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, slot.datetime_iso)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, slot.raw)
+    _push_current_screen(context, state.BOOKING_SLOT_SELECTED_SCREEN)
     await context.send_text(
-        BOOKING_MASTER_SELECTED_TEXT.format(master_name=master.title),
+        BOOKING_SLOT_SELECTED_TEXT.format(date=_format_selected_date(booking_date), time=slot.time),
         keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
     )
 
@@ -232,7 +297,7 @@ async def handle_booking_back(context: RouterContext) -> None:
     if current_screen == state.BOOKING_MASTERS_SCREEN:
         await _show_selected_category_services(context)
         return
-    if current_screen == state.BOOKING_MASTER_SELECTED_SCREEN:
+    if current_screen == state.BOOKING_DATES_SCREEN:
         masters = _masters(context)
         if masters is not None:
             await _show_masters(context, masters, push_current=False)
@@ -242,6 +307,20 @@ async def handle_booking_back(context: RouterContext) -> None:
             await _open_booking_masters(context, service_id, push_current=False)
             return
         await _show_selected_category_services(context)
+        return
+    if current_screen == state.BOOKING_SLOTS_SCREEN:
+        await _show_booking_dates(context, push_current=False)
+        return
+    if current_screen == state.BOOKING_SLOT_SELECTED_SCREEN:
+        booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
+        if isinstance(booking_date, str) and booking_date:
+            slots = _slots(context)
+            if slots is not None:
+                await _show_slots(context, slots, push_current=False)
+                return
+            await _open_booking_slots(context, booking_date, push_current=False)
+            return
+        await _show_booking_dates(context, push_current=False)
         return
     if current_screen == state.BOOKING_SERVICE_SELECTED_SCREEN:
         await _show_selected_category_services(context)
@@ -267,6 +346,10 @@ async def _open_booking_catalog(context: RouterContext, *, push_current: bool = 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _MASTERS_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _DATES_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_DATE_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_SLOT_STATE_KEY, None)
 
     if not has_available_services(catalog):
         if push_current:
@@ -305,6 +388,47 @@ async def _open_booking_masters(context: RouterContext, yclients_service_id: str
         return
 
     await _show_masters(context, masters, push_current=push_current)
+
+
+async def _show_booking_dates(context: RouterContext, *, push_current: bool = True) -> None:
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    timezone_name = booking_service.get_branch_timezone()
+    dates = booking_service.get_available_dates(days=14)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _DATES_STATE_KEY, dates)
+    await _show_dates(context, dates, timezone_name=timezone_name, push_current=push_current)
+
+
+async def _open_booking_slots(context: RouterContext, booking_date: str, *, push_current: bool = True) -> None:
+    service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
+    master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
+    if not isinstance(service_id, str) or not service_id or not isinstance(master_id, str) or not master_id:
+        await _show_booking_dates(context, push_current=False)
+        return
+
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    try:
+        slots = await booking_service.get_available_slots(
+            yclients_service_id=service_id,
+            yclients_master_id=master_id,
+            booking_date=booking_date,
+        )
+    except BookingServiceError as exc:
+        logger.warning(
+            "Booking slots screen failed: operation=show_booking_slots service_id=%s master_id=%s date=%s error_class=%s",
+            service_id,
+            master_id,
+            booking_date,
+            type(exc).__name__,
+        )
+        if push_current:
+            _push_current_screen(context, state.BOOKING_SLOTS_SCREEN)
+        else:
+            state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SLOTS_SCREEN)
+        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, slots)
+    await _show_slots(context, slots, push_current=push_current)
 
 
 async def _show_selected_category_services(context: RouterContext) -> None:
@@ -435,6 +559,52 @@ async def _show_masters(
     )
 
 
+async def _show_dates(
+    context: RouterContext,
+    dates: list,
+    *,
+    timezone_name: str,
+    push_current: bool = True,
+) -> None:
+    date_payloads = {
+        f"{BOOKING_DATE_PAYLOAD_PREFIX}{index}": item.isoformat()
+        for index, item in enumerate(dates[:_MAX_CALLBACK_ITEMS])
+    }
+    state.set_state_data_value(_user_id(context), _chat_id(context), _DATE_MAP_STATE_KEY, date_payloads)
+    if push_current:
+        _push_current_screen(context, state.BOOKING_DATES_SCREEN)
+    else:
+        state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_DATES_SCREEN)
+    await context.send_text(
+        BOOKING_DATES_TEXT,
+        keyboard=booking_dates_keyboard(
+            dates[:_MAX_CALLBACK_ITEMS],
+            lambda value: format_date_button(value, timezone_name=timezone_name),
+            back_payload=BOOKING_BACK_PAYLOAD,
+        ),
+    )
+
+
+async def _show_slots(context: RouterContext, slots: list[BookingSlotItem], *, push_current: bool = True) -> None:
+    display_slots = slots[:_MAX_CALLBACK_ITEMS]
+    slot_payloads = {
+        f"{BOOKING_SLOT_PAYLOAD_PREFIX}{index}": item.time
+        for index, item in enumerate(display_slots)
+    }
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SLOT_MAP_STATE_KEY, slot_payloads)
+    if push_current:
+        _push_current_screen(context, state.BOOKING_SLOTS_SCREEN)
+    else:
+        state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SLOTS_SCREEN)
+    if not display_slots:
+        await context.send_text(BOOKING_SLOTS_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+    await context.send_text(
+        BOOKING_SLOTS_TEXT,
+        keyboard=booking_slots_keyboard(display_slots, format_slot_button, back_payload=BOOKING_BACK_PAYLOAD),
+    )
+
+
 def _clamp_page(page: int, item_count: int) -> int:
     max_page = max((item_count - 1) // _MAX_CALLBACK_ITEMS, 0)
     return max(0, min(page, max_page))
@@ -465,6 +635,23 @@ def _masters(context: RouterContext) -> list[BookingMasterItem] | None:
     if isinstance(value, list) and all(isinstance(item, BookingMasterItem) for item in value):
         return value
     return None
+
+
+
+
+def _slots(context: RouterContext) -> list[BookingSlotItem] | None:
+    value = _state_value(context, _SLOTS_STATE_KEY)
+    if isinstance(value, list) and all(isinstance(item, BookingSlotItem) for item in value):
+        return value
+    return None
+
+
+def _format_selected_date(value: str) -> str:
+    timezone_name = BookingService(YClientsSettingsRepository(_database_path())).get_branch_timezone()
+    try:
+        return format_date_button(value, timezone_name=timezone_name).replace("📅 ", "")
+    except ValueError:
+        return value
 
 
 def _mapped_value(context: RouterContext, key: str, payload: str | None) -> str | None:
