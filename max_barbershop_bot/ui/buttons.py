@@ -43,6 +43,7 @@ BOOKING_MASTER_PREV_PAYLOAD = "booking:master_page:prev"
 BOOKING_MASTER_NEXT_PAYLOAD = "booking:master_page:next"
 BOOKING_DATE_PAYLOAD_PREFIX = "booking:date:"
 BOOKING_SLOT_PAYLOAD_PREFIX = "booking:slot:"
+BOOKING_CONFIRM_PAYLOAD = "booking:confirm"
 
 STAFF_LIST_PAYLOAD = "staff:list"
 STAFF_ASSIGN_START_PAYLOAD = "staff:assign:start"
@@ -230,6 +231,24 @@ def booking_slots_keyboard(
     rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
+
+
+def booking_confirmation_keyboard(*, back_payload: str = BOOKING_BACK_PAYLOAD) -> MaxInlineKeyboard:
+    """Build final booking confirmation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Подтвердить запись", payload=BOOKING_CONFIRM_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=back_payload)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def booking_success_keyboard() -> MaxInlineKeyboard:
+    """Build booking success navigation buttons."""
+
+    return MaxInlineKeyboard.from_rows([[MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)]])
 
 
 def staff_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:

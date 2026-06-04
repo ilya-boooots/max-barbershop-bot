@@ -9,9 +9,16 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
-from max_barbershop_bot.integrations.yclients.dto import YClientsService, YClientsServiceCategory, YClientsSlot, YClientsStaff
+from max_barbershop_bot.integrations.yclients.dto import (
+    YClientsBookingRecord,
+    YClientsService,
+    YClientsServiceCategory,
+    YClientsSlot,
+    YClientsStaff,
+)
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
+from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, normalize_phone
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
 
 logger = logging.getLogger(__name__)
@@ -22,6 +29,8 @@ BOOKING_MASTERS_NOT_CONFIGURED_TEXT = "Запись пока не настрое
 BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить мастеров 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_SLOTS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_SLOTS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить свободное время 🙏\n\nПожалуйста, попробуйте позже."
+BOOKING_CREATE_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
+BOOKING_CREATE_YCLIENTS_ERROR_TEXT = "Не удалось создать запись 🙏\n\nВозможно, это время уже заняли. Попробуйте выбрать другой слот."
 
 _RU_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
@@ -40,6 +49,10 @@ class BookingSettingsMissingError(BookingServiceError):
 
 class BookingYClientsError(BookingServiceError):
     """Raised when YClients cannot provide booking services safely."""
+
+
+class BookingCreateError(BookingYClientsError):
+    """Raised when YClients cannot create the final booking safely."""
 
 
 @dataclass(frozen=True)
@@ -81,6 +94,16 @@ class BookingSlotItem:
 
 
 @dataclass(frozen=True)
+class CreatedBooking:
+    """Created YClients record normalized for local attribution and UI."""
+
+    yclients_record_id: str
+    yclients_client_id: str | None = None
+    datetime_iso: str | None = None
+    raw_payload: dict[str, Any] | list[Any] | None = None
+
+
+@dataclass(frozen=True)
 class BookingCatalog:
     """Service categories and services loaded from YClients."""
 
@@ -112,6 +135,115 @@ class BookingService:
         """Return selectable dates in the active branch timezone."""
 
         return build_booking_dates(days=days, timezone_name=self.get_branch_timezone())
+
+
+    async def create_booking(
+        self,
+        *,
+        yclients_service_id: str,
+        yclients_master_id: str,
+        booking_date: str | date,
+        booking_slot: str,
+        client_name: str,
+        client_phone: str,
+        selected_datetime: str | None = None,
+        comment: str = "",
+    ) -> CreatedBooking:
+        """Create the final YClients booking record for the selected slot."""
+
+        payload = build_booking_payload(
+            yclients_service_id=yclients_service_id,
+            yclients_master_id=yclients_master_id,
+            booking_date=booking_date,
+            booking_slot=booking_slot,
+            client_name=client_name,
+            client_phone=client_phone,
+            selected_datetime=selected_datetime,
+            comment=comment,
+        )
+        service_id = str(payload["service_id"])
+        master_id = str(payload.get("staff_id") or "")
+        datetime_iso = str(payload["datetime_iso"])
+        try:
+            settings = self._settings_repository.get_active()
+        except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
+            logger.warning(
+                "Booking settings lookup failed: operation=create_booking service_id=%s master_id=%s "
+                "datetime=%s error_class=%s",
+                service_id,
+                master_id,
+                datetime_iso,
+                type(exc).__name__,
+            )
+            raise BookingSettingsMissingError(BOOKING_CREATE_NOT_CONFIGURED_TEXT) from exc
+
+        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+            logger.info(
+                "Booking create unavailable: operation=create_booking settings_present=%s "
+                "company_id_present=%s partner_token_present=%s user_token_present=%s service_id=%s master_id=%s datetime=%s",
+                settings is not None,
+                bool(settings and settings.company_id),
+                bool(settings and settings.partner_token),
+                bool(settings and settings.user_token),
+                service_id,
+                master_id,
+                datetime_iso,
+            )
+            raise BookingSettingsMissingError(BOOKING_CREATE_NOT_CONFIGURED_TEXT)
+
+        try:
+            async with YClientsClient(
+                partner_token=settings.partner_token,
+                user_token=settings.user_token,
+                company_id=settings.company_id,
+            ) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                created = await yclients.create_booking(company_id=settings.company_id, **payload)
+        except YClientsError as exc:
+            logger.warning(
+                "Booking YClients error: operation=create_booking service_id=%s master_id=%s datetime=%s "
+                "error_class=%s status_code=%s",
+                service_id,
+                master_id,
+                datetime_iso,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise BookingCreateError(BOOKING_CREATE_YCLIENTS_ERROR_TEXT) from exc
+        except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
+            logger.warning(
+                "Booking unexpected YClients error: operation=create_booking service_id=%s master_id=%s datetime=%s "
+                "error_class=%s",
+                service_id,
+                master_id,
+                datetime_iso,
+                type(exc).__name__,
+            )
+            raise BookingCreateError(BOOKING_CREATE_YCLIENTS_ERROR_TEXT) from exc
+
+        record_id = extract_yclients_record_id(created)
+        if not record_id:
+            logger.warning(
+                "Booking create invalid response: operation=create_booking service_id=%s master_id=%s datetime=%s",
+                service_id,
+                master_id,
+                datetime_iso,
+            )
+            raise BookingCreateError(BOOKING_CREATE_YCLIENTS_ERROR_TEXT)
+
+        logger.info(
+            "Booking created: operation=create_booking service_id=%s master_id=%s datetime=%s yclients_record_id=%s",
+            service_id,
+            master_id,
+            created.datetime or datetime_iso,
+            record_id,
+        )
+        return CreatedBooking(
+            yclients_record_id=record_id,
+            yclients_client_id=extract_yclients_client_id(created),
+            datetime_iso=created.datetime or datetime_iso,
+            raw_payload=created.raw_payload,
+        )
 
     async def get_available_slots(
         self,
@@ -363,6 +495,73 @@ class BookingService:
 
 
 
+def build_booking_payload(
+    *,
+    yclients_service_id: str,
+    yclients_master_id: str,
+    booking_date: str | date,
+    booking_slot: str,
+    client_name: str,
+    client_phone: str,
+    selected_datetime: str | None = None,
+    comment: str = "",
+) -> dict[str, Any]:
+    """Build YClients service-layer kwargs for final record creation."""
+
+    service_id = _clean_text(yclients_service_id)
+    master_id = _clean_text(yclients_master_id)
+    booking_date_value = _booking_date_iso(booking_date)
+    slot_time = _normalize_slot_time(booking_slot, timezone_name=DEFAULT_BRANCH_TIMEZONE) or _clean_text(booking_slot)
+    datetime_iso = _clean_text(selected_datetime)
+    if not datetime_iso and booking_date_value and slot_time:
+        datetime_iso = f"{booking_date_value} {slot_time}:00"
+    phone = normalize_phone(_clean_text(client_phone))
+    fullname = _clean_text(client_name) or "Гость"
+    if not service_id or not master_id or not datetime_iso or not phone:
+        raise BookingCreateError(BOOKING_CREATE_YCLIENTS_ERROR_TEXT)
+    return {
+        "service_id": service_id,
+        "staff_id": master_id,
+        "datetime_iso": datetime_iso,
+        "phone": phone,
+        "fullname": fullname,
+        "comment": comment or MAX_BOOKING_COMMENT_MARKER,
+    }
+
+
+def format_booking_summary(booking_state: dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+    """Format final confirmation text in the Telegram reference style."""
+
+    return _format_booking_details("Подтвердите запись, пожалуйста 🙂\n", booking_state, timezone_name=timezone_name)
+
+
+def format_booking_success(booking_state: dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+    """Format successful booking text in the Telegram reference style."""
+
+    return _format_booking_details("✅ Готово! Вы записаны 💈\n", booking_state, timezone_name=timezone_name)
+
+
+def extract_yclients_record_id(created: YClientsBookingRecord | CreatedBooking | dict[str, Any] | list[Any]) -> str | None:
+    """Extract a YClients record id from known create-record response shapes."""
+
+    if isinstance(created, CreatedBooking):
+        return _clean_text(created.yclients_record_id) or None
+    if isinstance(created, YClientsBookingRecord):
+        return _clean_text(created.record_id) or None
+    return _find_first_key(created, ("record_id", "id", "booking_id", "visit_id"))
+
+
+def extract_yclients_client_id(created: YClientsBookingRecord | CreatedBooking | dict[str, Any] | list[Any]) -> str | None:
+    """Extract a YClients client id from known create-record response shapes."""
+
+    if isinstance(created, CreatedBooking):
+        return _clean_text(created.yclients_client_id) or None
+    if isinstance(created, YClientsBookingRecord):
+        return _find_first_key(created.raw_payload, ("client_id", "client", "yclients_client_id"))
+    return _find_first_key(created, ("client_id", "client", "yclients_client_id"))
+
+
+
 def build_booking_dates(*, days: int = 14, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> list[date]:
     """Build today and future booking dates in the branch timezone."""
 
@@ -529,6 +728,82 @@ def format_service_title(service: BookingServiceItem | dict[str, Any]) -> str:
         details.append(price)
     suffix = f" ({', '.join(details)})" if details else ""
     return f"{normalized.title}{suffix}"
+
+
+def _format_booking_details(header: str, booking_state: dict[str, Any], *, timezone_name: str) -> str:
+    service_name = _clean_text(booking_state.get("selected_service_name") or booking_state.get("service_name")) or "—"
+    master_name = _clean_text(
+        booking_state.get("selected_master_name")
+        or booking_state.get("selected_staff_name")
+        or booking_state.get("master_name")
+    ) or "Любой мастер"
+    booking_date_value, booking_time_value = _display_date_time(booking_state, timezone_name=timezone_name)
+    lines = [header] if header else []
+    lines.extend(
+        [
+            f"✂️ Услуга: {service_name}",
+            f"👤 Мастер: {master_name}",
+            f"📅 Дата: {booking_date_value}",
+            f"🕒 Время: {booking_time_value}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _display_date_time(booking_state: dict[str, Any], *, timezone_name: str) -> tuple[str, str]:
+    selected_datetime = _clean_text(
+        booking_state.get("selected_booking_datetime")
+        or booking_state.get("selected_datetime")
+        or booking_state.get("booking_datetime")
+    )
+    parsed = _parse_datetime(selected_datetime, timezone_name=timezone_name)
+    if parsed is not None:
+        local_dt = parsed.astimezone(_zoneinfo(timezone_name))
+        return local_dt.strftime("%d.%m.%Y"), local_dt.strftime("%H:%M")
+    raw_date = _clean_text(
+        booking_state.get("selected_booking_date")
+        or booking_state.get("selected_date")
+        or booking_state.get("booking_date")
+    )
+    raw_time = _clean_text(
+        booking_state.get("selected_booking_slot_time")
+        or booking_state.get("selected_slot_time")
+        or booking_state.get("booking_slot")
+    )
+    try:
+        display_date = _date_value(raw_date).strftime("%d.%m.%Y")
+    except (TypeError, ValueError):
+        display_date = raw_date or "—"
+    return display_date, raw_time or "—"
+
+
+def _find_first_key(value: Any, keys: tuple[str, ...]) -> str | None:
+    if isinstance(value, dict):
+        for key in keys:
+            candidate = value.get(key)
+            if key == "client" and isinstance(candidate, dict):
+                nested = _find_first_key(candidate, ("id", "client_id"))
+                if nested:
+                    return nested
+            elif key == "client" and candidate not in (None, "") and not isinstance(candidate, (dict, list)):
+                candidate_text = _clean_text(candidate)
+                if candidate_text:
+                    return candidate_text
+            else:
+                candidate_text = _clean_text(candidate)
+                if candidate_text:
+                    return candidate_text
+        for nested_value in value.values():
+            nested = _find_first_key(nested_value, keys)
+            if nested:
+                return nested
+    elif isinstance(value, list):
+        for item in value:
+            nested = _find_first_key(item, keys)
+            if nested:
+                return nested
+    return None
+
 
 
 def _normalize_master(item: BookingMasterItem | YClientsStaff | dict[str, Any]) -> BookingMasterItem:

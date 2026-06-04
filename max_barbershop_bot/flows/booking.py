@@ -8,6 +8,9 @@ from os import getenv
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
+from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER
+from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
+from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.booking import (
     BookingCatalog,
@@ -16,6 +19,8 @@ from max_barbershop_bot.services.booking import (
     BookingMasterItem,
     BookingServiceItem,
     BookingSlotItem,
+    format_booking_success,
+    format_booking_summary,
     format_date_button,
     format_master_title,
     format_service_title,
@@ -29,6 +34,7 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_CATEGORY_NEXT_PAYLOAD,
     BOOKING_CATEGORY_PAYLOAD_PREFIX,
     BOOKING_CATEGORY_PREV_PAYLOAD,
+    BOOKING_CONFIRM_PAYLOAD,
     BOOKING_MASTER_NEXT_PAYLOAD,
     BOOKING_DATE_PAYLOAD_PREFIX,
     BOOKING_MASTER_PAYLOAD_PREFIX,
@@ -43,17 +49,21 @@ from max_barbershop_bot.ui.buttons import (
     booking_masters_keyboard,
     booking_services_keyboard,
     booking_slots_keyboard,
+    booking_confirmation_keyboard,
+    booking_success_keyboard,
     navigation_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
     BOOKING_CATEGORY_EMPTY_TEXT,
     BOOKING_CATEGORY_TEXT,
+    BOOKING_CONFIRMATION_MISSING_DATA_TEXT,
+    BOOKING_CREATE_ERROR_TEXT,
+    BOOKING_CREATE_IN_PROGRESS_TEXT,
     BOOKING_DATES_TEXT,
     BOOKING_EMPTY_TEXT,
     BOOKING_MASTER_TEXT,
     BOOKING_MASTERS_EMPTY_TEXT,
     BOOKING_SERVICE_TEXT,
-    BOOKING_SLOT_SELECTED_TEXT,
     BOOKING_SLOTS_EMPTY_TEXT,
     BOOKING_SLOTS_TEXT,
 )
@@ -85,6 +95,8 @@ _SELECTED_SLOT_DATETIME_STATE_KEY = "selected_booking_datetime"
 _SELECTED_SLOT_RAW_STATE_KEY = "selected_booking_slot_raw"
 _BOOKING_DATE_STATE_KEY = "booking_date"
 _BOOKING_SLOT_STATE_KEY = "booking_slot"
+_BOOKING_CREATION_IN_PROGRESS_STATE_KEY = "booking_creation_in_progress"
+_BOOKING_COMPLETED_RECORD_ID_STATE_KEY = "booking_completed_record_id"
 
 
 def register_booking_routes(router: Router) -> None:
@@ -92,6 +104,7 @@ def register_booking_routes(router: Router) -> None:
 
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
+    router.on_callback(BOOKING_CONFIRM_PAYLOAD, handle_booking_confirm)
     router.on_callback(BOOKING_CATEGORY_PREV_PAYLOAD, handle_booking_category_page)
     router.on_callback(BOOKING_CATEGORY_NEXT_PAYLOAD, handle_booking_category_page)
     router.on_callback(BOOKING_SERVICE_PREV_PAYLOAD, handle_booking_service_page)
@@ -272,11 +285,67 @@ async def handle_booking_slot(context: RouterContext) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_SLOT_STATE_KEY, slot.time)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, slot.datetime_iso)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, slot.raw)
-    _push_current_screen(context, state.BOOKING_SLOT_SELECTED_SCREEN)
-    await context.send_text(
-        BOOKING_SLOT_SELECTED_TEXT.format(date=_format_selected_date(booking_date), time=slot.time),
-        keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_COMPLETED_RECORD_ID_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+    await _show_booking_confirmation(context)
+
+
+async def handle_booking_confirm(context: RouterContext) -> None:
+    """Create a real YClients booking after the final confirmation tap."""
+
+    if _state_value(context, _BOOKING_CREATION_IN_PROGRESS_STATE_KEY) is True:
+        await context.answer_callback(BOOKING_CREATE_IN_PROGRESS_TEXT)
+        return
+    if _state_value(context, _BOOKING_COMPLETED_RECORD_ID_STATE_KEY):
+        await context.answer_callback("Запись уже создана ✅")
+        await _show_booking_success(context)
+        return
+
+    booking_data = _booking_state_snapshot(context)
+    user = _current_user(context)
+    if user is None or not user.phone or not booking_data.get("selected_service_id") or not booking_data.get("selected_master_id") or not booking_data.get("selected_date") or not booking_data.get("selected_slot_time"):
+        await context.answer_callback("Не хватает данных 🙏")
+        await context.send_text(BOOKING_CONFIRMATION_MISSING_DATA_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+
+    await context.answer_callback("Создаём запись ✂️")
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, True)
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    try:
+        created = await booking_service.create_booking(
+            yclients_service_id=str(booking_data["selected_service_id"]),
+            yclients_master_id=str(booking_data["selected_master_id"]),
+            booking_date=str(booking_data["selected_date"]),
+            booking_slot=str(booking_data["selected_slot_time"]),
+            selected_datetime=_optional_state_text(booking_data.get("selected_datetime")),
+            client_name=_user_full_name(user),
+            client_phone=user.phone,
+            comment=MAX_BOOKING_COMMENT_MARKER,
+        )
+    except BookingServiceError as exc:
+        logger.warning(
+            "Booking create failed: operation=confirm_booking service_id=%s master_id=%s date=%s slot_time=%s error_class=%s",
+            booking_data.get("selected_service_id"),
+            booking_data.get("selected_master_id"),
+            booking_data.get("selected_date"),
+            booking_data.get("selected_slot_time"),
+            type(exc).__name__,
+        )
+        await context.send_text(exc.user_message or BOOKING_CREATE_ERROR_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+    finally:
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+
+    if 'created' not in locals():
+        return
+
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_COMPLETED_RECORD_ID_STATE_KEY, created.yclients_record_id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+    _save_attribution_safely(
+        platform_user_id=user.platform_user_id,
+        yclients_record_id=created.yclients_record_id,
+        yclients_client_id=created.yclients_client_id or user.yclients_client_id,
     )
+    await _show_booking_success(context)
 
 
 async def handle_booking_back(context: RouterContext) -> None:
@@ -311,7 +380,7 @@ async def handle_booking_back(context: RouterContext) -> None:
     if current_screen == state.BOOKING_SLOTS_SCREEN:
         await _show_booking_dates(context, push_current=False)
         return
-    if current_screen == state.BOOKING_SLOT_SELECTED_SCREEN:
+    if current_screen in {state.BOOKING_SLOT_SELECTED_SCREEN, state.BOOKING_CONFIRMATION_SCREEN}:
         booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
         if isinstance(booking_date, str) and booking_date:
             slots = _slots(context)
@@ -321,6 +390,9 @@ async def handle_booking_back(context: RouterContext) -> None:
             await _open_booking_slots(context, booking_date, push_current=False)
             return
         await _show_booking_dates(context, push_current=False)
+        return
+    if current_screen == state.BOOKING_SUCCESS_SCREEN:
+        await show_home(context)
         return
     if current_screen == state.BOOKING_SERVICE_SELECTED_SCREEN:
         await _show_selected_category_services(context)
@@ -350,6 +422,8 @@ async def _open_booking_catalog(context: RouterContext, *, push_current: bool = 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_DATE_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_SLOT_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_COMPLETED_RECORD_ID_STATE_KEY, None)
 
     if not has_available_services(catalog):
         if push_current:
@@ -431,6 +505,89 @@ async def _open_booking_slots(context: RouterContext, booking_date: str, *, push
     await _show_slots(context, slots, push_current=push_current)
 
 
+
+async def _show_booking_confirmation(context: RouterContext) -> None:
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    timezone_name = booking_service.get_branch_timezone()
+    _push_current_screen(context, state.BOOKING_CONFIRMATION_SCREEN)
+    await context.send_text(
+        format_booking_summary(_booking_state_snapshot(context), timezone_name=timezone_name),
+        keyboard=booking_confirmation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
+    )
+
+
+async def _show_booking_success(context: RouterContext) -> None:
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    timezone_name = booking_service.get_branch_timezone()
+    state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SUCCESS_SCREEN)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+    await context.send_text(
+        format_booking_success(_booking_state_snapshot(context), timezone_name=timezone_name),
+        keyboard=booking_success_keyboard(),
+    )
+
+
+def _booking_state_snapshot(context: RouterContext) -> dict[str, object | None]:
+    return {
+        "selected_service_id": _state_value(context, _SELECTED_SERVICE_STATE_KEY),
+        "selected_service_name": _state_value(context, _SELECTED_SERVICE_NAME_STATE_KEY),
+        "selected_master_id": _state_value(context, _SELECTED_MASTER_STATE_KEY),
+        "selected_master_name": _state_value(context, _SELECTED_MASTER_NAME_STATE_KEY),
+        "selected_date": _state_value(context, _SELECTED_DATE_STATE_KEY),
+        "selected_slot_time": _state_value(context, _SELECTED_SLOT_TIME_STATE_KEY),
+        "selected_datetime": _state_value(context, _SELECTED_SLOT_DATETIME_STATE_KEY),
+    }
+
+
+def _current_user(context: RouterContext):
+    platform_user_id = _user_id(context)
+    if not platform_user_id:
+        return None
+    return UsersRepository(_database_path()).find_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+
+
+def _user_full_name(user) -> str:
+    return (
+        " ".join(part for part in (user.first_name, user.last_name) if part)
+        or user.display_name
+        or user.username
+        or "Гость"
+    ).strip()
+
+
+def _save_attribution_safely(
+    *,
+    platform_user_id: str,
+    yclients_record_id: str,
+    yclients_client_id: str | None,
+) -> None:
+    try:
+        PlatformAttributionRepository(_database_path()).create_if_missing(
+            platform=PLATFORM_MAX,
+            platform_user_id=platform_user_id,
+            yclients_record_id=yclients_record_id,
+            yclients_client_id=yclients_client_id,
+            marker=MAX_BOOKING_COMMENT_MARKER,
+        )
+    except Exception as exc:  # noqa: BLE001 - booking already exists in YClients, only local attribution failed.
+        logger.exception(
+            "Booking attribution save failed: operation=save_booking_attribution platform=%s platform_user_id=%s "
+            "yclients_record_id=%s yclients_client_id_present=%s error_class=%s",
+            PLATFORM_MAX,
+            platform_user_id,
+            yclients_record_id,
+            bool(yclients_client_id),
+            type(exc).__name__,
+        )
+
+
+def _optional_state_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 async def _show_selected_category_services(context: RouterContext) -> None:
     catalog = _catalog(context)
     category_id = _state_value(context, _SELECTED_CATEGORY_STATE_KEY)
@@ -466,6 +623,9 @@ async def _show_categories(context: RouterContext, categories: list, *, page: in
         return
     await context.send_text(
         BOOKING_CATEGORY_TEXT,
+    BOOKING_CONFIRMATION_MISSING_DATA_TEXT,
+    BOOKING_CREATE_ERROR_TEXT,
+    BOOKING_CREATE_IN_PROGRESS_TEXT,
         keyboard=booking_categories_keyboard(
             display_categories,
             page=page,
