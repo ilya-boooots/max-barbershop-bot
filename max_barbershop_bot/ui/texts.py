@@ -37,6 +37,20 @@ REGISTRATION_NAME_INVALID_TEXT = "Введите имя текстом, мини
 REGISTRATION_COMPLETE_TEXT = "Готово! Вы зарегистрированы ✅"
 REGISTRATION_REQUIRED_TEXT = "Сначала нужно завершить регистрацию 🙏"
 
+BOOKING_CATEGORY_TEXT = """✂️ Запись
+
+Выберите категорию услуг:"""
+BOOKING_SERVICE_TEXT = """✂️ Запись
+
+Выберите услугу:"""
+BOOKING_EMPTY_TEXT = """Сейчас нет доступных услуг для записи 🙏
+
+Пожалуйста, попробуйте позже."""
+BOOKING_CATEGORY_EMPTY_TEXT = "😔 Пока нет доступных категорий услуг."
+BOOKING_SERVICE_SELECTED_TEXT = """Вы выбрали услугу: {service_name}
+
+Следующий шаг — выбор мастера. Скоро добавим 🔧"""
+
 
 STAFF_MENU_TEXT = """👥 Персонал
 
