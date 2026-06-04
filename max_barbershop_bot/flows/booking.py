@@ -1,4 +1,4 @@
-"""Booking step 1 flow for choosing YClients service categories and services."""
+"""Booking flow for choosing YClients services and masters."""
 
 from __future__ import annotations
 
@@ -13,8 +13,11 @@ from max_barbershop_bot.services.booking import (
     BookingCatalog,
     BookingService,
     BookingServiceError,
+    BookingMasterItem,
     BookingServiceItem,
+    format_master_title,
     format_service_title,
+    has_available_masters,
     has_available_services,
 )
 from max_barbershop_bot.services.navigation import show_home
@@ -23,11 +26,15 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_CATEGORY_NEXT_PAYLOAD,
     BOOKING_CATEGORY_PAYLOAD_PREFIX,
     BOOKING_CATEGORY_PREV_PAYLOAD,
+    BOOKING_MASTER_NEXT_PAYLOAD,
+    BOOKING_MASTER_PAYLOAD_PREFIX,
+    BOOKING_MASTER_PREV_PAYLOAD,
     BOOKING_SERVICE_NEXT_PAYLOAD,
     BOOKING_SERVICE_PAYLOAD_PREFIX,
     BOOKING_SERVICE_PREV_PAYLOAD,
     MENU_BOOKING_PAYLOAD,
     booking_categories_keyboard,
+    booking_masters_keyboard,
     booking_services_keyboard,
     navigation_keyboard,
 )
@@ -35,7 +42,9 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_CATEGORY_EMPTY_TEXT,
     BOOKING_CATEGORY_TEXT,
     BOOKING_EMPTY_TEXT,
-    BOOKING_SERVICE_SELECTED_TEXT,
+    BOOKING_MASTER_SELECTED_TEXT,
+    BOOKING_MASTER_TEXT,
+    BOOKING_MASTERS_EMPTY_TEXT,
     BOOKING_SERVICE_TEXT,
 )
 
@@ -45,11 +54,17 @@ _MAX_CALLBACK_ITEMS = 20
 _CATALOG_STATE_KEY = "booking_catalog"
 _CATEGORY_MAP_STATE_KEY = "booking_category_payloads"
 _SERVICE_MAP_STATE_KEY = "booking_service_payloads"
+_MASTER_MAP_STATE_KEY = "booking_master_payloads"
+_MASTERS_STATE_KEY = "booking_masters"
 _CATEGORY_PAGE_STATE_KEY = "booking_category_page"
 _SERVICE_PAGE_STATE_KEY = "booking_service_page"
+_MASTER_PAGE_STATE_KEY = "booking_master_page"
 _SELECTED_CATEGORY_STATE_KEY = "selected_yclients_category_id"
+_SELECTED_CATEGORY_NAME_STATE_KEY = "selected_category_name"
 _SELECTED_SERVICE_STATE_KEY = "selected_yclients_service_id"
 _SELECTED_SERVICE_NAME_STATE_KEY = "selected_service_name"
+_SELECTED_MASTER_STATE_KEY = "selected_yclients_master_id"
+_SELECTED_MASTER_NAME_STATE_KEY = "selected_master_name"
 
 
 def register_booking_routes(router: Router) -> None:
@@ -61,9 +76,12 @@ def register_booking_routes(router: Router) -> None:
     router.on_callback(BOOKING_CATEGORY_NEXT_PAYLOAD, handle_booking_category_page)
     router.on_callback(BOOKING_SERVICE_PREV_PAYLOAD, handle_booking_service_page)
     router.on_callback(BOOKING_SERVICE_NEXT_PAYLOAD, handle_booking_service_page)
+    router.on_callback(BOOKING_MASTER_PREV_PAYLOAD, handle_booking_master_page)
+    router.on_callback(BOOKING_MASTER_NEXT_PAYLOAD, handle_booking_master_page)
     for index in range(_MAX_CALLBACK_ITEMS):
         router.on_callback(f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}{index}", handle_booking_category)
         router.on_callback(f"{BOOKING_SERVICE_PAYLOAD_PREFIX}{index}", handle_booking_service)
+        router.on_callback(f"{BOOKING_MASTER_PAYLOAD_PREFIX}{index}", handle_booking_master)
 
 
 async def handle_booking_start(context: RouterContext) -> None:
@@ -86,11 +104,12 @@ async def handle_booking_category(context: RouterContext) -> None:
     category = next((item for item in catalog.categories if item.yclients_category_id == category_id), None)
     services = [item for item in catalog.services if item.yclients_category_id == category_id]
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_CATEGORY_STATE_KEY, category_id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_CATEGORY_NAME_STATE_KEY, category.title if category else None)
     await _show_services(context, services, category_title=category.title if category else None)
 
 
 async def handle_booking_service(context: RouterContext) -> None:
-    """Save selected service and show placeholder for the next booking step."""
+    """Save selected service and show the master selection step."""
 
     await context.answer_callback("Услуга выбрана ✅")
     service_id = _mapped_value(context, _SERVICE_MAP_STATE_KEY, context.event.callback_payload)
@@ -106,11 +125,9 @@ async def handle_booking_service(context: RouterContext) -> None:
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_STATE_KEY, service.yclients_service_id)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_NAME_STATE_KEY, service.title)
-    _push_current_screen(context, state.BOOKING_SERVICE_SELECTED_SCREEN)
-    await context.send_text(
-        BOOKING_SERVICE_SELECTED_TEXT.format(service_name=service.title),
-        keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
-    )
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, None)
+    await _open_booking_masters(context, service.yclients_service_id)
 
 
 async def handle_booking_category_page(context: RouterContext) -> None:
@@ -124,6 +141,23 @@ async def handle_booking_category_page(context: RouterContext) -> None:
     current_page = _int_state_value(context, _CATEGORY_PAGE_STATE_KEY)
     delta = -1 if context.event.callback_payload == BOOKING_CATEGORY_PREV_PAYLOAD else 1
     await _show_categories(context, catalog.categories, page=max(0, current_page + delta), push_current=False)
+
+
+async def handle_booking_master_page(context: RouterContext) -> None:
+    """Move between master pages using short registered payloads."""
+
+    await context.answer_callback("Листаем мастеров 💈")
+    masters = _masters(context)
+    if masters is None:
+        service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
+        if isinstance(service_id, str) and service_id:
+            await _open_booking_masters(context, service_id, push_current=False)
+            return
+        await _open_booking_catalog(context, push_current=False)
+        return
+    current_page = _int_state_value(context, _MASTER_PAGE_STATE_KEY)
+    delta = -1 if context.event.callback_payload == BOOKING_MASTER_PREV_PAYLOAD else 1
+    await _show_masters(context, masters, page=max(0, current_page + delta), push_current=False)
 
 
 async def handle_booking_service_page(context: RouterContext) -> None:
@@ -152,6 +186,34 @@ async def handle_booking_service_page(context: RouterContext) -> None:
     )
 
 
+async def handle_booking_master(context: RouterContext) -> None:
+    """Save selected master and show a next-step placeholder."""
+
+    await context.answer_callback("Мастер выбран ✅")
+    master_id = _mapped_value(context, _MASTER_MAP_STATE_KEY, context.event.callback_payload)
+    masters = _masters(context)
+    if not master_id or masters is None:
+        service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
+        if isinstance(service_id, str) and service_id:
+            await _open_booking_masters(context, service_id, push_current=False)
+            return
+        await _open_booking_catalog(context, push_current=False)
+        return
+
+    master = next((item for item in masters if item.yclients_master_id == master_id), None)
+    if master is None:
+        await _show_masters(context, masters, push_current=False)
+        return
+
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, master.yclients_master_id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, master.title)
+    _push_current_screen(context, state.BOOKING_MASTER_SELECTED_SCREEN)
+    await context.send_text(
+        BOOKING_MASTER_SELECTED_TEXT.format(master_name=master.title),
+        keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
+    )
+
+
 async def handle_booking_back(context: RouterContext) -> None:
     """Navigate back inside booking without affecting other flows."""
 
@@ -167,19 +229,22 @@ async def handle_booking_back(context: RouterContext) -> None:
             return
         await show_home(context)
         return
-    if current_screen == state.BOOKING_SERVICE_SELECTED_SCREEN:
-        catalog = _catalog(context)
-        category_id = _state_value(context, _SELECTED_CATEGORY_STATE_KEY)
-        if catalog is not None:
-            if isinstance(category_id, str) and category_id:
-                category = next((item for item in catalog.categories if item.yclients_category_id == category_id), None)
-                services = [item for item in catalog.services if item.yclients_category_id == category_id]
-            else:
-                category = None
-                services = catalog.services
-            await _show_services(context, services, category_title=category.title if category else None, push_current=False)
+    if current_screen == state.BOOKING_MASTERS_SCREEN:
+        await _show_selected_category_services(context)
+        return
+    if current_screen == state.BOOKING_MASTER_SELECTED_SCREEN:
+        masters = _masters(context)
+        if masters is not None:
+            await _show_masters(context, masters, push_current=False)
             return
-        await _open_booking_catalog(context, push_current=False)
+        service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
+        if isinstance(service_id, str) and service_id:
+            await _open_booking_masters(context, service_id, push_current=False)
+            return
+        await _show_selected_category_services(context)
+        return
+    if current_screen == state.BOOKING_SERVICE_SELECTED_SCREEN:
+        await _show_selected_category_services(context)
         return
     await show_home(context)
 
@@ -196,8 +261,12 @@ async def _open_booking_catalog(context: RouterContext, *, push_current: bool = 
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _CATALOG_STATE_KEY, catalog)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_CATEGORY_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_CATEGORY_NAME_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_NAME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _MASTERS_STATE_KEY, None)
 
     if not has_available_services(catalog):
         if push_current:
@@ -209,6 +278,48 @@ async def _open_booking_catalog(context: RouterContext, *, push_current: bool = 
         await _show_categories(context, catalog.categories, push_current=push_current)
         return
     await _show_services(context, catalog.services, category_title=None, push_current=push_current)
+
+
+async def _open_booking_masters(context: RouterContext, yclients_service_id: str, *, push_current: bool = True) -> None:
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    try:
+        masters = await booking_service.get_available_masters_for_service(yclients_service_id)
+    except BookingServiceError as exc:
+        logger.warning(
+            "Booking masters screen failed: operation=show_booking_masters service_id=%s error_class=%s",
+            yclients_service_id,
+            type(exc).__name__,
+        )
+        if push_current:
+            _push_current_screen(context, state.BOOKING_MASTERS_SCREEN)
+        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+
+    state.set_state_data_value(_user_id(context), _chat_id(context), _MASTERS_STATE_KEY, masters)
+    if not has_available_masters(masters):
+        if push_current:
+            _push_current_screen(context, state.BOOKING_MASTERS_SCREEN)
+        else:
+            state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_MASTERS_SCREEN)
+        await context.send_text(BOOKING_MASTERS_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+
+    await _show_masters(context, masters, push_current=push_current)
+
+
+async def _show_selected_category_services(context: RouterContext) -> None:
+    catalog = _catalog(context)
+    category_id = _state_value(context, _SELECTED_CATEGORY_STATE_KEY)
+    if catalog is None:
+        await _open_booking_catalog(context, push_current=False)
+        return
+    if isinstance(category_id, str) and category_id:
+        category = next((item for item in catalog.categories if item.yclients_category_id == category_id), None)
+        services = [item for item in catalog.services if item.yclients_category_id == category_id]
+    else:
+        category = None
+        services = catalog.services
+    await _show_services(context, services, category_title=category.title if category else None, push_current=False)
 
 
 async def _show_categories(context: RouterContext, categories: list, *, page: int = 0, push_current: bool = True) -> None:
@@ -283,6 +394,47 @@ async def _show_services(
     )
 
 
+async def _show_masters(
+    context: RouterContext,
+    masters: list[BookingMasterItem],
+    *,
+    page: int = 0,
+    push_current: bool = True,
+) -> None:
+    page = _clamp_page(page, len(masters))
+    start = page * _MAX_CALLBACK_ITEMS
+    display_masters = masters[start : start + _MAX_CALLBACK_ITEMS]
+    master_payloads = {
+        f"{BOOKING_MASTER_PAYLOAD_PREFIX}{index}": master.yclients_master_id
+        for index, master in enumerate(display_masters)
+    }
+    state.set_state_data_value(_user_id(context), _chat_id(context), _MASTER_MAP_STATE_KEY, master_payloads)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _MASTER_PAGE_STATE_KEY, page)
+    if push_current:
+        _push_current_screen(context, state.BOOKING_MASTERS_SCREEN)
+    else:
+        state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_MASTERS_SCREEN)
+    if not display_masters:
+        await context.send_text(BOOKING_MASTERS_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+    logger.info(
+        "Booking masters screen shown: service_id=%s masters_count=%s",
+        _state_value(context, _SELECTED_SERVICE_STATE_KEY),
+        len(display_masters),
+    )
+    await context.send_text(
+        BOOKING_MASTER_TEXT,
+        keyboard=booking_masters_keyboard(
+            display_masters,
+            format_master_title,
+            page=page,
+            has_previous=page > 0,
+            has_next=(page + 1) * _MAX_CALLBACK_ITEMS < len(masters),
+            back_payload=BOOKING_BACK_PAYLOAD,
+        ),
+    )
+
+
 def _clamp_page(page: int, item_count: int) -> int:
     max_page = max((item_count - 1) // _MAX_CALLBACK_ITEMS, 0)
     return max(0, min(page, max_page))
@@ -306,6 +458,13 @@ def _push_current_screen(context: RouterContext, next_screen: str) -> None:
 def _catalog(context: RouterContext) -> BookingCatalog | None:
     value = _state_value(context, _CATALOG_STATE_KEY)
     return value if isinstance(value, BookingCatalog) else None
+
+
+def _masters(context: RouterContext) -> list[BookingMasterItem] | None:
+    value = _state_value(context, _MASTERS_STATE_KEY)
+    if isinstance(value, list) and all(isinstance(item, BookingMasterItem) for item in value):
+        return value
+    return None
 
 
 def _mapped_value(context: RouterContext, key: str, payload: str | None) -> str | None:

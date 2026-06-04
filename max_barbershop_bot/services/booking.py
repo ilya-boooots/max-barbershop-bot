@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
-from max_barbershop_bot.integrations.yclients.dto import YClientsService, YClientsServiceCategory
+from max_barbershop_bot.integrations.yclients.dto import YClientsService, YClientsServiceCategory, YClientsStaff
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 BOOKING_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_YCLIENTS_ERROR_TEXT = "Не получилось загрузить услуги для записи 🙏\n\nПожалуйста, попробуйте позже."
+BOOKING_MASTERS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
+BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить мастеров 🙏\n\nПожалуйста, попробуйте позже."
 
 
 class BookingServiceError(RuntimeError):
@@ -52,6 +54,15 @@ class BookingServiceItem:
     category_title: str | None = None
     price_min: int | float | None = None
     price_max: int | float | None = None
+
+
+@dataclass(frozen=True)
+class BookingMasterItem:
+    """A YClients staff/master normalized for booking step 2."""
+
+    yclients_master_id: str
+    title: str
+    specialization: str | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +148,75 @@ class BookingService:
         )
         return BookingCatalog(categories=categories, services=services)
 
+    async def get_available_masters_for_service(self, yclients_service_id: str) -> list[BookingMasterItem]:
+        """Return masters from YClients filtered by the selected service id."""
+
+        service_id = _clean_text(yclients_service_id)
+        if not service_id:
+            logger.warning("Booking masters unavailable: operation=get_booking_masters service_id_present=False")
+            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT)
+
+        try:
+            settings = self._settings_repository.get_active()
+        except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
+            logger.warning(
+                "Booking settings lookup failed: operation=get_booking_masters error_class=%s service_id=%s",
+                type(exc).__name__,
+                service_id,
+            )
+            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT) from exc
+
+        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+            logger.info(
+                "Booking masters unavailable: operation=get_booking_masters settings_present=%s "
+                "company_id_present=%s partner_token_present=%s user_token_present=%s service_id=%s",
+                settings is not None,
+                bool(settings and settings.company_id),
+                bool(settings and settings.partner_token),
+                bool(settings and settings.user_token),
+                service_id,
+            )
+            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT)
+
+        try:
+            async with YClientsClient(
+                partner_token=settings.partner_token,
+                user_token=settings.user_token,
+                company_id=settings.company_id,
+            ) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                masters_payload = await yclients.get_available_masters(
+                    company_id=settings.company_id,
+                    service_id=service_id,
+                )
+        except YClientsError as exc:
+            logger.warning(
+                "Booking YClients error: operation=get_booking_masters service_id=%s error_class=%s status_code=%s "
+                "partner_token_present=%s user_token_present=%s",
+                service_id,
+                type(exc).__name__,
+                exc.status_code,
+                exc.partner_token_present,
+                exc.user_token_present,
+            )
+            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
+        except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
+            logger.warning(
+                "Booking unexpected YClients error: operation=get_booking_masters service_id=%s error_class=%s",
+                service_id,
+                type(exc).__name__,
+            )
+            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
+
+        masters = [_normalize_master(item) for item in masters_payload]
+        masters = [item for item in masters if item.yclients_master_id and item.title]
+        logger.info(
+            "Booking masters loaded: operation=get_booking_masters service_id=%s masters_count=%s",
+            service_id,
+            len(masters),
+        )
+        return masters
+
 
 def group_services_by_category(
     categories: list[BookingCategory] | list[dict[str, Any]],
@@ -155,6 +235,21 @@ def group_services_by_category(
     return grouped
 
 
+def has_available_masters(masters: list[BookingMasterItem] | list[dict[str, Any]]) -> bool:
+    """Return True when YClients returned at least one displayable master."""
+
+    normalized = [_normalize_master(master) for master in masters]
+    return any(master.yclients_master_id and master.title for master in normalized)
+
+
+def format_master_title(master: BookingMasterItem | dict[str, Any]) -> str:
+    """Format a booking master button title in the reference bot style."""
+
+    normalized = _normalize_master(master)
+    suffix = f" ({normalized.specialization})" if normalized.specialization else ""
+    return f"💈 {normalized.title}{suffix}"
+
+
 def has_available_services(catalog: BookingCatalog) -> bool:
     """Return True when YClients returned at least one displayable service."""
 
@@ -171,6 +266,28 @@ def format_service_title(service: BookingServiceItem | dict[str, Any]) -> str:
         details.append(price)
     suffix = f" ({', '.join(details)})" if details else ""
     return f"{normalized.title}{suffix}"
+
+
+def _normalize_master(item: BookingMasterItem | YClientsStaff | dict[str, Any]) -> BookingMasterItem:
+    if isinstance(item, BookingMasterItem):
+        return item
+    if isinstance(item, YClientsStaff):
+        return BookingMasterItem(
+            yclients_master_id=item.id,
+            title=item.name or "",
+            specialization=item.specialization,
+        )
+    return BookingMasterItem(
+        yclients_master_id=_clean_text(
+            item.get("yclients_master_id")
+            or item.get("yclients_staff_id")
+            or item.get("id")
+            or item.get("staff_id")
+            or item.get("master_id")
+        ),
+        title=_clean_text(item.get("title") or item.get("name")),
+        specialization=_clean_text(item.get("specialization") or item.get("position") or item.get("profession")) or None,
+    )
 
 
 def _normalize_category(item: BookingCategory | YClientsServiceCategory | dict[str, Any]) -> BookingCategory:
