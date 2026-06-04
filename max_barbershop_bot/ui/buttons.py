@@ -38,6 +38,9 @@ BOOKING_CATEGORY_PREV_PAYLOAD = "booking:category_page:prev"
 BOOKING_CATEGORY_NEXT_PAYLOAD = "booking:category_page:next"
 BOOKING_SERVICE_PREV_PAYLOAD = "booking:service_page:prev"
 BOOKING_SERVICE_NEXT_PAYLOAD = "booking:service_page:next"
+BOOKING_MASTER_PAYLOAD_PREFIX = "booking:master:"
+BOOKING_MASTER_PREV_PAYLOAD = "booking:master_page:prev"
+BOOKING_MASTER_NEXT_PAYLOAD = "booking:master_page:next"
 
 STAFF_LIST_PAYLOAD = "staff:list"
 STAFF_ASSIGN_START_PAYLOAD = "staff:assign:start"
@@ -153,6 +156,33 @@ def booking_services_keyboard(
         page_row.append(MaxButton(text="⬅️", payload=BOOKING_SERVICE_PREV_PAYLOAD))
     if has_next:
         page_row.append(MaxButton(text="➡️", payload=BOOKING_SERVICE_NEXT_PAYLOAD))
+    if page_row:
+        rows.append(page_row)
+    rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def booking_masters_keyboard(
+    masters: list[object],
+    title_formatter,
+    *,
+    page: int = 0,
+    has_previous: bool = False,
+    has_next: bool = False,
+    back_payload: str = BOOKING_BACK_PAYLOAD,
+) -> MaxInlineKeyboard:
+    """Build MAX-compatible master picker buttons."""
+
+    rows = [
+        [MaxButton(text=title_formatter(master), payload=f"{BOOKING_MASTER_PAYLOAD_PREFIX}{index}")]
+        for index, master in enumerate(masters)
+    ]
+    page_row = []
+    if has_previous:
+        page_row.append(MaxButton(text="⬅️", payload=BOOKING_MASTER_PREV_PAYLOAD))
+    if has_next:
+        page_row.append(MaxButton(text="➡️", payload=BOOKING_MASTER_NEXT_PAYLOAD))
     if page_row:
         rows.append(page_row)
     rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
