@@ -41,6 +41,8 @@ BOOKING_SERVICE_NEXT_PAYLOAD = "booking:service_page:next"
 BOOKING_MASTER_PAYLOAD_PREFIX = "booking:master:"
 BOOKING_MASTER_PREV_PAYLOAD = "booking:master_page:prev"
 BOOKING_MASTER_NEXT_PAYLOAD = "booking:master_page:next"
+BOOKING_DATE_PAYLOAD_PREFIX = "booking:date:"
+BOOKING_SLOT_PAYLOAD_PREFIX = "booking:slot:"
 
 STAFF_LIST_PAYLOAD = "staff:list"
 STAFF_ASSIGN_START_PAYLOAD = "staff:assign:start"
@@ -185,6 +187,46 @@ def booking_masters_keyboard(
         page_row.append(MaxButton(text="➡️", payload=BOOKING_MASTER_NEXT_PAYLOAD))
     if page_row:
         rows.append(page_row)
+    rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def booking_dates_keyboard(
+    dates: list[object],
+    title_formatter,
+    *,
+    back_payload: str = BOOKING_BACK_PAYLOAD,
+) -> MaxInlineKeyboard:
+    """Build MAX-compatible date picker buttons."""
+
+    rows: list[list[MaxButton]] = []
+    date_buttons = [
+        MaxButton(text=title_formatter(value), payload=f"{BOOKING_DATE_PAYLOAD_PREFIX}{index}")
+        for index, value in enumerate(dates)
+    ]
+    for index in range(0, len(date_buttons), 2):
+        rows.append(date_buttons[index : index + 2])
+    rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def booking_slots_keyboard(
+    slots: list[object],
+    title_formatter,
+    *,
+    back_payload: str = BOOKING_BACK_PAYLOAD,
+) -> MaxInlineKeyboard:
+    """Build MAX-compatible slot picker buttons."""
+
+    rows: list[list[MaxButton]] = []
+    slot_buttons = [
+        MaxButton(text=title_formatter(value), payload=f"{BOOKING_SLOT_PAYLOAD_PREFIX}{index}")
+        for index, value in enumerate(slots)
+    ]
+    for index in range(0, len(slot_buttons), 3):
+        rows.append(slot_buttons[index : index + 3])
     rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)

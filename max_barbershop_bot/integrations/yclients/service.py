@@ -133,7 +133,7 @@ class YClientsServiceLayer:
             staff_id=staff_id,
             date=date,
         )
-        return [_slot_from_payload(item, fallback_staff_id=staff_id) for item in extract_data_rows(payload)]
+        return [_slot_from_payload(item, fallback_staff_id=staff_id) for item in _extract_slot_rows(payload)]
 
     async def create_booking(
         self,
@@ -432,6 +432,29 @@ def _staff_from_payload(item: dict[str, Any]) -> YClientsStaff:
         raw=item,
     )
 
+
+
+def _extract_slot_rows(payload: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+    candidates: list[Any]
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("times"), list):
+            candidates = list(data["times"])
+        elif isinstance(data, list):
+            candidates = list(data)
+        else:
+            candidates = [payload]
+    elif isinstance(payload, list):
+        candidates = list(payload)
+    else:
+        candidates = []
+    rows: list[dict[str, Any]] = []
+    for item in candidates:
+        if isinstance(item, dict):
+            rows.append(item)
+        elif item is not None:
+            rows.append({"time": item})
+    return rows
 
 def _slot_from_payload(item: dict[str, Any], *, fallback_staff_id: str | None = None) -> YClientsSlot:
     return YClientsSlot(
