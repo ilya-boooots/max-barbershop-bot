@@ -31,6 +31,14 @@ ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
 
+BOOKING_BACK_PAYLOAD = "booking:back"
+BOOKING_CATEGORY_PAYLOAD_PREFIX = "booking:category:"
+BOOKING_SERVICE_PAYLOAD_PREFIX = "booking:service:"
+BOOKING_CATEGORY_PREV_PAYLOAD = "booking:category_page:prev"
+BOOKING_CATEGORY_NEXT_PAYLOAD = "booking:category_page:next"
+BOOKING_SERVICE_PREV_PAYLOAD = "booking:service_page:prev"
+BOOKING_SERVICE_NEXT_PAYLOAD = "booking:service_page:next"
+
 STAFF_LIST_PAYLOAD = "staff:list"
 STAFF_ASSIGN_START_PAYLOAD = "staff:assign:start"
 STAFF_REMOVE_START_PAYLOAD = "staff:remove:start"
@@ -86,17 +94,70 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(rows)
 
 
-def navigation_keyboard() -> MaxInlineKeyboard:
+def navigation_keyboard(*, back_payload: str = NAV_BACK_PAYLOAD) -> MaxInlineKeyboard:
     """Build Back/Home navigation buttons for section screens."""
 
     return MaxInlineKeyboard.from_rows(
         [
             [
-                MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD),
+                MaxButton(text="⬅️ Назад", payload=back_payload),
                 MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD),
             ]
         ]
     )
+
+
+def booking_categories_keyboard(
+    categories: list[object],
+    *,
+    page: int = 0,
+    has_previous: bool = False,
+    has_next: bool = False,
+    back_payload: str = BOOKING_BACK_PAYLOAD,
+) -> MaxInlineKeyboard:
+    """Build MAX-compatible category picker buttons."""
+
+    rows = [
+        [MaxButton(text=getattr(category, "title"), payload=f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}{index}")]
+        for index, category in enumerate(categories)
+    ]
+    page_row = []
+    if has_previous:
+        page_row.append(MaxButton(text="⬅️", payload=BOOKING_CATEGORY_PREV_PAYLOAD))
+    if has_next:
+        page_row.append(MaxButton(text="➡️", payload=BOOKING_CATEGORY_NEXT_PAYLOAD))
+    if page_row:
+        rows.append(page_row)
+    rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def booking_services_keyboard(
+    services: list[object],
+    title_formatter,
+    *,
+    page: int = 0,
+    has_previous: bool = False,
+    has_next: bool = False,
+    back_payload: str = BOOKING_BACK_PAYLOAD,
+) -> MaxInlineKeyboard:
+    """Build MAX-compatible service picker buttons."""
+
+    rows = [
+        [MaxButton(text=title_formatter(service), payload=f"{BOOKING_SERVICE_PAYLOAD_PREFIX}{index}")]
+        for index, service in enumerate(services)
+    ]
+    page_row = []
+    if has_previous:
+        page_row.append(MaxButton(text="⬅️", payload=BOOKING_SERVICE_PREV_PAYLOAD))
+    if has_next:
+        page_row.append(MaxButton(text="➡️", payload=BOOKING_SERVICE_NEXT_PAYLOAD))
+    if page_row:
+        rows.append(page_row)
+    rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
 
 
 def staff_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:

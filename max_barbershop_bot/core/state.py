@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 
 MAIN_MENU_SCREEN = "main_menu"
 BOOKING_PLACEHOLDER_SCREEN = "booking_placeholder"
+BOOKING_CATEGORIES_SCREEN = "booking_categories"
+BOOKING_SERVICES_SCREEN = "booking_services"
+BOOKING_SERVICE_SELECTED_SCREEN = "booking_service_selected"
 MY_BOOKINGS_PLACEHOLDER_SCREEN = "my_bookings_placeholder"
 MASTERS_PLACEHOLDER_SCREEN = "masters_placeholder"
 CONTACTS_PLACEHOLDER_SCREEN = "contacts_placeholder"
