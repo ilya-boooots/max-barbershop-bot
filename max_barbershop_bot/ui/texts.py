@@ -62,9 +62,13 @@ BOOKING_SLOTS_TEXT = """✂️ Запись
 BOOKING_SLOTS_EMPTY_TEXT = """На эту дату свободного времени нет 🙏
 
 Выберите другой день."""
-BOOKING_SLOT_SELECTED_TEXT = """Вы выбрали время: {date} в {time}
+BOOKING_CONFIRMATION_MISSING_DATA_TEXT = """Не хватает данных для записи 🙏
 
-Следующий шаг — подтверждение записи. Скоро добавим 🔧"""
+Нажмите /start и пройдите регистрацию заново."""
+BOOKING_CREATE_ERROR_TEXT = """Не удалось создать запись 🙏
+
+Возможно, это время уже заняли. Попробуйте выбрать другой слот."""
+BOOKING_CREATE_IN_PROGRESS_TEXT = "Запись уже создаётся, подождите немного ⏳"
 
 
 STAFF_MENU_TEXT = """👥 Персонал
