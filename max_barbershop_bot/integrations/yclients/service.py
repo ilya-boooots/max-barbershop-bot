@@ -26,12 +26,14 @@ from .endpoints import (
     get_client_details as endpoint_get_client_details,
     get_company,
     get_future_bookings as endpoint_get_future_bookings,
+    get_booking_details as endpoint_get_booking_details,
     get_service_categories as endpoint_get_service_categories,
     get_services as endpoint_get_services,
     get_staff as endpoint_get_staff,
     get_staff_by_service as endpoint_get_staff_by_service,
     list_client_visits as endpoint_list_client_visits,
     list_user_bookings as endpoint_list_user_bookings,
+    reschedule_booking as endpoint_reschedule_booking,
     search_clients as endpoint_search_clients,
     update_client as endpoint_update_client,
 )
@@ -315,6 +317,48 @@ class YClientsServiceLayer:
             count=count,
         )
 
+    async def get_booking_details(
+        self,
+        *,
+        yclients_record_id: str,
+        company_id: str | int | None = None,
+    ) -> dict[str, Any] | list[Any]:
+        """Return a raw YClients record by id."""
+
+        return await endpoint_get_booking_details(
+            self._client,
+            company_id=self.require_company_id(company_id),
+            record_id=yclients_record_id,
+        )
+
+    async def reschedule_booking(
+        self,
+        *,
+        yclients_record_id: str,
+        services: list[str],
+        client_data: dict[str, Any],
+        seance_length: int,
+        datetime_iso: str,
+        staff_id: str,
+        company_id: str | int | None = None,
+    ) -> dict[str, Any] | list[Any]:
+        """Reschedule a YClients record by direct record update."""
+
+        try:
+            return await endpoint_reschedule_booking(
+                self._client,
+                company_id=self.require_company_id(company_id),
+                record_id=yclients_record_id,
+                services=services,
+                client_data=client_data,
+                seance_length=seance_length,
+                datetime_iso=datetime_iso,
+                staff_id=staff_id,
+            )
+        except YClientsError as exc:
+            await self._notify_or_log("reschedule_booking", exc)
+            raise
+
     async def cancel_booking(
         self,
         *,
@@ -381,6 +425,14 @@ async def get_client_visits(service: YClientsServiceLayer, **kwargs: Any) -> lis
 
 async def get_client_records(service: YClientsServiceLayer, **kwargs: Any) -> dict[str, Any] | list[Any]:
     return await service.get_client_records(**kwargs)
+
+
+async def get_booking_details(service: YClientsServiceLayer, **kwargs: Any) -> dict[str, Any] | list[Any]:
+    return await service.get_booking_details(**kwargs)
+
+
+async def reschedule_booking(service: YClientsServiceLayer, **kwargs: Any) -> dict[str, Any] | list[Any]:
+    return await service.reschedule_booking(**kwargs)
 
 
 async def cancel_booking(service: YClientsServiceLayer, **kwargs: Any) -> YClientsCancelBookingResult:

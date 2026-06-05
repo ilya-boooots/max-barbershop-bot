@@ -55,6 +55,10 @@ BOOKING_CONFIRM_PAYLOAD = "booking:confirm"
 MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX = "my_bookings:details:"
 MY_BOOKINGS_CANCEL_START_PAYLOAD = "my_bookings:cancel:start"
 MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD = "my_bookings:cancel:confirm"
+MY_BOOKINGS_RESCHEDULE_START_PAYLOAD = "my_bookings:reschedule:start"
+MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD = "my_bookings:reschedule:confirm"
+MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX = "my_bookings:reschedule:date:"
+MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX = "my_bookings:reschedule:slot:"
 MY_BOOKINGS_BACK_PAYLOAD = "my_bookings:back"
 
 STAFF_LIST_PAYLOAD = "staff:list"
@@ -333,6 +337,7 @@ def my_booking_details_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
+            [MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)],
             [MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
@@ -362,6 +367,59 @@ def my_booking_cancel_result_keyboard() -> MaxInlineKeyboard:
         ]
     )
 
+
+
+def my_booking_reschedule_dates_keyboard(dates: list[object], title_formatter) -> MaxInlineKeyboard:
+    """Build date picker buttons for selected booking reschedule."""
+
+    rows: list[list[MaxButton]] = []
+    buttons = [
+        MaxButton(text=title_formatter(value), payload=f"{MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX}{index}")
+        for index, value in enumerate(dates)
+    ]
+    for index in range(0, len(buttons), 2):
+        rows.append(buttons[index : index + 2])
+    rows.append([MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def my_booking_reschedule_slots_keyboard(slots: list[object], title_formatter) -> MaxInlineKeyboard:
+    """Build slot picker buttons for selected booking reschedule."""
+
+    rows: list[list[MaxButton]] = []
+    buttons = [
+        MaxButton(text=title_formatter(value), payload=f"{MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX}{index}")
+        for index, value in enumerate(slots)
+    ]
+    for index in range(0, len(buttons), 3):
+        rows.append(buttons[index : index + 3])
+    rows.append([MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def my_booking_reschedule_confirmation_keyboard() -> MaxInlineKeyboard:
+    """Build reschedule confirmation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Подтвердить перенос", payload=MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def my_booking_reschedule_result_keyboard() -> MaxInlineKeyboard:
+    """Build buttons shown after reschedule result."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="📅 Мои записи", payload=MENU_MY_BOOKINGS_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
 
 def staff_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     """Build staff management menu buttons."""
