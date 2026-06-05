@@ -91,7 +91,7 @@ async def handle_yclients_menu(context: RouterContext) -> None:
         return
     await _answer_callback_if_needed(context, "Открываем YClients 🧩")
     _push_current_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
-    state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
+    state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
     await _show_settings_menu(context)
 
 
@@ -102,8 +102,16 @@ async def handle_setup_start(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context, "Настраиваем подключение ⚙️")
-    state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
+    chat_id = _state_chat_id(context)
+    state.clear_state_data(context.event.platform_user_id, chat_id)
     _set_screen(context, state.YCLIENTS_SETUP_COMPANY_ID_SCREEN)
+    _log_setup_diagnostic(
+        context,
+        screen_id=state.YCLIENTS_SETUP_COMPANY_ID_SCREEN,
+        route_matched=True,
+        setup_step="company_id",
+        chat_id=chat_id,
+    )
     await context.send_text(YCLIENTS_COMPANY_ID_TEXT, keyboard=yclients_setup_navigation_keyboard())
 
 
@@ -117,7 +125,14 @@ async def handle_company_id_input(context: RouterContext) -> None:
     if value is None:
         await context.send_text(YCLIENTS_INVALID_REQUIRED_TEXT, keyboard=yclients_setup_navigation_keyboard())
         return
-    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _COMPANY_ID_KEY, value)
+    _log_setup_diagnostic(
+        context,
+        screen_id=state.YCLIENTS_SETUP_COMPANY_ID_SCREEN,
+        route_matched=True,
+        setup_step="company_id",
+        company_id=value,
+    )
+    state.set_state_data_value(context.event.platform_user_id, _state_chat_id(context), _COMPANY_ID_KEY, value)
     _set_screen(context, state.YCLIENTS_SETUP_PARTNER_TOKEN_SCREEN)
     await context.send_text(YCLIENTS_PARTNER_TOKEN_TEXT, keyboard=yclients_setup_navigation_keyboard())
 
@@ -132,7 +147,14 @@ async def handle_partner_token_input(context: RouterContext) -> None:
     if value is None:
         await context.send_text(YCLIENTS_INVALID_REQUIRED_TEXT, keyboard=yclients_setup_navigation_keyboard())
         return
-    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _PARTNER_TOKEN_KEY, value)
+    _log_setup_diagnostic(
+        context,
+        screen_id=state.YCLIENTS_SETUP_PARTNER_TOKEN_SCREEN,
+        route_matched=True,
+        setup_step="partner_token",
+        token_received=True,
+    )
+    state.set_state_data_value(context.event.platform_user_id, _state_chat_id(context), _PARTNER_TOKEN_KEY, value)
     _set_screen(context, state.YCLIENTS_SETUP_USER_TOKEN_SCREEN)
     await context.send_text(YCLIENTS_USER_TOKEN_TEXT, keyboard=yclients_setup_navigation_keyboard())
 
@@ -147,7 +169,14 @@ async def handle_user_token_input(context: RouterContext) -> None:
     if value is None:
         await context.send_text(YCLIENTS_INVALID_REQUIRED_TEXT, keyboard=yclients_setup_navigation_keyboard())
         return
-    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _USER_TOKEN_KEY, value)
+    _log_setup_diagnostic(
+        context,
+        screen_id=state.YCLIENTS_SETUP_USER_TOKEN_SCREEN,
+        route_matched=True,
+        setup_step="user_token",
+        token_received=True,
+    )
+    state.set_state_data_value(context.event.platform_user_id, _state_chat_id(context), _USER_TOKEN_KEY, value)
     _set_screen(context, state.YCLIENTS_SETUP_TIMEZONE_SCREEN)
     await context.send_text(YCLIENTS_TIMEZONE_TEXT, keyboard=yclients_setup_navigation_keyboard())
 
@@ -163,7 +192,14 @@ async def handle_timezone_input(context: RouterContext) -> None:
     except ValueError:
         await context.send_text(YCLIENTS_INVALID_TIMEZONE_TEXT, keyboard=yclients_setup_navigation_keyboard())
         return
-    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _BRANCH_TIMEZONE_KEY, branch_timezone)
+    _log_setup_diagnostic(
+        context,
+        screen_id=state.YCLIENTS_SETUP_TIMEZONE_SCREEN,
+        route_matched=True,
+        setup_step="timezone",
+        timezone=branch_timezone,
+    )
+    state.set_state_data_value(context.event.platform_user_id, _state_chat_id(context), _BRANCH_TIMEZONE_KEY, branch_timezone)
     _set_screen(context, state.YCLIENTS_SETUP_BRANCH_TITLE_SCREEN)
     await context.send_text(YCLIENTS_BRANCH_TITLE_TEXT, keyboard=yclients_setup_navigation_keyboard(include_skip=True))
 
@@ -174,9 +210,15 @@ async def handle_branch_title_input(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
+    _log_setup_diagnostic(
+        context,
+        screen_id=state.YCLIENTS_SETUP_BRANCH_TITLE_SCREEN,
+        route_matched=True,
+        setup_step="branch_title",
+    )
     state.set_state_data_value(
         context.event.platform_user_id,
-        context.event.chat_id,
+        _state_chat_id(context),
         _BRANCH_TITLE_KEY,
         normalize_optional_text(context.event.text),
     )
@@ -190,7 +232,7 @@ async def handle_skip_branch_title(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context, "Пропускаем название филиала ⏭️")
-    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _BRANCH_TITLE_KEY, None)
+    state.set_state_data_value(context.event.platform_user_id, _state_chat_id(context), _BRANCH_TITLE_KEY, None)
     await _show_confirm(context)
 
 
@@ -203,7 +245,7 @@ async def handle_save_settings(context: RouterContext) -> None:
     draft = _draft_from_state(context)
     if draft is None:
         await _answer_callback_if_needed(context, "Не хватает данных 🙏")
-        state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
+        state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
         _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
         await context.send_text("Не хватает данных подключения 🙏\n\nНачните настройку заново.", keyboard=yclients_settings_keyboard())
         return
@@ -222,7 +264,7 @@ async def handle_save_settings(context: RouterContext) -> None:
         draft["branch_timezone"],
         bool(draft["branch_title"]),
     )
-    state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
+    state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
     await _answer_callback_if_needed(context, YCLIENTS_SETTINGS_SAVED_TEXT)
     await context.send_text(YCLIENTS_SETTINGS_SAVED_TEXT)
     _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
@@ -262,11 +304,11 @@ async def handle_yclients_back(context: RouterContext) -> None:
     """Navigate backward inside the YClients settings flow."""
 
     await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
-    current = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
+    current = state.get_current_screen(context.event.platform_user_id, _state_chat_id(context))
     if current in _SETUP_PREVIOUS_SCREEN:
         previous = _SETUP_PREVIOUS_SCREEN[current]
         if previous == state.YCLIENTS_SETTINGS_MENU_SCREEN:
-            state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
+            state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
             _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
             await _show_settings_menu(context, push=False)
             return
@@ -274,7 +316,7 @@ async def handle_yclients_back(context: RouterContext) -> None:
         await _show_setup_step(context, previous)
         return
 
-    previous_screen = state.pop_previous_screen(context.event.platform_user_id, context.event.chat_id)
+    previous_screen = state.pop_previous_screen(context.event.platform_user_id, _state_chat_id(context))
     if previous_screen and previous_screen != state.YCLIENTS_SETTINGS_MENU_SCREEN:
         from max_barbershop_bot.services.navigation import render_screen
 
@@ -287,6 +329,7 @@ async def handle_yclients_home(context: RouterContext) -> None:
     """Discard temporary setup data and return to the role-based main menu."""
 
     await _answer_callback_if_needed(context, "Открываем главное меню 🏠")
+    state.reset_to_home(context.event.platform_user_id, _state_chat_id(context))
     await show_home(context)
 
 
@@ -355,7 +398,7 @@ def _draft_from_state(context: RouterContext) -> dict[str, str | None] | None:
 
 
 def _state_text(context: RouterContext, key: str) -> str | None:
-    value = state.get_state_data_value(context.event.platform_user_id, context.event.chat_id, key)
+    value = state.get_state_data_value(context.event.platform_user_id, _state_chat_id(context), key)
     if isinstance(value, str):
         return value.strip() or None
     return None
@@ -392,14 +435,59 @@ def _actor_role(context: RouterContext) -> str:
 
 
 def _push_current_screen(context: RouterContext, screen_id: str) -> None:
-    current = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
+    current = state.get_current_screen(context.event.platform_user_id, _state_chat_id(context))
     if current != screen_id:
-        state.push_screen(context.event.platform_user_id, context.event.chat_id, current)
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, screen_id)
+        state.push_screen(context.event.platform_user_id, _state_chat_id(context), current)
+    state.set_current_screen(context.event.platform_user_id, _state_chat_id(context), screen_id)
 
 
 def _set_screen(context: RouterContext, screen_id: str) -> None:
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, screen_id)
+    state.set_current_screen(context.event.platform_user_id, _state_chat_id(context), screen_id)
+
+
+def _state_chat_id(context: RouterContext) -> str | None:
+    if context.event.chat_id is not None:
+        return context.event.chat_id
+
+    candidate_screens = (
+        *state.YCLIENTS_SETTINGS_SCREENS,
+        state.MAIN_MENU_SCREEN,
+        state.STAFF_MENU_SCREEN,
+    )
+    for screen_id in candidate_screens:
+        chat_id = state.find_chat_id_for_current_screen(context.event.platform_user_id, screen_id)
+        if chat_id is not None:
+            return chat_id
+    return None
+
+
+def _log_setup_diagnostic(
+    context: RouterContext,
+    *,
+    screen_id: str,
+    route_matched: bool,
+    setup_step: str,
+    chat_id: str | None = None,
+    company_id: str | None = None,
+    token_received: bool | None = None,
+    timezone: str | None = None,
+) -> None:
+    resolved_chat_id = chat_id if chat_id is not None else _state_chat_id(context)
+    logger.info(
+        "MAX YClients setup diagnostic: event_type=%s screen_id=%s route_matched=%s "
+        "platform_user_id_present=%s chat_id_present=%s state_key=%s setup_step=%s "
+        "company_id=%s token_received=%s timezone=%s",
+        context.event.update_type,
+        screen_id,
+        route_matched,
+        context.event.platform_user_id is not None,
+        resolved_chat_id is not None,
+        state.build_state_key(context.event.platform_user_id, resolved_chat_id),
+        setup_step,
+        company_id,
+        token_received,
+        timezone,
+    )
 
 
 async def _send_no_access(context: RouterContext) -> None:
