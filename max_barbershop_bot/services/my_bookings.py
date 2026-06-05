@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -34,6 +34,14 @@ MY_BOOKING_CANCEL_IN_PROGRESS_TEXT = "Отмена уже выполняется
 MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT = "Эту запись нельзя отменить через бота 🙏\n\nПожалуйста, напишите администратору."
 MY_BOOKING_CANCEL_ALREADY_TEXT = "Эта запись уже отменена."
 MY_BOOKING_CANCEL_ERROR_TEXT = "Не удалось отменить запись 🙏\n\nПожалуйста, попробуйте позже или напишите администратору."
+MY_BOOKING_RESCHEDULE_UNAVAILABLE_TEXT = "Перенос записи через бота пока недоступен 🙏\n\nПожалуйста, напишите администратору."
+MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT = "Не получилось подготовить перенос записи 🙏\n\nПожалуйста, напишите администратору."
+MY_BOOKING_RESCHEDULE_ERROR_TEXT = "Не удалось перенести запись 🙏\n\nВозможно, это время уже заняли. Попробуйте выбрать другой слот."
+MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT = "Эту запись нельзя перенести через бота 🙏\n\nПожалуйста, напишите администратору."
+MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT = "Перенос уже выполняется, подождите немного ⏳"
+MY_BOOKING_RESCHEDULE_DATES_TEXT = "🔁 Перенос записи\n\nВыберите новую дату:"
+MY_BOOKING_RESCHEDULE_SLOTS_TEXT = "🔁 Перенос записи\n\nВыберите новое время:"
+MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT = "На эту дату свободного времени нет 🙏\n\nВыберите другой день."
 
 _STATUS_LABELS = {
     "active": "Подтверждена",
@@ -78,6 +86,18 @@ class MyBookingCancellationNotAllowedError(MyBookingCancellationError):
 
 class MyBookingAlreadyCancelledError(MyBookingCancellationError):
     """Raised when the selected record is already cancelled or gone."""
+
+
+class MyBookingRescheduleError(MyBookingsError):
+    """Raised when YClients cannot reschedule a selected record."""
+
+
+class MyBookingReschedulePrepareError(MyBookingRescheduleError):
+    """Raised when required record data cannot be prepared for reschedule."""
+
+
+class MyBookingRescheduleNotAllowedError(MyBookingRescheduleError):
+    """Raised when YClients does not allow record update/reschedule."""
 
 
 @dataclass(frozen=True)
@@ -320,6 +340,215 @@ class MyBookingsService:
         return result.status
 
 
+    async def prepare_reschedule_context(
+        self,
+        user: User | None,
+        *,
+        yclients_record_id: str,
+        platform_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Load selected record from YClients and extract fields needed for direct reschedule."""
+
+        record_id = _clean_text(yclients_record_id)
+        if not record_id:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_NOT_FOUND_TEXT)
+        yclients_client_id = _clean_text(user.yclients_client_id if user else None)
+        phone = _clean_text(user.phone if user else None)
+        if not yclients_client_id and not phone:
+            raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
+
+        settings = self._active_settings_for_reschedule(platform_user_id=platform_user_id, record_id=record_id)
+        timezone_name = _timezone_name(settings.branch_timezone)
+        try:
+            async with YClientsClient(
+                partner_token=settings.partner_token,
+                user_token=settings.user_token,
+                company_id=settings.company_id,
+            ) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                details = await yclients.get_booking_details(
+                    company_id=settings.company_id,
+                    yclients_record_id=record_id,
+                )
+        except YClientsError as exc:
+            logger.warning(
+                "Booking reschedule details failed: operation=prepare_reschedule platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT) from exc
+        except Exception as exc:  # noqa: BLE001 - keep raw details away from users.
+            logger.warning(
+                "Booking reschedule details unexpected error: operation=prepare_reschedule platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+            )
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT) from exc
+
+        row = _extract_record_detail_row(details)
+        if not row:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT)
+
+        service_ids = _extract_service_ids(row)
+        staff_id = _extract_staff_id(row)
+        client_data = _extract_client_data(row)
+        seance_length = _extract_seance_length(row)
+        old_datetime = parse_booking_datetime(row, timezone_name=timezone_name)
+        if not service_ids or not staff_id or not client_data or not seance_length or old_datetime is None:
+            logger.info(
+                "Booking reschedule context incomplete: operation=prepare_reschedule platform_user_id=%s "
+                "yclients_record_id=%s service_ids_present=%s staff_id_present=%s client_present=%s "
+                "seance_length_present=%s old_datetime_present=%s",
+                platform_user_id,
+                record_id,
+                bool(service_ids),
+                bool(staff_id),
+                bool(client_data),
+                bool(seance_length),
+                old_datetime is not None,
+            )
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT)
+
+        old_local = old_datetime.astimezone(_zoneinfo(timezone_name))
+        return {
+            "yclients_record_id": record_id,
+            "service_ids": service_ids,
+            "service_id": service_ids[0],
+            "staff_id": staff_id,
+            "client_data": client_data,
+            "seance_length": seance_length,
+            "old_date": old_local.strftime("%d.%m.%Y"),
+            "old_time": old_local.strftime("%H:%M"),
+            "old_datetime": old_local.isoformat(),
+            "branch_timezone": timezone_name,
+        }
+
+    async def reschedule_booking_for_user(
+        self,
+        user: User | None,
+        *,
+        reschedule_context: dict[str, Any],
+        new_datetime_iso: str,
+        platform_user_id: str | None = None,
+    ) -> None:
+        """Directly update one YClients record to the selected new datetime."""
+
+        yclients_client_id = _clean_text(user.yclients_client_id if user else None)
+        phone = _clean_text(user.phone if user else None)
+        if not yclients_client_id and not phone:
+            raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
+
+        record_id = _clean_text(reschedule_context.get("yclients_record_id"))
+        staff_id = _clean_text(reschedule_context.get("staff_id"))
+        services = [sid for sid in reschedule_context.get("service_ids", []) if _clean_text(sid)] if isinstance(reschedule_context.get("service_ids"), list) else []
+        client_data = reschedule_context.get("client_data") if isinstance(reschedule_context.get("client_data"), dict) else {}
+        seance_length = _to_int(reschedule_context.get("seance_length"))
+        datetime_iso = _clean_text(new_datetime_iso)
+        if not record_id or not staff_id or not services or not client_data or not seance_length or not datetime_iso:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT)
+
+        settings = self._active_settings_for_reschedule(platform_user_id=platform_user_id, record_id=record_id)
+        try:
+            async with YClientsClient(
+                partner_token=settings.partner_token,
+                user_token=settings.user_token,
+                company_id=settings.company_id,
+            ) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                await yclients.reschedule_booking(
+                    company_id=settings.company_id,
+                    yclients_record_id=record_id,
+                    services=services,
+                    client_data=client_data,
+                    seance_length=seance_length,
+                    datetime_iso=datetime_iso,
+                    staff_id=staff_id,
+                )
+        except YClientsValidationError as exc:
+            logger.info(
+                "Booking reschedule rejected: operation=reschedule_booking platform_user_id=%s "
+                "yclients_record_id=%s new_datetime=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                datetime_iso,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingRescheduleNotAllowedError(MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT) from exc
+        except YClientsNotFoundError as exc:
+            logger.info(
+                "Booking reschedule not found: operation=reschedule_booking platform_user_id=%s "
+                "yclients_record_id=%s new_datetime=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                datetime_iso,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingRescheduleNotAllowedError(MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT) from exc
+        except (YClientsAuthError, YClientsRateLimitError, YClientsServerError, YClientsTransportError) as exc:
+            logger.warning(
+                "Booking reschedule YClients error: operation=reschedule_booking platform_user_id=%s "
+                "yclients_record_id=%s new_datetime=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                datetime_iso,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT) from exc
+        except YClientsError as exc:
+            logger.warning(
+                "Booking reschedule integration error: operation=reschedule_booking platform_user_id=%s "
+                "yclients_record_id=%s new_datetime=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                datetime_iso,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT) from exc
+
+        logger.info(
+            "Booking rescheduled in YClients: operation=reschedule_booking platform_user_id=%s "
+            "yclients_record_id=%s old_datetime=%s new_datetime=%s",
+            platform_user_id,
+            record_id,
+            _clean_text(reschedule_context.get("old_datetime")),
+            datetime_iso,
+        )
+
+    def _active_settings_for_reschedule(self, *, platform_user_id: str | None, record_id: str):
+        try:
+            settings = self._settings_repository.get_active()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Booking reschedule settings lookup failed: operation=reschedule_booking platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+            )
+            raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT) from exc
+        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+            logger.info(
+                "Booking reschedule unavailable: operation=reschedule_booking platform_user_id=%s yclients_record_id=%s "
+                "settings_present=%s company_id_present=%s partner_token_present=%s user_token_present=%s",
+                platform_user_id,
+                record_id,
+                settings is not None,
+                bool(settings and settings.company_id),
+                bool(settings and settings.partner_token),
+                bool(settings and settings.user_token),
+            )
+            raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT)
+        return settings
+
 def format_booking_status(status: Any) -> str:
     """Return a friendly Russian booking status label."""
 
@@ -499,6 +728,60 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
     }
 
 
+
+def format_reschedule_confirmation_text(data: dict[str, Any]) -> str:
+    """Format final reschedule confirmation text."""
+
+    return "\n".join(
+        [
+            "Проверьте перенос записи 🔁",
+            "",
+            "Было:",
+            f"🗓 {_clean_text(data.get('old_date')) or '—'}",
+            f"🕒 {_clean_text(data.get('old_time')) or '—'}",
+            "",
+            "Станет:",
+            f"🗓 {_clean_text(data.get('new_date')) or '—'}",
+            f"🕒 {_clean_text(data.get('new_time')) or '—'}",
+        ]
+    )
+
+
+def format_reschedule_success_text(data: dict[str, Any]) -> str:
+    """Format successful reschedule message."""
+
+    return "\n".join(
+        [
+            "Запись перенесена ✅",
+            "",
+            f"Новая дата: {_clean_text(data.get('new_date')) or '—'}",
+            f"Новое время: {_clean_text(data.get('new_time')) or '—'}",
+        ]
+    )
+
+
+def build_new_datetime_iso(booking_date: str | date, booking_time: str, *, selected_datetime: str | None = None) -> str:
+    """Build YClients datetime value from selected reschedule date and slot."""
+
+    raw_datetime = _clean_text(selected_datetime)
+    if raw_datetime and len(raw_datetime) > 5:
+        return raw_datetime.replace("T", " ")
+    date_value = booking_date.isoformat() if isinstance(booking_date, date) else _clean_text(booking_date)
+    time_value = _clean_text(booking_time)
+    if len(time_value) == 5:
+        time_value = f"{time_value}:00"
+    return f"{date_value} {time_value}" if date_value and time_value else ""
+
+
+def format_display_date(value: str | date, *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+    """Format ISO date for Russian user-facing text."""
+
+    try:
+        parsed = value if isinstance(value, date) else datetime.fromisoformat(str(value)).date()
+    except ValueError:
+        return _clean_text(value) or "—"
+    return parsed.strftime("%d.%m.%Y")
+
 def _booking_from_payload(item: dict[str, Any], *, timezone_name: str) -> MyBookingItem | None:
     record_id = _clean_text(item.get("record_id") or item.get("id") or item.get("booking_id") or item.get("visit_id"))
     booking_datetime = parse_booking_datetime(item, timezone_name=timezone_name)
@@ -564,6 +847,83 @@ def _extract_master_name(item: dict[str, Any]) -> str | None:
                 return name
     return None
 
+
+
+def _extract_record_detail_row(payload: dict[str, Any] | list[Any]) -> dict[str, Any]:
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        return payload["data"]
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def _extract_service_ids(row: dict[str, Any]) -> list[str]:
+    services = row.get("services")
+    result: list[str] = []
+    if isinstance(services, list):
+        for item in services:
+            if isinstance(item, dict):
+                value = _clean_text(item.get("id") or item.get("service_id"))
+            else:
+                value = _clean_text(item)
+            if value:
+                result.append(value)
+    service = row.get("service")
+    single = _clean_text(row.get("service_id"))
+    if not single and isinstance(service, dict):
+        single = _clean_text(service.get("id") or service.get("service_id"))
+    if single and single not in result:
+        result.append(single)
+    return result
+
+
+def _extract_staff_id(row: dict[str, Any]) -> str | None:
+    value = _clean_text(row.get("staff_id") or row.get("master_id") or row.get("employee_id"))
+    if value:
+        return value
+    for key in ("staff", "master", "employee"):
+        nested = row.get(key)
+        if isinstance(nested, dict):
+            nested_id = _clean_text(nested.get("id") or nested.get("staff_id") or nested.get("master_id"))
+            if nested_id:
+                return nested_id
+    return None
+
+
+def _extract_client_data(row: dict[str, Any]) -> dict[str, Any]:
+    client = row.get("client") if isinstance(row.get("client"), dict) else {}
+    client_id = _clean_text(client.get("id") or client.get("client_id") or row.get("client_id"))
+    if not client_id:
+        return {}
+    data = {"id": client_id}
+    for source_key, target_key in (("name", "name"), ("fullname", "name"), ("phone", "phone"), ("email", "email"), ("sex", "sex")):
+        value = _clean_text(client.get(source_key) or row.get(source_key))
+        if value and target_key not in data:
+            data[target_key] = value
+    return data
+
+
+def _extract_seance_length(row: dict[str, Any]) -> int | None:
+    value = _to_int(row.get("seance_length") or row.get("length") or row.get("duration"))
+    if value:
+        return value
+    services = row.get("services")
+    if isinstance(services, list):
+        total = 0
+        for item in services:
+            if isinstance(item, dict):
+                total += _to_int(item.get("seance_length") or item.get("duration")) or 0
+        if total:
+            return total
+    return None
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
 
 def _is_safe_status(status: str) -> bool:
     if status.isdigit():
