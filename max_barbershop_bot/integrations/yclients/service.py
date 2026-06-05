@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from .client import DEFAULT_YCLIENTS_BASE_URL, DEFAULT_YCLIENTS_TIMEOUT_SECONDS, YClientsClient
 from .dto import (
+    YClientsCancelBookingResult,
     YClientsClientCard,
     YClientsHealthCheckResult,
     YClientsService,
@@ -20,6 +21,7 @@ from .dto import (
 from .endpoints import (
     create_booking as endpoint_create_booking,
     create_client as endpoint_create_client,
+    cancel_booking as endpoint_cancel_booking,
     get_available_slots as endpoint_get_available_slots,
     get_client_details as endpoint_get_client_details,
     get_company,
@@ -313,6 +315,24 @@ class YClientsServiceLayer:
             count=count,
         )
 
+    async def cancel_booking(
+        self,
+        *,
+        yclients_record_id: str,
+        company_id: str | int | None = None,
+    ) -> YClientsCancelBookingResult:
+        """Cancel a YClients record by id."""
+
+        try:
+            return await endpoint_cancel_booking(
+                self._client,
+                company_id=self.require_company_id(company_id),
+                record_id=yclients_record_id,
+            )
+        except YClientsError as exc:
+            await self._notify_or_log("cancel_booking", exc)
+            raise
+
     async def health_check(self, *, company_id: str | int | None = None) -> YClientsHealthCheckResult:
         """Run a safe read-only YClients health check."""
 
@@ -361,6 +381,10 @@ async def get_client_visits(service: YClientsServiceLayer, **kwargs: Any) -> lis
 
 async def get_client_records(service: YClientsServiceLayer, **kwargs: Any) -> dict[str, Any] | list[Any]:
     return await service.get_client_records(**kwargs)
+
+
+async def cancel_booking(service: YClientsServiceLayer, **kwargs: Any) -> YClientsCancelBookingResult:
+    return await service.cancel_booking(**kwargs)
 
 
 def build_yclients_client_from_env() -> YClientsClient:

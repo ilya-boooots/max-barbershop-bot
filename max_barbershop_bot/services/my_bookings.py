@@ -9,7 +9,15 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
-from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
+from max_barbershop_bot.integrations.yclients.exceptions import (
+    YClientsAuthError,
+    YClientsError,
+    YClientsNotFoundError,
+    YClientsRateLimitError,
+    YClientsServerError,
+    YClientsTransportError,
+    YClientsValidationError,
+)
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import safe_str
 from max_barbershop_bot.repositories.users import User
@@ -21,6 +29,11 @@ MY_BOOKINGS_NO_PROFILE_TEXT = "Не получилось найти ваши д�
 MY_BOOKINGS_LOAD_ERROR_TEXT = "Не удалось загрузить ваши записи 🙏\n\nПожалуйста, попробуйте позже."
 MY_BOOKINGS_EMPTY_TEXT = "📭 У вас пока нет активных записей."
 MY_BOOKINGS_TITLE_TEXT = "📅 Ваши записи"
+MY_BOOKING_NOT_FOUND_TEXT = "Запись не найдена"
+MY_BOOKING_CANCEL_IN_PROGRESS_TEXT = "Отмена уже выполняется, подождите немного ⏳"
+MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT = "Эту запись нельзя отменить через бота 🙏\n\nПожалуйста, напишите администратору."
+MY_BOOKING_CANCEL_ALREADY_TEXT = "Эта запись уже отменена."
+MY_BOOKING_CANCEL_ERROR_TEXT = "Не удалось отменить запись 🙏\n\nПожалуйста, попробуйте позже или напишите администратору."
 
 _STATUS_LABELS = {
     "active": "Подтверждена",
@@ -53,6 +66,18 @@ class MyBookingsProfileMissingError(MyBookingsError):
 
 class MyBookingsLoadError(MyBookingsError):
     """Raised when YClients/settings cannot provide records safely."""
+
+
+class MyBookingCancellationError(MyBookingsError):
+    """Raised when YClients cannot cancel a selected record."""
+
+
+class MyBookingCancellationNotAllowedError(MyBookingCancellationError):
+    """Raised when online cancellation is not allowed by YClients."""
+
+
+class MyBookingAlreadyCancelledError(MyBookingCancellationError):
+    """Raised when the selected record is already cancelled or gone."""
 
 
 @dataclass(frozen=True)
@@ -190,6 +215,110 @@ class MyBookingsService:
             phone_exists=bool(phone),
         )
 
+    async def cancel_booking_for_user(
+        self,
+        user: User | None,
+        *,
+        yclients_record_id: str,
+        platform_user_id: str | None = None,
+    ) -> str | None:
+        """Cancel one future YClients record and return the resulting status when present."""
+
+        record_id = _clean_text(yclients_record_id)
+        if not record_id:
+            raise MyBookingCancellationError(MY_BOOKING_NOT_FOUND_TEXT)
+
+        yclients_client_id = _clean_text(user.yclients_client_id if user else None)
+        phone = _clean_text(user.phone if user else None)
+        if not yclients_client_id and not phone:
+            raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
+
+        try:
+            settings = self._settings_repository.get_active()
+        except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
+            logger.warning(
+                "Booking cancellation settings lookup failed: operation=cancel_booking platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+            )
+            raise MyBookingCancellationError(MY_BOOKING_CANCEL_ERROR_TEXT) from exc
+
+        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+            logger.info(
+                "Booking cancellation unavailable: operation=cancel_booking platform_user_id=%s yclients_record_id=%s "
+                "settings_present=%s company_id_present=%s partner_token_present=%s user_token_present=%s",
+                platform_user_id,
+                record_id,
+                settings is not None,
+                bool(settings and settings.company_id),
+                bool(settings and settings.partner_token),
+                bool(settings and settings.user_token),
+            )
+            raise MyBookingCancellationError(MY_BOOKING_CANCEL_ERROR_TEXT)
+
+        try:
+            async with YClientsClient(
+                partner_token=settings.partner_token,
+                user_token=settings.user_token,
+                company_id=settings.company_id,
+            ) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                result = await yclients.cancel_booking(
+                    company_id=settings.company_id,
+                    yclients_record_id=record_id,
+                )
+        except YClientsNotFoundError as exc:
+            logger.info(
+                "Booking cancellation record not found: operation=cancel_booking platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingAlreadyCancelledError(MY_BOOKING_CANCEL_ALREADY_TEXT) from exc
+        except YClientsValidationError as exc:
+            logger.info(
+                "Booking cancellation rejected: operation=cancel_booking platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingCancellationNotAllowedError(MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT) from exc
+        except (YClientsAuthError, YClientsRateLimitError, YClientsServerError, YClientsTransportError) as exc:
+            logger.warning(
+                "Booking cancellation YClients error: operation=cancel_booking platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingCancellationError(MY_BOOKING_CANCEL_ERROR_TEXT) from exc
+        except YClientsError as exc:
+            logger.warning(
+                "Booking cancellation integration error: operation=cancel_booking platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingCancellationError(MY_BOOKING_CANCEL_ERROR_TEXT) from exc
+
+        logger.info(
+            "Booking cancelled in YClients: operation=cancel_booking platform_user_id=%s "
+            "yclients_record_id=%s result_status=%s",
+            platform_user_id,
+            record_id,
+            result.status,
+        )
+        return result.status
+
 
 def format_booking_status(status: Any) -> str:
     """Return a friendly Russian booking status label."""
@@ -290,6 +419,84 @@ def format_bookings_screen(bookings: list[MyBookingItem], *, timezone_name: str)
         return MY_BOOKINGS_EMPTY_TEXT
     cards = [format_booking_item(item, index=index, timezone_name=timezone_name) for index, item in enumerate(bookings, start=1)]
     return f"{MY_BOOKINGS_TITLE_TEXT}\n\n" + "\n\n".join(cards)
+
+
+def format_booking_details_text(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+    """Format selected booking details in the Telegram reference style."""
+
+    display = booking_display_data(booking, timezone_name=timezone_name)
+    return "\n".join(
+        [
+            "📋 Активная запись",
+            "",
+            f"✂️ Услуга: {display['service_name']}",
+            f"👤 Мастер: {display['master_name'] or 'Любой мастер'}",
+            f"📅 Дата: {display['date']}",
+            f"🕒 Время: {display['time']}",
+            f"🧾 Статус: {display['status']}",
+        ]
+    )
+
+
+def format_cancel_confirmation_text(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+    """Format cancellation confirmation text."""
+
+    display = booking_display_data(booking, timezone_name=timezone_name)
+    return "\n".join(
+        [
+            "Вы точно хотите отменить запись? ❌",
+            "",
+            f"Услуга: {display['service_name']}",
+            f"Мастер: {display['master_name'] or 'Любой мастер'}",
+            f"Дата: {display['date']}",
+            f"Время: {display['time']}",
+        ]
+    )
+
+
+def format_cancel_success_text(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+    """Format successful cancellation message."""
+
+    display = booking_display_data(booking, timezone_name=timezone_name)
+    return "\n".join(
+        [
+            "Запись отменена ✅",
+            "",
+            f"✂️ {display['service_name']}",
+            f"📅 {display['date']} в {display['time']}",
+        ]
+    )
+
+
+def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> dict[str, str | None]:
+    """Return safe display fields for state and smoke tests."""
+
+    if isinstance(booking, MyBookingItem):
+        booking_datetime = booking.booking_datetime.astimezone(_zoneinfo(timezone_name))
+        return {
+            "yclients_record_id": booking.yclients_record_id,
+            "service_name": booking.service_name,
+            "master_name": booking.master_name,
+            "date": booking_datetime.strftime("%d.%m.%Y"),
+            "time": booking_datetime.strftime("%H:%M"),
+            "status": format_booking_status(booking.raw_status or booking.status),
+        }
+
+    booking_date = _clean_text(booking.get("date"))
+    booking_time = _clean_text(booking.get("time") or booking.get("booking_time"))
+    parsed = parse_booking_datetime(booking, timezone_name=timezone_name)
+    if parsed is not None:
+        booking_date = booking_date or parsed.strftime("%d.%m.%Y")
+        booking_time = booking_time or parsed.strftime("%H:%M")
+
+    return {
+        "yclients_record_id": _clean_text(booking.get("yclients_record_id") or booking.get("record_id") or booking.get("id")),
+        "service_name": _clean_text(booking.get("service_name")) or _extract_service_name(booking),
+        "master_name": _clean_text(booking.get("master_name")) or _extract_master_name(booking),
+        "date": booking_date or "—",
+        "time": booking_time or "—",
+        "status": format_booking_status(booking.get("status") or booking.get("raw_status")),
+    }
 
 
 def _booking_from_payload(item: dict[str, Any], *, timezone_name: str) -> MyBookingItem | None:
