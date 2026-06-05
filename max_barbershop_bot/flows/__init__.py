@@ -10,6 +10,7 @@ from max_barbershop_bot.flows.menu import register_menu_routes
 from max_barbershop_bot.flows.my_bookings import register_my_bookings_routes
 from max_barbershop_bot.flows.registration import register_registration_routes
 from max_barbershop_bot.flows.support import register_support_routes
+from max_barbershop_bot.flows.yclients_settings import register_yclients_settings_routes
 from max_barbershop_bot.flows.staff import register_staff_routes
 from max_barbershop_bot.flows.start import handle_bot_started, handle_start
 
@@ -26,6 +27,7 @@ def create_router() -> Router:
     register_contacts_routes(router)
     register_support_routes(router)
     register_staff_routes(router)
+    register_yclients_settings_routes(router)
     register_registration_routes(router)
     router.on_unknown_text(handle_unknown_text)
     router.on_unknown_callback(handle_unknown_callback)

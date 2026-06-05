@@ -31,6 +31,13 @@ ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
 
+YCLIENTS_SETUP_PAYLOAD = "yclients:setup"
+YCLIENTS_CHECK_PAYLOAD = "yclients:check"
+YCLIENTS_SAVE_PAYLOAD = "yclients:save"
+YCLIENTS_SKIP_BRANCH_TITLE_PAYLOAD = "yclients:branch_title:skip"
+YCLIENTS_BACK_PAYLOAD = "yclients:back"
+YCLIENTS_HOME_PAYLOAD = "yclients:home"
+
 BOOKING_BACK_PAYLOAD = "booking:back"
 BOOKING_CATEGORY_PAYLOAD_PREFIX = "booking:category:"
 BOOKING_SERVICE_PAYLOAD_PREFIX = "booking:service:"
@@ -99,6 +106,48 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="🧩 YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
+
+
+def yclients_settings_keyboard() -> MaxInlineKeyboard:
+    """Build YClients integration settings menu buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⚙️ Настроить подключение", payload=YCLIENTS_SETUP_PAYLOAD)],
+            [MaxButton(text="🔍 Проверить подключение", payload=YCLIENTS_CHECK_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=YCLIENTS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=YCLIENTS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def yclients_setup_navigation_keyboard(*, include_skip: bool = False) -> MaxInlineKeyboard:
+    """Build YClients setup wizard navigation buttons."""
+
+    rows: list[list[MaxButton]] = []
+    if include_skip:
+        rows.append([MaxButton(text="⏭️ Пропустить", payload=YCLIENTS_SKIP_BRANCH_TITLE_PAYLOAD)])
+    rows.append(
+        [
+            MaxButton(text="⬅️ Назад", payload=YCLIENTS_BACK_PAYLOAD),
+            MaxButton(text="🏠 Главное меню", payload=YCLIENTS_HOME_PAYLOAD),
+        ]
+    )
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def yclients_confirm_keyboard() -> MaxInlineKeyboard:
+    """Build YClients setup confirmation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Сохранить", payload=YCLIENTS_SAVE_PAYLOAD)],
+            [
+                MaxButton(text="⬅️ Назад", payload=YCLIENTS_BACK_PAYLOAD),
+                MaxButton(text="🏠 Главное меню", payload=YCLIENTS_HOME_PAYLOAD),
+            ],
+        ]
+    )
 
 def navigation_keyboard(*, back_payload: str = NAV_BACK_PAYLOAD) -> MaxInlineKeyboard:
     """Build Back/Home navigation buttons for section screens."""
