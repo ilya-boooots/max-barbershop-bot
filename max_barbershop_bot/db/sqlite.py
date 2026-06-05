@@ -127,7 +127,20 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         "notification_settings_json",
         "TEXT NOT NULL DEFAULT '{}'",
     )
+    _ensure_column(connection, "yclients_settings", "company_id", "TEXT")
+    _ensure_column(connection, "yclients_settings", "partner_token", "TEXT")
+    _ensure_column(connection, "yclients_settings", "user_token", "TEXT")
+    _ensure_column(
+        connection,
+        "yclients_settings",
+        "branch_timezone",
+        "TEXT NOT NULL DEFAULT 'Europe/Moscow'",
+    )
     _ensure_column(connection, "yclients_settings", "branch_title", "TEXT")
+    _ensure_column(connection, "yclients_settings", "contacts_override_json", "TEXT")
+    _ensure_column(connection, "yclients_settings", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(connection, "yclients_settings", "created_at", "TEXT")
+    _ensure_column(connection, "yclients_settings", "updated_at", "TEXT")
     connection.commit()
 
 
