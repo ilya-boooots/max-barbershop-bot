@@ -116,7 +116,7 @@ class Router:
             logger.exception(
                 "MAX handler failed safely: update_type=%s text=%r callback_payload=%r",
                 event.update_type,
-                event.text,
+                self._safe_log_text(event),
                 event.callback_payload,
             )
 
@@ -124,7 +124,7 @@ class Router:
         if event.update_type == "message_created":
             return self._resolve_text_handler(event)
         if event.update_type == "message_callback":
-            return self._resolve_callback_handler(event.callback_payload)
+            return self._resolve_callback_handler(event)
         return self._update_handlers.get(event.update_type)
 
     def _resolve_text_handler(self, event: NormalizedEvent) -> EventHandler | None:
@@ -139,7 +139,10 @@ class Router:
             return self._screen_text_handlers.get(current_screen)
         if event.text is None and not event.attachments:
             return None
-        return self._screen_text_handlers.get(current_screen) or self._unknown_text_handler
+
+        handler = self._screen_text_handlers.get(current_screen)
+        self._log_yclients_setup_text_diagnostic(event, current_screen, handler is not None)
+        return handler or self._unknown_text_handler
 
     def _log_contact_diagnostic(self, event: NormalizedEvent) -> None:
         if event.update_type != "message_created":
@@ -175,10 +178,67 @@ class Router:
             mask_phone(extracted_phone) if extracted_phone is not None else None,
         )
 
-    def _resolve_callback_handler(self, payload: str | None) -> EventHandler | None:
+    def _resolve_callback_handler(self, event: NormalizedEvent) -> EventHandler | None:
+        payload = event.callback_payload
         if payload is None:
+            self._log_yclients_setup_callback_diagnostic(event, route_matched=False)
             return self._unknown_callback_handler
-        return self._callback_handlers.get(payload) or self._unknown_callback_handler
+        handler = self._callback_handlers.get(payload)
+        self._log_yclients_setup_callback_diagnostic(event, route_matched=handler is not None)
+        return handler or self._unknown_callback_handler
+
+    def _safe_log_text(self, event: NormalizedEvent) -> str | None:
+        screen_id = state.get_current_screen(event.platform_user_id, event.chat_id)
+        if screen_id in {state.YCLIENTS_SETUP_PARTNER_TOKEN_SCREEN, state.YCLIENTS_SETUP_USER_TOKEN_SCREEN}:
+            return "<yclients_token_hidden>" if event.text is not None else None
+        return event.text
+
+    def _log_yclients_setup_text_diagnostic(
+        self,
+        event: NormalizedEvent,
+        screen_id: str,
+        route_matched: bool,
+    ) -> None:
+        setup_step = _yclients_setup_step(screen_id)
+        if setup_step is None:
+            return
+
+        company_id = event.text.strip() if setup_step == "company_id" and event.text is not None else None
+        token_received = event.text is not None if setup_step in {"partner_token", "user_token"} else None
+        timezone = event.text.strip() if setup_step == "timezone" and event.text is not None else None
+        logger.info(
+            "MAX YClients setup diagnostic: event_type=%s screen_id=%s route_matched=%s "
+            "platform_user_id_present=%s chat_id_present=%s state_key=%s setup_step=%s "
+            "company_id=%s token_received=%s timezone=%s",
+            event.update_type,
+            screen_id,
+            route_matched,
+            event.platform_user_id is not None,
+            event.chat_id is not None,
+            state.build_state_key(event.platform_user_id, event.chat_id),
+            setup_step,
+            company_id,
+            token_received,
+            timezone,
+        )
+
+    def _log_yclients_setup_callback_diagnostic(self, event: NormalizedEvent, *, route_matched: bool) -> None:
+        if event.callback_payload is None or not event.callback_payload.startswith("yclients:"):
+            return
+        chat_id = _yclients_diagnostic_chat_id(event)
+        screen_id = state.get_current_screen(event.platform_user_id, chat_id)
+        logger.info(
+            "MAX YClients setup diagnostic: event_type=%s screen_id=%s callback_payload=%s "
+            "route_matched=%s platform_user_id_present=%s chat_id_present=%s state_key=%s setup_step=%s",
+            event.update_type,
+            screen_id,
+            event.callback_payload,
+            route_matched,
+            event.platform_user_id is not None,
+            chat_id is not None,
+            state.build_state_key(event.platform_user_id, chat_id),
+            _yclients_setup_step(screen_id),
+        )
 
 
 def _int_from_string(value: str | None) -> int | None:
@@ -288,3 +348,30 @@ def _payload_has_vcf_tel(payload: dict[str, object]) -> bool:
         return False
     normalized_vcf = vcf_info.replace("\\r\\n", "\n").replace("\\n", "\n")
     return any(line.upper().startswith("TEL") for line in normalized_vcf.splitlines())
+
+
+def _yclients_diagnostic_chat_id(event: NormalizedEvent) -> str | None:
+    if event.chat_id is not None:
+        return event.chat_id
+
+    candidate_screens = (
+        *state.YCLIENTS_SETTINGS_SCREENS,
+        state.MAIN_MENU_SCREEN,
+        state.STAFF_MENU_SCREEN,
+    )
+    for screen_id in candidate_screens:
+        chat_id = state.find_chat_id_for_current_screen(event.platform_user_id, screen_id)
+        if chat_id is not None:
+            return chat_id
+    return None
+
+
+def _yclients_setup_step(screen_id: str) -> str | None:
+    return {
+        state.YCLIENTS_SETUP_COMPANY_ID_SCREEN: "company_id",
+        state.YCLIENTS_SETUP_PARTNER_TOKEN_SCREEN: "partner_token",
+        state.YCLIENTS_SETUP_USER_TOKEN_SCREEN: "user_token",
+        state.YCLIENTS_SETUP_TIMEZONE_SCREEN: "timezone",
+        state.YCLIENTS_SETUP_BRANCH_TITLE_SCREEN: "branch_title",
+        state.YCLIENTS_SETUP_CONFIRM_SCREEN: "confirm",
+    }.get(screen_id)
