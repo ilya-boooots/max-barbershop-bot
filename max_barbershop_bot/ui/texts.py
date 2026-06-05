@@ -85,3 +85,34 @@ STAFF_NO_EXTRA_ROLES_TEXT = "У пользователя нет дополнит
 STAFF_ROLE_ASSIGNED_TEXT = "Роль успешно выдана ✅"
 STAFF_ROLE_REMOVED_TEXT = "Роль успешно снята ✅"
 STAFF_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
+
+
+YCLIENTS_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
+YCLIENTS_NOT_CONFIGURED_TEXT = """YClients пока не настроен 🙏
+
+Сначала добавьте данные подключения."""
+YCLIENTS_SETTINGS_SAVED_TEXT = "Настройки YClients сохранены ✅"
+YCLIENTS_CHECK_SUCCESS_TEXT = """Подключение к YClients работает ✅
+
+Филиал: {branch_title_or_company_id}"""
+YCLIENTS_CHECK_FAILURE_TEXT = """Не удалось подключиться к YClients 🙏
+
+Проверьте company_id и токены."""
+YCLIENTS_COMPANY_ID_TEXT = "Введите company_id филиала YClients 👇"
+YCLIENTS_PARTNER_TOKEN_TEXT = "Введите partner_token YClients 👇"
+YCLIENTS_USER_TOKEN_TEXT = "Введите user_token YClients 👇"
+YCLIENTS_TIMEZONE_TEXT = "Введите часовой пояс филиала, например Europe/Moscow 👇"
+YCLIENTS_BRANCH_TITLE_TEXT = "Введите название филиала 👇"
+YCLIENTS_INVALID_REQUIRED_TEXT = """Поле не может быть пустым 🙏
+
+Введите значение ещё раз."""
+YCLIENTS_INVALID_TIMEZONE_TEXT = """Не удалось распознать часовой пояс 😕
+
+Введите, например: Europe/Moscow"""
+YCLIENTS_CONFIRM_TEXT = """Проверьте настройки YClients 🧩
+
+Company ID: {company_id}
+Филиал: {branch_title}
+Часовой пояс: {branch_timezone}
+
+Токены будут сохранены в скрытом виде 🔐"""

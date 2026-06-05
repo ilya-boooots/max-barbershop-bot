@@ -34,6 +34,25 @@ SETTINGS_PLACEHOLDER_SCREEN = "settings_placeholder"
 BROADCASTS_PLACEHOLDER_SCREEN = "broadcasts_placeholder"
 STATISTICS_PLACEHOLDER_SCREEN = "statistics_placeholder"
 YCLIENTS_PLACEHOLDER_SCREEN = "yclients_placeholder"
+YCLIENTS_SETTINGS_MENU_SCREEN = "yclients_settings_menu"
+YCLIENTS_SETUP_COMPANY_ID_SCREEN = "yclients_setup_company_id"
+YCLIENTS_SETUP_PARTNER_TOKEN_SCREEN = "yclients_setup_partner_token"
+YCLIENTS_SETUP_USER_TOKEN_SCREEN = "yclients_setup_user_token"
+YCLIENTS_SETUP_TIMEZONE_SCREEN = "yclients_setup_timezone"
+YCLIENTS_SETUP_BRANCH_TITLE_SCREEN = "yclients_setup_branch_title"
+YCLIENTS_SETUP_CONFIRM_SCREEN = "yclients_setup_confirm"
+
+YCLIENTS_SETTINGS_SCREENS = frozenset(
+    {
+        YCLIENTS_SETTINGS_MENU_SCREEN,
+        YCLIENTS_SETUP_COMPANY_ID_SCREEN,
+        YCLIENTS_SETUP_PARTNER_TOKEN_SCREEN,
+        YCLIENTS_SETUP_USER_TOKEN_SCREEN,
+        YCLIENTS_SETUP_TIMEZONE_SCREEN,
+        YCLIENTS_SETUP_BRANCH_TITLE_SCREEN,
+        YCLIENTS_SETUP_CONFIRM_SCREEN,
+    }
+)
 REGISTRATION_CONSENT_SCREEN = "registration_consent"
 REGISTRATION_PHONE_SCREEN = "registration_phone"
 REGISTRATION_NAME_SCREEN = "registration_name"
