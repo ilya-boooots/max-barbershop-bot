@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .client import YClientsClient
-from .dto import YClientsBookingRecord
+from .dto import YClientsBookingRecord, YClientsCancelBookingResult
 from .exceptions import YClientsValidationError
 from .utils import (
     MAX_BOOKING_COMMENT_MARKER,
@@ -220,6 +220,27 @@ async def create_booking(
         email=email,
         comment=comment,
     )
+
+
+async def cancel_booking(
+    client: YClientsClient,
+    *,
+    company_id: str,
+    record_id: str,
+) -> YClientsCancelBookingResult:
+    """Cancel a YClients record via DELETE /api/v1/record/{company_id}/{record_id}."""
+
+    response = await client.delete(f"/api/v1/record/{company_id}/{record_id}")
+    record = extract_first_record(response) or {}
+    normalized_record_id = safe_str(
+        record.get("record_id")
+        or record.get("id")
+        or record.get("booking_id")
+        or record.get("visit_id")
+        or record_id
+    )
+    status = safe_str(record.get("status") or record.get("record_status") or record.get("state")) or None
+    return YClientsCancelBookingResult(record_id=normalized_record_id, status=status, raw_payload=response)
 
 
 async def list_clients(

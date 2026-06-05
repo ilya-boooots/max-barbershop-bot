@@ -52,6 +52,11 @@ BOOKING_DATE_PAYLOAD_PREFIX = "booking:date:"
 BOOKING_SLOT_PAYLOAD_PREFIX = "booking:slot:"
 BOOKING_CONFIRM_PAYLOAD = "booking:confirm"
 
+MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX = "my_bookings:details:"
+MY_BOOKINGS_CANCEL_START_PAYLOAD = "my_bookings:cancel:start"
+MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD = "my_bookings:cancel:confirm"
+MY_BOOKINGS_BACK_PAYLOAD = "my_bookings:back"
+
 STAFF_LIST_PAYLOAD = "staff:list"
 STAFF_ASSIGN_START_PAYLOAD = "staff:assign:start"
 STAFF_REMOVE_START_PAYLOAD = "staff:remove:start"
@@ -309,6 +314,53 @@ def my_bookings_keyboard(*, include_booking: bool = False) -> MaxInlineKeyboard:
     rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
+
+
+def my_bookings_list_keyboard(bookings_count: int, *, max_buttons: int = 20) -> MaxInlineKeyboard:
+    """Build future booking selection buttons with short MAX payloads."""
+
+    rows: list[list[MaxButton]] = [
+        [MaxButton(text=f"📋 Запись {index + 1}", payload=f"{MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX}{index}")]
+        for index in range(min(max(bookings_count, 0), max_buttons))
+    ]
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def my_booking_details_keyboard() -> MaxInlineKeyboard:
+    """Build selected booking actions."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def my_booking_cancel_confirmation_keyboard() -> MaxInlineKeyboard:
+    """Build cancellation confirmation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Да, отменить", payload=MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def my_booking_cancel_result_keyboard() -> MaxInlineKeyboard:
+    """Build buttons shown after cancellation result."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="📅 Мои записи", payload=MENU_MY_BOOKINGS_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
 
 
 def staff_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:

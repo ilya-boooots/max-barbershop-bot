@@ -62,6 +62,13 @@ class YClientsBookingRecord:
 
 
 @dataclass(frozen=True)
+class YClientsCancelBookingResult:
+    record_id: str
+    status: str | None = None
+    raw_payload: dict[str, Any] | list[Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class YClientsClientCard:
     id: str
     name: str | None = None
