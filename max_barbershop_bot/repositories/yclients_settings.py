@@ -59,6 +59,12 @@ class YClientsSettingsRepository:
     def __init__(self, database_path: str) -> None:
         self._database_path = database_path
 
+    @property
+    def database_path(self) -> str:
+        """Return the SQLite path used by this repository for safe diagnostics."""
+
+        return self._database_path
+
     def get_active(self) -> YClientsSettings | None:
         """Return the newest active settings row without creating one."""
 
