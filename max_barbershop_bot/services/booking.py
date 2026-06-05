@@ -19,12 +19,12 @@ from max_barbershop_bot.integrations.yclients.dto import (
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, normalize_phone
-from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
+from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
 
 logger = logging.getLogger(__name__)
 
 BOOKING_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
-BOOKING_YCLIENTS_ERROR_TEXT = "Не получилось загрузить услуги для записи 🙏\n\nПожалуйста, попробуйте позже."
+BOOKING_YCLIENTS_ERROR_TEXT = "Не удалось загрузить услуги 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_MASTERS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить мастеров 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_SLOTS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
@@ -117,12 +117,60 @@ class BookingService:
     def __init__(self, settings_repository: YClientsSettingsRepository) -> None:
         self._settings_repository = settings_repository
 
+    def load_active_settings_for_booking(self, *, operation: str) -> YClientsSettings | None:
+        """Load active YClients settings and emit sanitized booking diagnostics."""
+
+        database_path = getattr(self._settings_repository, "database_path", "unknown")
+        settings = None
+        error_class = None
+        try:
+            settings = self._settings_repository.get_active()
+        except Exception as exc:  # noqa: BLE001 - sanitized diagnostics are required here.
+            error_class = type(exc).__name__
+            self._log_settings_diagnostic(
+                operation=operation,
+                database_path=database_path,
+                settings=None,
+                error_class=error_class,
+            )
+            raise
+
+        self._log_settings_diagnostic(
+            operation=operation,
+            database_path=database_path,
+            settings=settings,
+            error_class=error_class,
+        )
+        return settings
+
+    def _log_settings_diagnostic(
+        self,
+        *,
+        operation: str,
+        database_path: str,
+        settings: YClientsSettings | None,
+        error_class: str | None,
+    ) -> None:
+        logger.info(
+            "MAX booking settings diagnostic: database_path=%s active_settings_found=%s "
+            "company_id_present=%s partner_token_present=%s user_token_present=%s "
+            "branch_timezone=%s is_active=%s operation=%s error_class=%s",
+            database_path,
+            settings is not None,
+            bool(settings and settings.company_id),
+            bool(settings and settings.partner_token),
+            bool(settings and settings.user_token),
+            settings.branch_timezone if settings else None,
+            settings.is_active if settings else None,
+            operation,
+            error_class,
+        )
 
     def get_branch_timezone(self) -> str:
         """Return the active branch timezone with a safe repository default."""
 
         try:
-            settings = self._settings_repository.get_active()
+            settings = self.load_active_settings_for_booking(operation="get_booking_timezone")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
                 "Booking timezone lookup failed: operation=get_booking_timezone error_class=%s",
@@ -165,7 +213,7 @@ class BookingService:
         master_id = str(payload.get("staff_id") or "")
         datetime_iso = str(payload["datetime_iso"])
         try:
-            settings = self._settings_repository.get_active()
+            settings = self.load_active_settings_for_booking(operation="create_booking")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
                 "Booking settings lookup failed: operation=create_booking service_id=%s master_id=%s "
@@ -268,7 +316,7 @@ class BookingService:
             raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT)
 
         try:
-            settings = self._settings_repository.get_active()
+            settings = self.load_active_settings_for_booking(operation="get_booking_slots")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
                 "Booking settings lookup failed: operation=get_booking_slots service_id=%s master_id=%s "
@@ -359,7 +407,7 @@ class BookingService:
         """Return available service categories and services from active YClients settings."""
 
         try:
-            settings = self._settings_repository.get_active()
+            settings = self.load_active_settings_for_booking(operation="get_booking_catalog")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
                 "Booking settings lookup failed: operation=get_booking_catalog error_class=%s",
@@ -367,7 +415,7 @@ class BookingService:
             )
             raise BookingSettingsMissingError(BOOKING_NOT_CONFIGURED_TEXT) from exc
 
-        if settings is None or not settings.company_id or not settings.partner_token:
+        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
             logger.info(
                 "Booking catalog unavailable: operation=get_booking_catalog settings_present=%s "
                 "company_id_present=%s partner_token_present=%s user_token_present=%s",
@@ -433,7 +481,7 @@ class BookingService:
             raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT)
 
         try:
-            settings = self._settings_repository.get_active()
+            settings = self.load_active_settings_for_booking(operation="get_booking_masters")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
                 "Booking settings lookup failed: operation=get_booking_masters error_class=%s service_id=%s",
