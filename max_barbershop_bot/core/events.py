@@ -137,17 +137,18 @@ def _bot_started_event(update: MaxUpdate, raw_update: dict[str, Any]) -> Normali
 
 
 def _unknown_event(raw_update: dict[str, Any]) -> NormalizedEvent:
+    user_payload = raw_update.get("user") if isinstance(raw_update.get("user"), dict) else {}
     return NormalizedEvent(
         update_type="unknown",
-        platform_user_id=None,
-        max_user_id=None,
-        chat_id=None,
+        platform_user_id=_to_str(user_payload.get("user_id")),
+        max_user_id=_to_str(user_payload.get("user_id")),
+        chat_id=_to_str(raw_update.get("chat_id")),
         text=None,
-        callback_payload=None,
+        callback_payload=_payload_to_str(raw_update.get("payload")),
         callback_id=None,
-        first_name=update.user.first_name if update.user is not None else None,
-        last_name=update.user.last_name if update.user is not None else None,
-        username=update.user.username if update.user is not None else None,
+        first_name=_optional_str(user_payload.get("first_name")),
+        last_name=_optional_str(user_payload.get("last_name")),
+        username=_optional_str(user_payload.get("username")),
         attachments=[],
         raw_update=raw_update,
     )
@@ -168,6 +169,10 @@ def _safe_update_type(raw_update: dict[str, Any]) -> str:
 
 def _to_str(value: int | str | None) -> str | None:
     return str(value) if value is not None else None
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _payload_to_str(value: Any) -> str | None:

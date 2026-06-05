@@ -408,8 +408,15 @@ async def _send_no_access(context: RouterContext) -> None:
 
 
 async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
-    if context.event.callback_id:
+    if not context.event.callback_id:
+        return
+    try:
         await context.answer_callback(notification)
+    except Exception as exc:  # noqa: BLE001 - callback answer must not block the screen.
+        logger.warning(
+            "YClients callback answer failed safely: operation=answer_callback error_class=%s",
+            type(exc).__name__,
+        )
 
 
 def _settings_repository() -> YClientsSettingsRepository:
