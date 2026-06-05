@@ -101,6 +101,28 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+
+        CREATE TABLE IF NOT EXISTS notification_delivery (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            platform_user_id TEXT,
+            max_user_id TEXT,
+            chat_id TEXT,
+            message_type TEXT,
+            recipient_type TEXT,
+            recipient_id TEXT,
+            status TEXT NOT NULL,
+            status_code INTEGER,
+            error_code TEXT,
+            error_message TEXT,
+            attempts INTEGER NOT NULL DEFAULT 1,
+            message_id TEXT,
+            is_blocked INTEGER NOT NULL DEFAULT 0,
+            is_stopped INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE INDEX IF NOT EXISTS idx_users_platform_user_id
             ON users(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_users_max_user_id
@@ -115,6 +137,14 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON platform_attribution(yclients_record_id);
         CREATE INDEX IF NOT EXISTS idx_state_storage_state_key
             ON state_storage(state_key);
+        CREATE INDEX IF NOT EXISTS idx_notification_delivery_platform_user_id
+            ON notification_delivery(platform, platform_user_id);
+        CREATE INDEX IF NOT EXISTS idx_notification_delivery_message_type
+            ON notification_delivery(message_type);
+        CREATE INDEX IF NOT EXISTS idx_notification_delivery_status
+            ON notification_delivery(status);
+        CREATE INDEX IF NOT EXISTS idx_notification_delivery_created_at
+            ON notification_delivery(created_at);
         """
     )
     _ensure_column(connection, "users", "display_name", "TEXT")

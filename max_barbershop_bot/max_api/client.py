@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import aiohttp
@@ -94,6 +94,7 @@ class MaxApiClient:
         user_id: int | None = None,
         chat_id: int | None = None,
         keyboard: MaxInlineKeyboard | None = None,
+        attachments: Sequence[Mapping[str, Any]] | None = None,
         disable_link_preview: bool | None = None,
         notify: bool | None = None,
         text_format: str | None = None,
@@ -114,8 +115,13 @@ class MaxApiClient:
             params["disable_link_preview"] = disable_link_preview
 
         body: dict[str, Any] = {"text": text}
+        message_attachments: list[dict[str, Any]] = []
+        if attachments is not None:
+            message_attachments.extend(dict(item) for item in attachments)
         if keyboard is not None:
-            body["attachments"] = [keyboard.to_attachment()]
+            message_attachments.append(keyboard.to_attachment())
+        if message_attachments:
+            body["attachments"] = message_attachments
         if notify is not None:
             body["notify"] = notify
         if text_format is not None:
