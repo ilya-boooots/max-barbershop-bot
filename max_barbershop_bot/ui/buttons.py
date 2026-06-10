@@ -35,6 +35,15 @@ NOTIFICATION_HISTORY_REFRESH_PAYLOAD = "notification_history:refresh"
 NOTIFICATION_HISTORY_BACK_PAYLOAD = "notification_history:back"
 NOTIFICATION_HISTORY_DETAIL_PAYLOAD_PREFIX = "notification_history:detail:"
 
+BROADCAST_ONE_TIME_START_PAYLOAD = "broadcast:one_time:start"
+BROADCAST_PREVIEW_NEXT_PAYLOAD = "broadcast:preview:next"
+BROADCAST_PREVIEW_EDIT_PAYLOAD = "broadcast:preview:edit"
+BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD = "broadcast:audience:all_users"
+BROADCAST_CONFIRM_SEND_PAYLOAD = "broadcast:confirm:send"
+BROADCAST_NEW_PAYLOAD = "broadcast:new"
+BROADCAST_BACK_PAYLOAD = "broadcast:back"
+BROADCAST_HOME_PAYLOAD = "broadcast:home"
+
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
 
@@ -206,6 +215,82 @@ def yclients_confirm_keyboard() -> MaxInlineKeyboard:
             ],
         ]
     )
+
+
+def broadcast_menu_keyboard() -> MaxInlineKeyboard:
+    """Build one-time broadcast menu buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✉️ Разовая рассылка", payload=BROADCAST_ONE_TIME_START_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def broadcast_text_keyboard() -> MaxInlineKeyboard:
+    """Build navigation buttons for broadcast text input."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def broadcast_preview_keyboard() -> MaxInlineKeyboard:
+    """Build broadcast preview action buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Далее", payload=BROADCAST_PREVIEW_NEXT_PAYLOAD)],
+            [MaxButton(text="✏️ Изменить текст", payload=BROADCAST_PREVIEW_EDIT_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def broadcast_audience_keyboard() -> MaxInlineKeyboard:
+    """Build one-time broadcast audience buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="👥 Все пользователи", payload=BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def broadcast_confirm_keyboard(*, can_send: bool = True) -> MaxInlineKeyboard:
+    """Build final broadcast confirmation buttons."""
+
+    rows: list[list[MaxButton]] = []
+    if can_send:
+        rows.append([MaxButton(text="🚀 Отправить", payload=BROADCAST_CONFIRM_SEND_PAYLOAD)])
+    rows.extend(
+        [
+            [MaxButton(text="✏️ Изменить текст", payload=BROADCAST_PREVIEW_EDIT_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def broadcast_report_keyboard() -> MaxInlineKeyboard:
+    """Build final broadcast report buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="📣 Новая рассылка", payload=BROADCAST_NEW_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+
 
 def navigation_keyboard(*, back_payload: str = NAV_BACK_PAYLOAD) -> MaxInlineKeyboard:
     """Build Back/Home navigation buttons for section screens."""

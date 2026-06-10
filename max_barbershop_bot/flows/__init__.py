@@ -5,6 +5,7 @@ from __future__ import annotations
 from max_barbershop_bot.core.router import Router
 from max_barbershop_bot.flows.fallback import handle_unknown_callback, handle_unknown_text
 from max_barbershop_bot.flows.booking import register_booking_routes
+from max_barbershop_bot.flows.broadcasts import register_broadcast_routes
 from max_barbershop_bot.flows.contacts import register_contacts_routes
 from max_barbershop_bot.flows.menu import register_menu_routes
 from max_barbershop_bot.flows.my_bookings import register_my_bookings_routes
@@ -23,6 +24,7 @@ def create_router() -> Router:
     router.on_update("bot_started", handle_bot_started)
     router.on_text("/start", handle_start)
     register_menu_routes(router)
+    register_broadcast_routes(router)
     register_my_bookings_routes(router)
     register_booking_routes(router)
     register_contacts_routes(router)
