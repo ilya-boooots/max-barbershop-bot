@@ -11,6 +11,8 @@ DEFAULT_APP_ENV = "local"
 DEFAULT_DEV_LEGACY_ID = "378881880"
 DEFAULT_DATABASE_PATH = "data/max_barbershop_bot.sqlite3"
 DEFAULT_SUPPORT_USERNAME = "@XXX"
+DEFAULT_REMINDERS_ENABLED = True
+DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS = 300
 
 
 class ConfigError(RuntimeError):
@@ -28,6 +30,8 @@ class Config:
     dev_max_user_id: str | None = None
     database_path: str = DEFAULT_DATABASE_PATH
     support_username: str = DEFAULT_SUPPORT_USERNAME
+    reminders_enabled: bool = DEFAULT_REMINDERS_ENABLED
+    reminders_poll_interval_seconds: int = DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS
 
 
 def load_config() -> Config:
@@ -52,6 +56,12 @@ def load_config() -> Config:
         support_username=normalize_support_username(
             os.getenv("SUPPORT_USERNAME", DEFAULT_SUPPORT_USERNAME)
         ),
+        reminders_enabled=_bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED),
+        reminders_poll_interval_seconds=_int_env(
+            "REMINDERS_POLL_INTERVAL_SECONDS",
+            DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS,
+            minimum=30,
+        ),
     )
 
 
@@ -73,3 +83,21 @@ def normalize_support_username(raw: str | None) -> str:
     if not value:
         value = DEFAULT_SUPPORT_USERNAME.lstrip("@")
     return f"@{value}"
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "да"}
+
+
+def _int_env(name: str, default: int, *, minimum: int = 1) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return default
+    return max(minimum, parsed)
