@@ -10,6 +10,7 @@ from max_barbershop_bot.flows.client_segments import register_client_segment_rou
 from max_barbershop_bot.flows.contacts import register_contacts_routes
 from max_barbershop_bot.flows.lost_clients import register_lost_clients_routes
 from max_barbershop_bot.flows.menu import register_menu_routes
+from max_barbershop_bot.flows.settings import register_settings_routes
 from max_barbershop_bot.flows.my_bookings import register_my_bookings_routes
 from max_barbershop_bot.flows.notification_history import register_notification_history_routes
 from max_barbershop_bot.flows.registration import register_registration_routes
@@ -35,6 +36,7 @@ def create_router() -> Router:
     register_contacts_routes(router)
     register_support_routes(router)
     register_staff_routes(router)
+    register_settings_routes(router)
     register_notification_history_routes(router)
     register_statistics_routes(router)
     register_yclients_settings_routes(router)

@@ -123,6 +123,18 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS settings_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            actor_platform_user_id TEXT,
+            actor_role TEXT,
+            action TEXT NOT NULL,
+            section TEXT,
+            target_platform_user_id TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS notification_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -170,6 +182,14 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON notification_delivery(status);
         CREATE INDEX IF NOT EXISTS idx_notification_delivery_created_at
             ON notification_delivery(created_at);
+        CREATE INDEX IF NOT EXISTS idx_settings_audit_log_actor
+            ON settings_audit_log(platform, actor_platform_user_id);
+        CREATE INDEX IF NOT EXISTS idx_settings_audit_log_action
+            ON settings_audit_log(action);
+        CREATE INDEX IF NOT EXISTS idx_settings_audit_log_section
+            ON settings_audit_log(section);
+        CREATE INDEX IF NOT EXISTS idx_settings_audit_log_created_at
+            ON settings_audit_log(created_at);
         CREATE INDEX IF NOT EXISTS idx_notification_history_platform_user_id
             ON notification_history(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_notification_history_yclients_record_id
@@ -206,6 +226,13 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "yclients_settings", "is_active", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(connection, "yclients_settings", "created_at", "TEXT")
     _ensure_column(connection, "yclients_settings", "updated_at", "TEXT")
+    _ensure_column(connection, "settings_audit_log", "platform", "TEXT NOT NULL DEFAULT 'max'")
+    _ensure_column(connection, "settings_audit_log", "actor_platform_user_id", "TEXT")
+    _ensure_column(connection, "settings_audit_log", "actor_role", "TEXT")
+    _ensure_column(connection, "settings_audit_log", "section", "TEXT")
+    _ensure_column(connection, "settings_audit_log", "target_platform_user_id", "TEXT")
+    _ensure_column(connection, "settings_audit_log", "metadata_json", "TEXT")
+    _ensure_column(connection, "settings_audit_log", "created_at", "TEXT")
     _ensure_column(connection, "notification_history", "max_user_id", "TEXT")
     _ensure_column(connection, "notification_history", "chat_id", "TEXT")
     _ensure_column(connection, "notification_history", "yclients_client_id", "TEXT")

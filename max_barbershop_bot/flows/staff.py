@@ -23,6 +23,7 @@ from max_barbershop_bot.repositories.staff_roles import StaffRole, StaffRolesRep
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, User, UsersRepository
 from max_barbershop_bot.services.registration import mask_phone, normalize_phone
 from max_barbershop_bot.services.role_onboarding import notify_role_assigned, notify_role_removed
+from max_barbershop_bot.services.settings_audit import log_settings_action
 from max_barbershop_bot.ui.buttons import (
     ADMIN_STAFF_PAYLOAD,
     STAFF_ASSIGN_ADMIN_PAYLOAD,
@@ -177,6 +178,14 @@ async def handle_assign_role(context: RouterContext) -> None:
         assigned_by_platform_user_id=context.event.platform_user_id,
         platform=PLATFORM_MAX,
     )
+    log_settings_action(
+        actor_platform_user_id=context.event.platform_user_id,
+        actor_role=actor_role,
+        action="role_assigned",
+        section="roles",
+        target_platform_user_id=target.platform_user_id,
+        metadata={"role": new_role},
+    )
     await _answer_callback_if_needed(context, STAFF_ROLE_ASSIGNED_TEXT)
     state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.STAFF_MENU_SCREEN)
@@ -254,6 +263,14 @@ async def handle_remove_role(context: RouterContext) -> None:
     if not removed:
         await context.send_text(STAFF_NO_EXTRA_ROLES_TEXT, keyboard=navigation_keyboard())
         return
+    log_settings_action(
+        actor_platform_user_id=context.event.platform_user_id,
+        actor_role=actor_role,
+        action="role_removed",
+        section="roles",
+        target_platform_user_id=target.platform_user_id,
+        metadata={"role": removed_role},
+    )
     await _answer_callback_if_needed(context, STAFF_ROLE_REMOVED_TEXT)
     state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.STAFF_MENU_SCREEN)

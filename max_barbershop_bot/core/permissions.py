@@ -64,7 +64,39 @@ def can_manage_roles(role: str) -> bool:
 
 
 def can_view_settings(role: str) -> bool:
-    """Allow settings section for admins and developers."""
+    """Allow settings hub when at least one settings section is visible."""
+
+    return any(
+        (
+            can_view_yclients_settings(role),
+            can_view_contacts_settings(role),
+            can_view_notification_settings(role),
+            can_manage_roles(role),
+            can_view_diagnostics_settings(role),
+        )
+    )
+
+
+def can_view_yclients_settings(role: str) -> bool:
+    """Allow YClients settings for managers, admins and developers."""
+
+    return can_view_yclients(role)
+
+
+def can_view_contacts_settings(role: str) -> bool:
+    """Allow operational contacts settings for managers, admins and developers."""
+
+    return is_manager_or_higher(role)
+
+
+def can_view_notification_settings(role: str) -> bool:
+    """Allow notification settings status for managers, admins and developers."""
+
+    return is_manager_or_higher(role)
+
+
+def can_view_diagnostics_settings(role: str) -> bool:
+    """Allow diagnostics settings section for admins and developers."""
 
     return is_admin_or_higher(role)
 

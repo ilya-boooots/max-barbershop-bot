@@ -9,11 +9,15 @@ from max_barbershop_bot.core.permissions import (
     can_assign_role,
     can_manage_roles,
     can_view_broadcasts,
+    can_view_contacts_settings,
+    can_view_diagnostics_settings,
+    can_view_notification_history,
+    can_view_notification_settings,
     can_view_settings,
     can_view_staff,
     can_view_statistics,
     can_view_yclients,
-    can_view_notification_history,
+    can_view_yclients_settings,
     normalize_role,
 )
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
@@ -29,6 +33,16 @@ ADMIN_BROADCASTS_PAYLOAD = "admin:broadcasts"
 ADMIN_STATISTICS_PAYLOAD = "admin:statistics"
 ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
 ADMIN_NOTIFICATION_HISTORY_PAYLOAD = "admin:notification_history"
+
+SETTINGS_YCLIENTS_PAYLOAD = "settings:yclients"
+SETTINGS_CONTACTS_PAYLOAD = "settings:contacts"
+SETTINGS_NOTIFICATIONS_PAYLOAD = "settings:notifications"
+SETTINGS_ROLES_PAYLOAD = "settings:roles"
+SETTINGS_DIAGNOSTICS_PAYLOAD = "settings:diagnostics"
+SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD = "settings:diagnostics:notification_history"
+SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD = "settings:diagnostics:yclients_check"
+SETTINGS_BACK_PAYLOAD = "settings:back"
+SETTINGS_HOME_PAYLOAD = "settings:home"
 
 STATISTICS_TODAY_PAYLOAD = "stats:period:today"
 STATISTICS_7_DAYS_PAYLOAD = "stats:period:7"
@@ -156,6 +170,66 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="🧩 YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
+
+
+def settings_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
+    """Build settings hub buttons for the current role."""
+
+    normalized_role = normalize_role(role)
+    rows: list[list[MaxButton]] = []
+    if can_view_yclients_settings(normalized_role):
+        rows.append([MaxButton(text="🧩 YClients", payload=SETTINGS_YCLIENTS_PAYLOAD)])
+    if can_view_contacts_settings(normalized_role):
+        rows.append([MaxButton(text="📍 Контакты", payload=SETTINGS_CONTACTS_PAYLOAD)])
+    if can_view_notification_settings(normalized_role):
+        rows.append([MaxButton(text="🔔 Уведомления", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)])
+    if can_manage_roles(normalized_role):
+        rows.append([MaxButton(text="👥 Роли", payload=SETTINGS_ROLES_PAYLOAD)])
+    if can_view_diagnostics_settings(normalized_role):
+        rows.append([MaxButton(text="🛠 Диагностика", payload=SETTINGS_DIAGNOSTICS_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def settings_status_keyboard(*, include_contacts: bool = False) -> MaxInlineKeyboard:
+    """Build settings subsection navigation buttons."""
+
+    rows: list[list[MaxButton]] = []
+    if include_contacts:
+        rows.append([MaxButton(text="📍 Открыть контакты", payload=MENU_CONTACTS_PAYLOAD)])
+    rows.extend(
+        [
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def settings_notifications_keyboard() -> MaxInlineKeyboard:
+    """Build notification settings buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="🔔 История уведомлений", payload=SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def settings_diagnostics_keyboard() -> MaxInlineKeyboard:
+    """Build diagnostics settings buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="🔔 История уведомлений", payload=SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD)],
+            [MaxButton(text="🧩 Проверить YClients", payload=SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
 
 
 def statistics_period_keyboard() -> MaxInlineKeyboard:

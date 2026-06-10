@@ -13,6 +13,7 @@ from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
 from max_barbershop_bot.services.navigation import show_home
+from max_barbershop_bot.services.settings_audit import log_settings_action
 from max_barbershop_bot.services.yclients_settings import (
     check_yclients_connection,
     is_configured,
@@ -263,6 +264,19 @@ async def handle_save_settings(context: RouterContext) -> None:
         draft["company_id"],
         draft["branch_timezone"],
         bool(draft["branch_title"]),
+    )
+    log_settings_action(
+        actor_platform_user_id=context.event.platform_user_id,
+        actor_role=_actor_role(context),
+        action="yclients_settings_updated",
+        section="yclients",
+        metadata={
+            "company_id_present": bool(draft["company_id"]),
+            "partner_token_present": bool(draft["partner_token"]),
+            "user_token_present": bool(draft["user_token"]),
+            "branch_timezone": draft["branch_timezone"],
+            "branch_title_present": bool(draft["branch_title"]),
+        },
     )
     state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
     await _answer_callback_if_needed(context, YCLIENTS_SETTINGS_SAVED_TEXT)
