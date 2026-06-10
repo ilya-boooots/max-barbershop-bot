@@ -16,6 +16,7 @@ from max_barbershop_bot.flows.registration import register_registration_routes
 from max_barbershop_bot.flows.support import register_support_routes
 from max_barbershop_bot.flows.yclients_settings import register_yclients_settings_routes
 from max_barbershop_bot.flows.staff import register_staff_routes
+from max_barbershop_bot.flows.statistics import register_statistics_routes
 from max_barbershop_bot.flows.start import handle_bot_started, handle_start
 
 
@@ -35,6 +36,7 @@ def create_router() -> Router:
     register_support_routes(router)
     register_staff_routes(router)
     register_notification_history_routes(router)
+    register_statistics_routes(router)
     register_yclients_settings_routes(router)
     register_registration_routes(router)
     router.on_unknown_text(handle_unknown_text)
