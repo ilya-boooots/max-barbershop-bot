@@ -194,6 +194,7 @@ async def open_segment_broadcast_text(
     audience_key: str,
     audience_label: str,
     recipients: list[BroadcastRecipient],
+    return_screen: str = state.CLIENT_SEGMENT_RESULT_SCREEN,
 ) -> None:
     """Start one-time broadcast wizard with a prepared segment audience."""
 
@@ -202,7 +203,7 @@ async def open_segment_broadcast_text(
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience_label)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENT_COUNT_KEY, len(recipients))
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENTS_KEY, recipients)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY, state.CLIENT_SEGMENT_RESULT_SCREEN)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY, return_screen)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
     await context.send_text(
         f"📣 Рассылка по сегменту\n\nАудитория: {audience_label}\nПолучателей в MAX: {len(recipients)}\n\nВведите текст рассылки 👇",
@@ -291,6 +292,9 @@ async def handle_broadcast_back(context: RouterContext) -> None:
         if return_screen == state.CLIENT_SEGMENT_RESULT_SCREEN:
             state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENT_RESULT_SCREEN)
             await context.send_text("Вернитесь к сегменту через меню рассылки 🎯", keyboard=broadcast_menu_keyboard())
+        elif return_screen == state.LOST_CLIENTS_SCREEN:
+            state.set_current_screen(_user_id(context), _chat_id(context), state.LOST_CLIENTS_SCREEN)
+            await context.send_text("Вернитесь к потерянным клиентам через меню сегментов 😔", keyboard=broadcast_menu_keyboard())
         else:
             state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
             await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
