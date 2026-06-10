@@ -315,6 +315,31 @@ class UsersRepository:
             connection.commit()
             return self.find_by_platform_user_id(platform_user_id, platform=platform)
 
+    def list_broadcast_recipients(
+        self,
+        *,
+        platform: str = PLATFORM_MAX,
+        notifications_enabled: bool = True,
+    ) -> list[User]:
+        """Return users who have a reachable MAX address for one-time broadcasts."""
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM users
+                WHERE platform = ?
+                  AND notifications_enabled = ?
+                  AND (NULLIF(TRIM(COALESCE(max_user_id, '')), '') IS NOT NULL
+                       OR NULLIF(TRIM(COALESCE(chat_id, '')), '') IS NOT NULL)
+                ORDER BY id ASC
+                """,
+                (
+                    _required_text(platform, "platform"),
+                    _bool_to_int(notifications_enabled),
+                ),
+            ).fetchall()
+        return [user for row in rows if (user := _row_to_user(row)) is not None]
+
     def update_notification_settings(
         self,
         platform_user_id: str,

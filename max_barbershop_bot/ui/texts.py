@@ -86,6 +86,16 @@ STAFF_ROLE_ASSIGNED_TEXT = "Роль успешно выдана ✅"
 STAFF_ROLE_REMOVED_TEXT = "Роль успешно снята ✅"
 STAFF_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
 
+BROADCAST_MENU_TEXT = """📣 Рассылка
+
+Выберите действие:"""
+BROADCAST_TEXT_INPUT_TEXT = "Введите текст рассылки 👇"
+BROADCAST_EMPTY_TEXT = "Текст рассылки не может быть пустым 🙏"
+BROADCAST_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
+BROADCAST_NO_RECIPIENTS_TEXT = "Нет получателей для рассылки 🙏"
+BROADCAST_SENDING_TEXT = "Рассылка отправляется, подождите немного ⏳"
+BROADCAST_ALREADY_SENDING_TEXT = "Рассылка уже отправляется, подождите немного ⏳"
+
 
 YCLIENTS_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
 YCLIENTS_NOT_CONFIGURED_TEXT = """YClients пока не настроен 🙏
