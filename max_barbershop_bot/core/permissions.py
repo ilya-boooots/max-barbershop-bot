@@ -87,6 +87,12 @@ def can_view_yclients(role: str) -> bool:
     return is_manager_or_higher(role)
 
 
+def can_view_notification_history(role: str) -> bool:
+    """Allow notification diagnostics for managers, admins and developers."""
+
+    return is_manager_or_higher(role)
+
+
 def can_assign_role(actor_role: str, target_role: str) -> bool:
     """Check whether an actor role may assign a target role."""
 

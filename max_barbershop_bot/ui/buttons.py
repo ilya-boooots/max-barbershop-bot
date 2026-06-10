@@ -13,6 +13,7 @@ from max_barbershop_bot.core.permissions import (
     can_view_staff,
     can_view_statistics,
     can_view_yclients,
+    can_view_notification_history,
     normalize_role,
 )
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
@@ -27,6 +28,12 @@ ADMIN_SETTINGS_PAYLOAD = "admin:settings"
 ADMIN_BROADCASTS_PAYLOAD = "admin:broadcasts"
 ADMIN_STATISTICS_PAYLOAD = "admin:statistics"
 ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
+ADMIN_NOTIFICATION_HISTORY_PAYLOAD = "admin:notification_history"
+
+NOTIFICATION_HISTORY_FAILED_PAYLOAD = "notification_history:failed"
+NOTIFICATION_HISTORY_REFRESH_PAYLOAD = "notification_history:refresh"
+NOTIFICATION_HISTORY_BACK_PAYLOAD = "notification_history:back"
+NOTIFICATION_HISTORY_DETAIL_PAYLOAD_PREFIX = "notification_history:detail:"
 
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
@@ -88,6 +95,7 @@ MENU_PAYLOADS = frozenset(
         ADMIN_BROADCASTS_PAYLOAD,
         ADMIN_STATISTICS_PAYLOAD,
         ADMIN_YCLIENTS_PAYLOAD,
+        ADMIN_NOTIFICATION_HISTORY_PAYLOAD,
     }
 )
 
@@ -111,10 +119,51 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="📣 Рассылка", payload=ADMIN_BROADCASTS_PAYLOAD)])
     if can_view_statistics(normalized_role):
         rows.append([MaxButton(text="📊 Статистика", payload=ADMIN_STATISTICS_PAYLOAD)])
+    if can_view_notification_history(normalized_role):
+        rows.append([MaxButton(text="📜 История уведомлений", payload=ADMIN_NOTIFICATION_HISTORY_PAYLOAD)])
     if can_view_yclients(normalized_role):
         rows.append([MaxButton(text="🧩 YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
+
+
+def notification_history_keyboard(
+    records: list[object],
+    *,
+    failed: bool = False,
+    back_payload: str = NOTIFICATION_HISTORY_BACK_PAYLOAD,
+) -> MaxInlineKeyboard:
+    """Build notification history diagnostics buttons."""
+
+    rows: list[list[MaxButton]] = []
+    for index, record in enumerate(records[:20]):
+        rows.append(
+            [
+                MaxButton(
+                    text=f"#{getattr(record, 'id')}",
+                    payload=f"{NOTIFICATION_HISTORY_DETAIL_PAYLOAD_PREFIX}{index}",
+                )
+            ]
+        )
+    if failed:
+        rows.append([MaxButton(text="🔄 Обновить", payload=NOTIFICATION_HISTORY_FAILED_PAYLOAD)])
+    else:
+        rows.append([MaxButton(text="❌ Ошибки", payload=NOTIFICATION_HISTORY_FAILED_PAYLOAD)])
+        rows.append([MaxButton(text="🔄 Обновить", payload=NOTIFICATION_HISTORY_REFRESH_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def notification_history_detail_keyboard() -> MaxInlineKeyboard:
+    """Build notification history detail navigation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=NOTIFICATION_HISTORY_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
 
 
 def yclients_settings_keyboard() -> MaxInlineKeyboard:
