@@ -9,7 +9,7 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
-from max_barbershop_bot.ui.screens import main_menu_screen, placeholder_screen, staff_menu_screen
+from max_barbershop_bot.ui.screens import main_menu_screen, placeholder_screen, settings_menu_screen, staff_menu_screen
 
 
 def _user_id(context: RouterContext) -> str | None:
@@ -51,6 +51,13 @@ async def render_screen(context: RouterContext, screen_id: str) -> None:
         screen = main_menu_screen(_current_role(context))
     elif screen_id == state.STAFF_MENU_SCREEN:
         screen = staff_menu_screen(_current_role(context))
+    elif screen_id in {
+        state.SETTINGS_MENU_SCREEN,
+        state.SETTINGS_CONTACTS_SCREEN,
+        state.SETTINGS_NOTIFICATIONS_SCREEN,
+        state.SETTINGS_DIAGNOSTICS_SCREEN,
+    }:
+        screen = settings_menu_screen(_current_role(context))
     else:
         screen = placeholder_screen()
 

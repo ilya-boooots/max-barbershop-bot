@@ -153,3 +153,10 @@ Company ID: {company_id}
 Часовой пояс: {branch_timezone}
 
 Токены будут сохранены в скрытом виде 🔐"""
+
+SETTINGS_MENU_TEXT = """⚙️ Настройки
+
+Выберите раздел:"""
+SETTINGS_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
+SETTINGS_CONTACTS_EDIT_SOON_TEXT = "Редактирование контактов добавим отдельным шагом 🔧"
+SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT = "Управление уведомлениями добавим отдельным шагом 🔧"
