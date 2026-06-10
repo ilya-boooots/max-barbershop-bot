@@ -149,6 +149,22 @@ class PlatformAttributionRepository:
             ).fetchall()
             return [_row_to_record(row) for row in rows if row is not None]
 
+
+    def list_with_yclients_record_ids(self, *, platform: str = PLATFORM_MAX, limit: int = 500) -> list[AttributionRecord]:
+        """List latest attribution rows that can be verified against YClients records."""
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM platform_attribution
+                WHERE platform = ? AND yclients_record_id IS NOT NULL AND TRIM(yclients_record_id) <> ''
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (_required_text(platform, "platform"), max(1, int(limit))),
+            ).fetchall()
+            return [_row_to_record(row) for row in rows if row is not None]
+
     def exists_for_yclients_record(self, yclients_record_id: str) -> bool:
         """Return True when attribution exists for a YClients record id."""
 

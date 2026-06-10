@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from os import getenv
 
 from max_barbershop_bot.core import state
@@ -29,6 +30,7 @@ from max_barbershop_bot.services.booking import (
     has_available_services,
 )
 from max_barbershop_bot.services.navigation import show_home
+from max_barbershop_bot.services.reminders import send_immediate_confirmation
 from max_barbershop_bot.ui.buttons import (
     BOOKING_BACK_PAYLOAD,
     BOOKING_CATEGORY_NEXT_PAYLOAD,
@@ -298,7 +300,6 @@ async def handle_booking_confirm(context: RouterContext) -> None:
         return
     if _state_value(context, _BOOKING_COMPLETED_RECORD_ID_STATE_KEY):
         await context.answer_callback("Запись уже создана ✅")
-        await _show_booking_success(context)
         return
 
     booking_data = _booking_state_snapshot(context)
@@ -345,7 +346,7 @@ async def handle_booking_confirm(context: RouterContext) -> None:
         yclients_record_id=created.yclients_record_id,
         yclients_client_id=created.yclients_client_id or user.yclients_client_id,
     )
-    await _show_booking_success(context)
+    await _send_immediate_confirmation_safely(context, created=created, user=user, booking_data=booking_data)
 
 
 async def handle_booking_back(context: RouterContext) -> None:
@@ -525,6 +526,57 @@ async def _show_booking_success(context: RouterContext) -> None:
         format_booking_success(_booking_state_snapshot(context), timezone_name=timezone_name),
         keyboard=booking_success_keyboard(),
     )
+
+
+async def _send_immediate_confirmation_safely(context: RouterContext, *, created, user, booking_data: dict) -> None:
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    timezone_name = booking_service.get_branch_timezone()
+    state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SUCCESS_SCREEN)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+
+    booking_datetime = _parse_booking_datetime(created.datetime_iso or booking_data.get("selected_datetime"), timezone_name)
+    try:
+        history = await send_immediate_confirmation(
+            context.sender,
+            database_path=_database_path(),
+            platform_user_id=user.platform_user_id,
+            max_user_id=user.max_user_id or context.event.max_user_id,
+            chat_id=user.chat_id or context.event.chat_id,
+            yclients_record_id=created.yclients_record_id,
+            yclients_client_id=created.yclients_client_id or user.yclients_client_id,
+            booking_datetime=booking_datetime,
+            service_name=str(booking_data.get("selected_service_name") or "услуга"),
+            master_name=str(booking_data.get("selected_master_name") or "ваш мастер"),
+            timezone_name=timezone_name,
+            keyboard=booking_success_keyboard(),
+        )
+        if history is None or history.status != "sent":
+            await _show_booking_success(context)
+    except Exception as exc:  # noqa: BLE001 - booking is already created; keep success flow intact.
+        logger.warning(
+            "Booking immediate confirmation failed safely: platform_user_id=%s yclients_record_id=%s error_class=%s",
+            user.platform_user_id,
+            created.yclients_record_id,
+            type(exc).__name__,
+        )
+        await _show_booking_success(context)
+
+
+def _parse_booking_datetime(value: object | None, timezone_name: str) -> datetime:
+    raw = str(value or "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                from zoneinfo import ZoneInfo
+
+                parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
+            return parsed
+        except Exception:
+            logger.warning("Booking datetime parse failed safely: value_present=%s", bool(raw))
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo(timezone_name))
 
 
 def _booking_state_snapshot(context: RouterContext) -> dict[str, object | None]:

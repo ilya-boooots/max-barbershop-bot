@@ -8,7 +8,7 @@ import signal
 import sys
 from collections.abc import Iterable
 
-from max_barbershop_bot.core.config import ConfigError, load_config
+from max_barbershop_bot.core.config import Config, ConfigError, load_config
 from max_barbershop_bot.core.events import normalize_update
 from max_barbershop_bot.core.logging import configure_logging
 from max_barbershop_bot.core.router import Router
@@ -16,6 +16,7 @@ from max_barbershop_bot.db.sqlite import init_database
 from max_barbershop_bot.flows import create_router
 from max_barbershop_bot.max_api.client import MaxApiClient, MaxApiError
 from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.services.reminders import run_reminder_loop
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def _install_signal_handlers(stop_event: asyncio.Event, signals: Iterable[signal
 STARTUP_NOTIFICATION_TEXT = "✅ Бот запущен и активен"
 
 
-async def _run_dev_polling_runtime(client: MaxApiClient) -> None:
+async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None:
     """Run development/test Long Polling until graceful shutdown."""
 
     stop_event = asyncio.Event()
@@ -44,14 +45,32 @@ async def _run_dev_polling_runtime(client: MaxApiClient) -> None:
     router = create_router()
     sender = MaxMessageSender(client)
     polling_task = asyncio.create_task(_poll_dev_updates(client, sender, router, stop_event))
+    reminder_task: asyncio.Task | None = None
+    if config.reminders_enabled:
+        reminder_task = asyncio.create_task(
+            run_reminder_loop(
+                sender,
+                database_path=config.database_path,
+                stop_event=stop_event,
+                interval_seconds=config.reminders_poll_interval_seconds,
+            ),
+            name="booking-reminders",
+        )
+    else:
+        logger.info("Booking reminders disabled by REMINDERS_ENABLED")
     try:
         await stop_event.wait()
     finally:
         polling_task.cancel()
-        try:
-            await polling_task
-        except asyncio.CancelledError:
-            pass
+        tasks = [polling_task]
+        if reminder_task is not None:
+            reminder_task.cancel()
+            tasks.append(reminder_task)
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 async def _poll_dev_updates(
@@ -172,7 +191,7 @@ async def run() -> None:
             await _send_startup_notification(client, config.dev_max_user_id)
         else:
             logger.info("Startup notification skipped because MAX API startup-check failed")
-        await _run_dev_polling_runtime(client)
+        await _run_dev_polling_runtime(client, config)
     finally:
         await client.close()
         logger.info("🛑 MAX Barbershop Bot остановлен")
