@@ -9,6 +9,7 @@ import sys
 from collections.abc import Iterable
 
 from max_barbershop_bot.core.config import Config, ConfigError, load_config
+from max_barbershop_bot.core.error_handler import ErrorDiagnostics
 from max_barbershop_bot.core.events import normalize_update
 from max_barbershop_bot.core.logging import configure_logging
 from max_barbershop_bot.core.router import Router
@@ -42,9 +43,10 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event, (signal.SIGINT, signal.SIGTERM))
 
-    router = create_router()
+    router = create_router(config)
     sender = MaxMessageSender(client)
-    polling_task = asyncio.create_task(_poll_dev_updates(client, sender, router, stop_event))
+    diagnostics = ErrorDiagnostics.from_config(config)
+    polling_task = asyncio.create_task(_poll_dev_updates(client, sender, router, stop_event, diagnostics))
     reminder_task: asyncio.Task | None = None
     if config.reminders_enabled:
         reminder_task = asyncio.create_task(
@@ -53,6 +55,11 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
                 database_path=config.database_path,
                 stop_event=stop_event,
                 interval_seconds=config.reminders_poll_interval_seconds,
+                error_callback=lambda error: diagnostics.handle_runtime_exception(
+                    exception=error,
+                    sender=sender,
+                    location="booking_reminder_loop",
+                ),
             ),
             name="booking-reminders",
         )
@@ -78,6 +85,7 @@ async def _poll_dev_updates(
     sender: MaxMessageSender,
     router: Router,
     stop_event: asyncio.Event,
+    diagnostics: ErrorDiagnostics,
 ) -> None:
     """Receive MAX updates, normalize them and dispatch to flow handlers."""
 
@@ -99,6 +107,14 @@ async def _poll_dev_updates(
             )
             await _sleep_until_stop(stop_event, 1.0)
             continue
+        except Exception as error:
+            await diagnostics.handle_runtime_exception(
+                exception=error,
+                sender=sender,
+                location="updates_polling",
+            )
+            await _sleep_until_stop(stop_event, 1.0)
+            continue
 
         for update in updates:
             try:
@@ -106,8 +122,12 @@ async def _poll_dev_updates(
                 await router.dispatch(event, sender)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.exception("⚠️ MAX update processing failed safely")
+            except Exception as error:
+                await diagnostics.handle_runtime_exception(
+                    exception=error,
+                    sender=sender,
+                    location="update_processing",
+                )
 
         if not updates:
             await _sleep_until_stop(stop_event, 0.1)

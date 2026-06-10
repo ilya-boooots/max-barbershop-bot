@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from max_barbershop_bot.core import state
+from max_barbershop_bot.core.config import Config
+from max_barbershop_bot.core.error_handler import ErrorDiagnostics
 from max_barbershop_bot.core.events import NormalizedEvent
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
@@ -61,13 +63,14 @@ class RouterContext:
 class Router:
     """Beginner-friendly router for normalized MAX updates."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: Config | None = None) -> None:
         self._update_handlers: dict[str, EventHandler] = {}
         self._text_handlers: dict[str, EventHandler] = {}
         self._callback_handlers: dict[str, EventHandler] = {}
         self._screen_text_handlers: dict[str, EventHandler] = {}
         self._unknown_text_handler: EventHandler | None = None
         self._unknown_callback_handler: EventHandler | None = None
+        self._error_diagnostics = ErrorDiagnostics.from_config(config)
 
     def on_update(self, update_type: str, handler: EventHandler) -> None:
         """Register a handler for an update type, for example bot_started."""
@@ -112,12 +115,12 @@ class Router:
             result = handler(RouterContext(event=event, sender=sender))
             if inspect.isawaitable(result):
                 await result
-        except Exception:
-            logger.exception(
-                "MAX handler failed safely: update_type=%s text=%r callback_payload=%r",
-                event.update_type,
-                self._safe_log_text(event),
-                event.callback_payload,
+        except Exception as error:
+            await self._error_diagnostics.handle_handler_exception(
+                exception=error,
+                event=event,
+                sender=sender,
+                handler_name=_handler_name(handler),
             )
 
     def _resolve_handler(self, event: NormalizedEvent) -> EventHandler | None:
@@ -375,3 +378,7 @@ def _yclients_setup_step(screen_id: str) -> str | None:
         state.YCLIENTS_SETUP_BRANCH_TITLE_SCREEN: "branch_title",
         state.YCLIENTS_SETUP_CONFIRM_SCREEN: "confirm",
     }.get(screen_id)
+
+
+def _handler_name(handler: EventHandler) -> str:
+    return getattr(handler, "__qualname__", None) or getattr(handler, "__name__", None) or type(handler).__name__
