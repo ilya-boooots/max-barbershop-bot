@@ -44,6 +44,11 @@ SEGMENTS_ACTIVE_7_PAYLOAD = "segments:active:7"
 SEGMENTS_ACTIVE_30_PAYLOAD = "segments:active:30"
 SEGMENTS_ACTIVE_90_PAYLOAD = "segments:active:90"
 SEGMENTS_LOST_PAYLOAD = "segments:lost"
+LOST_CLIENTS_OPEN_PAYLOAD = "lost_clients:open"
+LOST_CLIENTS_REFRESH_PAYLOAD = "lost_clients:refresh"
+LOST_CLIENTS_BROADCAST_PAYLOAD = "lost_clients:broadcast"
+LOST_CLIENTS_BACK_PAYLOAD = "lost_clients:back"
+LOST_CLIENTS_HOME_PAYLOAD = "lost_clients:home"
 SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD = "segments:no_future_bookings"
 SEGMENTS_REFRESH_PAYLOAD = "segments:refresh"
 SEGMENTS_BROADCAST_PAYLOAD = "segments:broadcast"
@@ -248,12 +253,28 @@ def client_segments_menu_keyboard() -> MaxInlineKeyboard:
             [MaxButton(text="🔥 Активные за 7 дней", payload=SEGMENTS_ACTIVE_7_PAYLOAD)],
             [MaxButton(text="📆 Активные за 30 дней", payload=SEGMENTS_ACTIVE_30_PAYLOAD)],
             [MaxButton(text="🗓 Активные за 90 дней", payload=SEGMENTS_ACTIVE_90_PAYLOAD)],
-            [MaxButton(text="😔 Потерянные клиенты", payload=SEGMENTS_LOST_PAYLOAD)],
+            [MaxButton(text="😔 Потерянные клиенты", payload=LOST_CLIENTS_OPEN_PAYLOAD)],
             [MaxButton(text="📭 Без будущих записей", payload=SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
         ]
     )
+
+
+def lost_clients_result_keyboard(*, can_broadcast: bool = False) -> MaxInlineKeyboard:
+    """Build buttons for the dedicated lost clients screen."""
+
+    rows: list[list[MaxButton]] = []
+    if can_broadcast:
+        rows.append([MaxButton(text="📣 Запустить рассылку", payload=LOST_CLIENTS_BROADCAST_PAYLOAD)])
+    rows.extend(
+        [
+            [MaxButton(text="🔄 Обновить", payload=LOST_CLIENTS_REFRESH_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=LOST_CLIENTS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=LOST_CLIENTS_HOME_PAYLOAD)],
+        ]
+    )
+    return MaxInlineKeyboard.from_rows(rows)
 
 
 def client_segment_result_keyboard(*, can_broadcast: bool = False) -> MaxInlineKeyboard:

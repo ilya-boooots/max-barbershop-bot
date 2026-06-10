@@ -49,6 +49,7 @@ BROADCAST_ONE_TIME_SENDING_SCREEN = "broadcast_one_time_sending"
 BROADCAST_ONE_TIME_REPORT_SCREEN = "broadcast_one_time_report"
 CLIENT_SEGMENTS_MENU_SCREEN = "client_segments_menu"
 CLIENT_SEGMENT_RESULT_SCREEN = "client_segment_result"
+LOST_CLIENTS_SCREEN = "lost_clients"
 BROADCASTS_PLACEHOLDER_SCREEN = BROADCAST_MENU_SCREEN
 STATISTICS_PLACEHOLDER_SCREEN = "statistics_placeholder"
 YCLIENTS_PLACEHOLDER_SCREEN = "yclients_placeholder"
