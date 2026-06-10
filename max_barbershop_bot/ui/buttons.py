@@ -39,6 +39,16 @@ BROADCAST_ONE_TIME_START_PAYLOAD = "broadcast:one_time:start"
 BROADCAST_PREVIEW_NEXT_PAYLOAD = "broadcast:preview:next"
 BROADCAST_PREVIEW_EDIT_PAYLOAD = "broadcast:preview:edit"
 BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD = "broadcast:audience:all_users"
+BROADCAST_SEGMENTS_PAYLOAD = "broadcast:segments"
+SEGMENTS_ACTIVE_7_PAYLOAD = "segments:active:7"
+SEGMENTS_ACTIVE_30_PAYLOAD = "segments:active:30"
+SEGMENTS_ACTIVE_90_PAYLOAD = "segments:active:90"
+SEGMENTS_LOST_PAYLOAD = "segments:lost"
+SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD = "segments:no_future_bookings"
+SEGMENTS_REFRESH_PAYLOAD = "segments:refresh"
+SEGMENTS_BROADCAST_PAYLOAD = "segments:broadcast"
+SEGMENTS_BACK_PAYLOAD = "segments:back"
+SEGMENTS_HOME_PAYLOAD = "segments:home"
 BROADCAST_CONFIRM_SEND_PAYLOAD = "broadcast:confirm:send"
 BROADCAST_NEW_PAYLOAD = "broadcast:new"
 BROADCAST_BACK_PAYLOAD = "broadcast:back"
@@ -223,10 +233,43 @@ def broadcast_menu_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(
         [
             [MaxButton(text="✉️ Разовая рассылка", payload=BROADCAST_ONE_TIME_START_PAYLOAD)],
+            [MaxButton(text="🎯 Сегменты клиентов", payload=BROADCAST_SEGMENTS_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
         ]
     )
+
+
+def client_segments_menu_keyboard() -> MaxInlineKeyboard:
+    """Build client segments selection buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="🔥 Активные за 7 дней", payload=SEGMENTS_ACTIVE_7_PAYLOAD)],
+            [MaxButton(text="📆 Активные за 30 дней", payload=SEGMENTS_ACTIVE_30_PAYLOAD)],
+            [MaxButton(text="🗓 Активные за 90 дней", payload=SEGMENTS_ACTIVE_90_PAYLOAD)],
+            [MaxButton(text="😔 Потерянные клиенты", payload=SEGMENTS_LOST_PAYLOAD)],
+            [MaxButton(text="📭 Без будущих записей", payload=SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def client_segment_result_keyboard(*, can_broadcast: bool = False) -> MaxInlineKeyboard:
+    """Build buttons for a calculated client segment."""
+
+    rows: list[list[MaxButton]] = []
+    if can_broadcast:
+        rows.append([MaxButton(text="📣 Сделать рассылку по сегменту", payload=SEGMENTS_BROADCAST_PAYLOAD)])
+    rows.extend(
+        [
+            [MaxButton(text="🔄 Обновить", payload=SEGMENTS_REFRESH_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
+        ]
+    )
+    return MaxInlineKeyboard.from_rows(rows)
 
 
 def broadcast_text_keyboard() -> MaxInlineKeyboard:
