@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -333,6 +334,7 @@ async def run_reminder_loop(
     database_path: str,
     stop_event: asyncio.Event,
     interval_seconds: int,
+    error_callback: Callable[[Exception], Awaitable[object]] | None = None,
 ) -> None:
     """Run a small reminder loop alongside polling."""
 
@@ -345,8 +347,14 @@ async def run_reminder_loop(
                 logger.info("booking_reminder_loop_processed count=%s", count)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("booking_reminder_loop_failed_safely")
+        except Exception as error:
+            if error_callback is None:
+                logger.exception("booking_reminder_loop_failed_safely")
+            else:
+                try:
+                    await error_callback(error)
+                except Exception:
+                    logger.exception("booking_reminder_loop_diagnostics_failed_safely")
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
         except TimeoutError:

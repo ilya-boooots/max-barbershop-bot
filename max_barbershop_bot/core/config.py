@@ -13,6 +13,7 @@ DEFAULT_DATABASE_PATH = "data/max_barbershop_bot.sqlite3"
 DEFAULT_SUPPORT_USERNAME = "@XXX"
 DEFAULT_REMINDERS_ENABLED = True
 DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS = 300
+DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED = True
 
 
 class ConfigError(RuntimeError):
@@ -32,6 +33,7 @@ class Config:
     support_username: str = DEFAULT_SUPPORT_USERNAME
     reminders_enabled: bool = DEFAULT_REMINDERS_ENABLED
     reminders_poll_interval_seconds: int = DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS
+    developer_diagnostics_enabled: bool = DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED
 
 
 def load_config() -> Config:
@@ -61,6 +63,10 @@ def load_config() -> Config:
             "REMINDERS_POLL_INTERVAL_SECONDS",
             DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS,
             minimum=30,
+        ),
+        developer_diagnostics_enabled=_bool_env(
+            "DEVELOPER_DIAGNOSTICS_ENABLED",
+            DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED,
         ),
     )
 
