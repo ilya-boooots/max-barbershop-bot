@@ -9,6 +9,7 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
+from max_barbershop_bot.services.registration import is_registered
 from max_barbershop_bot.ui.screens import main_menu_screen, placeholder_screen, settings_menu_screen, staff_menu_screen
 
 
@@ -21,7 +22,13 @@ def _chat_id(context: RouterContext) -> str | None:
 
 
 async def show_home(context: RouterContext) -> None:
-    """Show the main menu and reset the navigation stack."""
+    """Show the main menu and reset navigation, keeping unfinished registration required."""
+
+    if not _is_current_user_registered(context):
+        from max_barbershop_bot.flows.registration import start_registration
+
+        await start_registration(context)
+        return
 
     state.reset_to_home(_user_id(context), _chat_id(context))
     await render_screen(context, state.MAIN_MENU_SCREEN)
@@ -75,6 +82,14 @@ def _current_role(context: RouterContext) -> str:
     if user is None:
         return "user"
     return StaffRolesRepository(database_path).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+
+
+def _is_current_user_registered(context: RouterContext) -> bool:
+    platform_user_id = context.event.platform_user_id
+    if platform_user_id is None:
+        return False
+    user = UsersRepository(_database_path()).find_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+    return is_registered(user)
 
 
 def _database_path() -> str:
