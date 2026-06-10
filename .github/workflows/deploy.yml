@@ -9,6 +9,10 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      APP_DIR: /opt/bots/max-barbershop-bot
+      SERVICE_NAME: max-barbershop-bot.service
+      SERVER_PORT: ${{ secrets.SERVER_PORT || '22' }}
 
     steps:
       - name: Checkout repository
@@ -17,43 +21,79 @@ jobs:
       - name: Prepare SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${SERVER_PORT}" -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Upload project to server
+      - name: Deploy MAX bot on server
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          MAX_BOT_TOKEN: ${{ secrets.MAX_BOT_TOKEN }}
+          DEV_MAX_USER_ID: ${{ secrets.DEV_MAX_USER_ID }}
+          DATABASE_PATH: ${{ secrets.DATABASE_PATH }}
+          SUPPORT_USERNAME: ${{ secrets.SUPPORT_USERNAME }}
+          REMINDERS_ENABLED: ${{ secrets.REMINDERS_ENABLED }}
+          REMINDERS_POLL_INTERVAL_SECONDS: ${{ secrets.REMINDERS_POLL_INTERVAL_SECONDS }}
+          BROADCAST_SEND_DELAY_SECONDS: ${{ secrets.BROADCAST_SEND_DELAY_SECONDS }}
+          BROADCAST_BATCH_SIZE: ${{ secrets.BROADCAST_BATCH_SIZE }}
+          BROADCAST_BATCH_PAUSE_SECONDS: ${{ secrets.BROADCAST_BATCH_PAUSE_SECONDS }}
+          REPO_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
         run: |
-          rsync -az --delete \
-            --exclude ".git" \
-            --exclude ".github" \
-            --exclude ".venv" \
-            --exclude ".env" \
-            -e "ssh -i ~/.ssh/deploy_key" \
-            ./ "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/bots/max-barbershop-bot/"
+          ssh -p "${SERVER_PORT}" -i ~/.ssh/deploy_key "${SERVER_USER}@${SERVER_HOST}" \
+            APP_DIR="${APP_DIR}" \
+            SERVICE_NAME="${SERVICE_NAME}" \
+            REPO_URL="${REPO_URL}" \
+            MAX_BOT_TOKEN="${MAX_BOT_TOKEN}" \
+            DEV_MAX_USER_ID="${DEV_MAX_USER_ID}" \
+            DATABASE_PATH="${DATABASE_PATH:-/opt/bots/max-barbershop-bot/data/max_barbershop_bot.sqlite3}" \
+            SUPPORT_USERNAME="${SUPPORT_USERNAME:-@XXX}" \
+            REMINDERS_ENABLED="${REMINDERS_ENABLED:-false}" \
+            REMINDERS_POLL_INTERVAL_SECONDS="${REMINDERS_POLL_INTERVAL_SECONDS:-300}" \
+            BROADCAST_SEND_DELAY_SECONDS="${BROADCAST_SEND_DELAY_SECONDS:-0.1}" \
+            BROADCAST_BATCH_SIZE="${BROADCAST_BATCH_SIZE:-20}" \
+            BROADCAST_BATCH_PAUSE_SECONDS="${BROADCAST_BATCH_PAUSE_SECONDS:-1.0}" \
+            'bash -s' <<'REMOTE'
+          set -euo pipefail
 
-      - name: Install dependencies and restart bot
-        run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << 'EOF'
-            set -e
+          sudo mkdir -p "${APP_DIR}" "${APP_DIR}/data"
+          sudo chown -R "$(id -u):$(id -g)" "${APP_DIR}"
 
-            cd /opt/bots/max-barbershop-bot
+          if [ -d "${APP_DIR}/.git" ]; then
+            git -C "${APP_DIR}" fetch --depth=1 "${REPO_URL}" main
+            git -C "${APP_DIR}" reset --hard FETCH_HEAD
+          else
+            tmp_dir="$(mktemp -d)"
+            git clone --depth=1 "${REPO_URL}" "${tmp_dir}"
+            rsync -a --exclude .env --exclude data/ "${tmp_dir}/" "${APP_DIR}/"
+            rm -rf "${tmp_dir}"
+          fi
 
-            python3 -m venv .venv
-            .venv/bin/pip install --upgrade pip
+          mkdir -p "${APP_DIR}/data"
+          python3 -m venv "${APP_DIR}/.venv"
+          "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
+          if [ -f "${APP_DIR}/requirements.txt" ]; then
+            "${APP_DIR}/.venv/bin/python" -m pip install -r "${APP_DIR}/requirements.txt"
+          fi
 
-            if [ -f requirements.txt ]; then
-              .venv/bin/pip install -r requirements.txt
-            fi
-
-            cat > .env << ENVEOF
-          MAX_BOT_TOKEN=${{ secrets.MAX_BOT_TOKEN }}
-          LOG_LEVEL=INFO
-          APP_ENV=production
-          DEV_TG_ID=378881880
-          DEV_MAX_USER_ID=${{ secrets.DEV_MAX_USER_ID }}
+          umask 077
+          cat > "${APP_DIR}/.env" <<ENVEOF
+          MAX_BOT_TOKEN=${MAX_BOT_TOKEN}
+          DEV_MAX_USER_ID=${DEV_MAX_USER_ID}
+          DATABASE_PATH=${DATABASE_PATH}
+          SUPPORT_USERNAME=${SUPPORT_USERNAME}
+          REMINDERS_ENABLED=${REMINDERS_ENABLED}
+          REMINDERS_POLL_INTERVAL_SECONDS=${REMINDERS_POLL_INTERVAL_SECONDS}
+          BROADCAST_SEND_DELAY_SECONDS=${BROADCAST_SEND_DELAY_SECONDS}
+          BROADCAST_BATCH_SIZE=${BROADCAST_BATCH_SIZE}
+          BROADCAST_BATCH_PAUSE_SECONDS=${BROADCAST_BATCH_PAUSE_SECONDS}
           ENVEOF
+          chmod 600 "${APP_DIR}/.env"
 
-            systemctl daemon-reload
-            systemctl restart max-barbershop-bot.service
-            systemctl status max-barbershop-bot.service --no-pager
-          EOF
+          sudo install -m 0644 "${APP_DIR}/scripts/systemd/${SERVICE_NAME}" "/etc/systemd/system/${SERVICE_NAME}"
+          sudo systemctl daemon-reload
+          sudo systemctl enable "${SERVICE_NAME}"
+          sudo systemctl restart "${SERVICE_NAME}"
+          sudo systemctl status "${SERVICE_NAME}" --no-pager
+          sudo journalctl -u "${SERVICE_NAME}" -n 100 --no-pager
+          REMOTE

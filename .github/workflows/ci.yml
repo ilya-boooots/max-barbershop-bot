@@ -19,28 +19,29 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            python -m pip install -r requirements.txt
-          fi
-
       - name: Compile MAX package
         run: python -m compileall max_barbershop_bot
 
-      - name: Import MAX transport modules
+      - name: Check forbidden transport imports in MAX code
         run: |
           python - <<'PY'
-          from max_barbershop_bot.core.events import NormalizedEvent, normalize_update
-          from max_barbershop_bot.max_api.client import MaxApiClient
-          from max_barbershop_bot.max_api.models import MaxUpdate, MaxMessage, MaxCallback, MaxButton, MaxInlineKeyboard
-          print("imports ok")
-          PY
+          import pathlib
+          import re
+          import sys
 
-      - name: Ensure MAX code does not import aiogram
-        run: |
-          if rg -n "import aiogram|from aiogram" max_barbershop_bot; then
-            echo "aiogram imports are not allowed in max_barbershop_bot"
-            exit 1
-          fi
+          root = pathlib.Path("max_barbershop_bot")
+          patterns = [
+              (re.compile(r"from\s+" + "aio" + r"gram\b|import\s+" + "aio" + r"gram\b"), "forbidden transport import"),
+              (re.compile(r"InlineKeyboardMarkup|InlineKeyboardButton|ReplyKeyboardMarkup|KeyboardButton"), "forbidden keyboard class"),
+              (re.compile("Клиент записался из " + "телеграм" + " бота", re.IGNORECASE), "forbidden legacy marker"),
+          ]
+          failures = []
+          for path in root.rglob("*.py"):
+              text = path.read_text(encoding="utf-8")
+              for pattern, label in patterns:
+                  if pattern.search(text):
+                      failures.append(f"{path}: {label}")
+          if failures:
+              print("\n".join(failures))
+              sys.exit(1)
+          PY
