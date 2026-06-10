@@ -12,6 +12,7 @@ from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.services.broadcasts import (
     ALL_USERS_AUDIENCE,
+    BroadcastAudience,
     BroadcastRecipient,
     build_broadcast_confirm_text,
     build_broadcast_preview,
@@ -53,6 +54,7 @@ _BROADCAST_AUDIENCE_LABEL_KEY = "broadcast_audience_label"
 _BROADCAST_RECIPIENT_COUNT_KEY = "broadcast_recipient_count"
 _BROADCAST_RECIPIENTS_KEY = "broadcast_recipients"
 _BROADCAST_IN_PROGRESS_KEY = "broadcast_in_progress"
+_BROADCAST_RETURN_SCREEN_KEY = "broadcast_return_screen"
 
 
 def register_broadcast_routes(router: Router) -> None:
@@ -112,6 +114,9 @@ async def handle_text_input(context: RouterContext) -> None:
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY, validation.text)
+    if _broadcast_recipients(context):
+        await show_segment_broadcast_confirm(context)
+        return
     _push_current_screen(context, state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
     await context.send_text(build_broadcast_preview(validation.text), keyboard=broadcast_preview_keyboard())
 
@@ -183,6 +188,47 @@ async def handle_audience_all_users(context: RouterContext) -> None:
     )
 
 
+async def open_segment_broadcast_text(
+    context: RouterContext,
+    *,
+    audience_key: str,
+    audience_label: str,
+    recipients: list[BroadcastRecipient],
+) -> None:
+    """Start one-time broadcast wizard with a prepared segment audience."""
+
+    _clear_broadcast_state(context)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience_key)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience_label)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENT_COUNT_KEY, len(recipients))
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENTS_KEY, recipients)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY, state.CLIENT_SEGMENT_RESULT_SCREEN)
+    _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
+    await context.send_text(
+        f"📣 Рассылка по сегменту\n\nАудитория: {audience_label}\nПолучателей в MAX: {len(recipients)}\n\nВведите текст рассылки 👇",
+        keyboard=broadcast_text_keyboard(),
+    )
+
+
+async def show_segment_broadcast_confirm(context: RouterContext) -> None:
+    """Show confirmation when broadcast audience was prepared by segment flow."""
+
+    text = _broadcast_text(context)
+    recipients = _broadcast_recipients(context)
+    if not text:
+        await _open_text_step(context)
+        return
+    label = _broadcast_audience(context).label
+    _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
+    if not recipients:
+        await context.send_text(BROADCAST_NO_RECIPIENTS_TEXT, keyboard=broadcast_confirm_keyboard(can_send=False))
+        return
+    await context.send_text(
+        build_broadcast_confirm_text(audience_label=label, recipient_count=len(recipients), text=text),
+        keyboard=broadcast_confirm_keyboard(can_send=True),
+    )
+
+
 async def handle_confirm_send(context: RouterContext) -> None:
     """Send the one-time broadcast and show final report."""
 
@@ -208,13 +254,14 @@ async def handle_confirm_send(context: RouterContext) -> None:
     await _answer_callback_if_needed(context, "Отправляем рассылку 🚀")
     await context.send_text(BROADCAST_SENDING_TEXT)
 
+    audience = _broadcast_audience(context)
     report = await send_one_time_broadcast(
         sender=context.sender,
         users_repository=_users_repository(),
         database_path=_database_path(),
         text=text,
         recipients=recipients,
-        audience=ALL_USERS_AUDIENCE,
+        audience=audience,
         actor_platform_user_id=context.event.platform_user_id,
     )
     _clear_broadcast_state(context)
@@ -240,8 +287,13 @@ async def handle_broadcast_back(context: RouterContext) -> None:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
         await context.send_text(build_broadcast_preview(_broadcast_text(context) or ""), keyboard=broadcast_preview_keyboard())
     elif current == state.BROADCAST_ONE_TIME_CONFIRM_SCREEN:
-        state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
-        await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
+        return_screen = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY)
+        if return_screen == state.CLIENT_SEGMENT_RESULT_SCREEN:
+            state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENT_RESULT_SCREEN)
+            await context.send_text("Вернитесь к сегменту через меню рассылки 🎯", keyboard=broadcast_menu_keyboard())
+        else:
+            state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
+            await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_MENU_SCREEN)
         await context.send_text(BROADCAST_MENU_TEXT, keyboard=broadcast_menu_keyboard())
@@ -298,6 +350,14 @@ async def _answer_callback_if_needed(context: RouterContext, notification: str) 
 def _broadcast_text(context: RouterContext) -> str | None:
     value = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY)
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _broadcast_audience(context: RouterContext) -> BroadcastAudience:
+    key = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY)
+    label = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY)
+    if isinstance(key, str) and isinstance(label, str) and key and label:
+        return BroadcastAudience(key=key, label=label)
+    return ALL_USERS_AUDIENCE
 
 
 def _broadcast_recipients(context: RouterContext) -> list[BroadcastRecipient]:
