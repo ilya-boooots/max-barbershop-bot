@@ -165,6 +165,44 @@ class PlatformAttributionRepository:
             ).fetchall()
             return [_row_to_record(row) for row in rows if row is not None]
 
+
+    def list_active_yclients_record_ids(
+        self,
+        *,
+        platform: str = PLATFORM_MAX,
+        yclients_record_ids: object | None = None,
+    ) -> list[str]:
+        """Return attributed YClients record ids for one platform, optionally limited to provided ids."""
+
+        normalized_platform = _required_text(platform, "platform")
+        candidate_ids = _normalize_record_ids(yclients_record_ids)
+        with closing(self._connect()) as connection:
+            if candidate_ids:
+                placeholders = ",".join("?" for _ in candidate_ids)
+                rows = connection.execute(
+                    f"""
+                    SELECT DISTINCT yclients_record_id
+                    FROM platform_attribution
+                    WHERE platform = ?
+                      AND yclients_record_id IS NOT NULL
+                      AND TRIM(yclients_record_id) <> ''
+                      AND yclients_record_id IN ({placeholders})
+                    """,
+                    (normalized_platform, *candidate_ids),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT DISTINCT yclients_record_id
+                    FROM platform_attribution
+                    WHERE platform = ?
+                      AND yclients_record_id IS NOT NULL
+                      AND TRIM(yclients_record_id) <> ''
+                    """,
+                    (normalized_platform,),
+                ).fetchall()
+        return [str(row["yclients_record_id"]).strip() for row in rows if row["yclients_record_id"] is not None]
+
     def exists_for_yclients_record(self, yclients_record_id: str) -> bool:
         """Return True when attribution exists for a YClients record id."""
 
@@ -194,6 +232,25 @@ class PlatformAttributionRepository:
         if record is None:
             raise RuntimeError("Созданная запись атрибуции не найдена в базе данных")
         return record
+
+
+def _normalize_record_ids(values: object | None) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        iterable = [values]
+    else:
+        try:
+            iterable = list(values)  # type: ignore[arg-type]
+        except TypeError:
+            iterable = [values]
+
+    result: list[str] = []
+    for value in iterable:
+        text = str(value).strip() if value is not None else ""
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _row_to_record(row: sqlite3.Row | None) -> AttributionRecord | None:

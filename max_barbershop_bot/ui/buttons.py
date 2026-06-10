@@ -30,6 +30,13 @@ ADMIN_STATISTICS_PAYLOAD = "admin:statistics"
 ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
 ADMIN_NOTIFICATION_HISTORY_PAYLOAD = "admin:notification_history"
 
+STATISTICS_TODAY_PAYLOAD = "stats:period:today"
+STATISTICS_7_DAYS_PAYLOAD = "stats:period:7"
+STATISTICS_30_DAYS_PAYLOAD = "stats:period:30"
+STATISTICS_90_DAYS_PAYLOAD = "stats:period:90"
+STATISTICS_BACK_PAYLOAD = "stats:back"
+STATISTICS_HOME_PAYLOAD = "stats:home"
+
 NOTIFICATION_HISTORY_FAILED_PAYLOAD = "notification_history:failed"
 NOTIFICATION_HISTORY_REFRESH_PAYLOAD = "notification_history:refresh"
 NOTIFICATION_HISTORY_BACK_PAYLOAD = "notification_history:back"
@@ -149,6 +156,36 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="🧩 YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
+
+
+def statistics_period_keyboard() -> MaxInlineKeyboard:
+    """Build statistics period selection buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [
+                MaxButton(text="Сегодня", payload=STATISTICS_TODAY_PAYLOAD),
+                MaxButton(text="7 дней", payload=STATISTICS_7_DAYS_PAYLOAD),
+            ],
+            [
+                MaxButton(text="30 дней", payload=STATISTICS_30_DAYS_PAYLOAD),
+                MaxButton(text="90 дней", payload=STATISTICS_90_DAYS_PAYLOAD),
+            ],
+            [MaxButton(text="⬅️ Назад", payload=STATISTICS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=STATISTICS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def statistics_result_keyboard() -> MaxInlineKeyboard:
+    """Build statistics result navigation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=STATISTICS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=STATISTICS_HOME_PAYLOAD)],
+        ]
+    )
 
 
 def notification_history_keyboard(
