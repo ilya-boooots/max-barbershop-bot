@@ -1,0 +1,16 @@
+[Unit]
+Description=MAX Barbershop Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bots/max-barbershop-bot
+EnvironmentFile=/opt/bots/max-barbershop-bot/.env
+ExecStart=/opt/bots/max-barbershop-bot/.venv/bin/python -m max_barbershop_bot.main
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
