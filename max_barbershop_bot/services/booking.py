@@ -425,6 +425,61 @@ class BookingService:
         )
         return BookingCatalog(categories=categories, services=services)
 
+    async def get_available_masters(self) -> list[BookingMasterItem]:
+        """Return all bookable masters from YClients for staff-first booking."""
+
+        try:
+            settings = self.load_active_settings_for_booking(operation="get_booking_all_masters")
+        except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
+            logger.warning(
+                "Booking settings lookup failed: operation=get_booking_all_masters error_class=%s",
+                type(exc).__name__,
+            )
+            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT) from exc
+
+        if not has_required_yclients_credentials(settings):
+            logger.info(
+                "Booking masters unavailable: operation=get_booking_all_masters settings_present=%s "
+                "company_id_present=%s partner_token_present=%s user_token_present=%s",
+                settings is not None,
+                bool(settings and settings.company_id),
+                bool(settings and settings.partner_token),
+                bool(settings and settings.user_token),
+            )
+            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT)
+
+        try:
+            async with build_yclients_client_from_active_settings(settings) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                masters_payload = await yclients.get_available_masters(company_id=settings.company_id)
+        except YClientsError as exc:
+            logger.warning(
+                "Booking YClients error: operation=get_booking_all_masters error_class=%s status_code=%s "
+                "partner_token_present=%s user_token_present=%s",
+                type(exc).__name__,
+                exc.status_code,
+                exc.partner_token_present,
+                exc.user_token_present,
+            )
+            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
+        except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
+            logger.warning(
+                "Booking unexpected YClients error: operation=get_booking_all_masters error_class=%s",
+                type(exc).__name__,
+            )
+            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
+
+        masters = [_normalize_master(item) for item in masters_payload]
+        masters = sorted(
+            [item for item in masters if item.yclients_master_id and item.title],
+            key=lambda item: item.title.lower(),
+        )
+        logger.info(
+            "Booking masters loaded: operation=get_booking_all_masters masters_count=%s",
+            len(masters),
+        )
+        return masters
+
     async def get_available_masters_for_service(self, yclients_service_id: str) -> list[BookingMasterItem]:
         """Return masters from YClients filtered by the selected service id."""
 

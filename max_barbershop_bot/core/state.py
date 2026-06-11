@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 MAIN_MENU_SCREEN = "main_menu"
 BOOKING_PLACEHOLDER_SCREEN = "booking_placeholder"
+BOOKING_HUB_SCREEN = "booking_hub"
 BOOKING_CATEGORIES_SCREEN = "booking_categories"
 BOOKING_SERVICES_SCREEN = "booking_services"
 BOOKING_SERVICE_SELECTED_SCREEN = "booking_service_selected"
