@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from max_barbershop_bot.core import state
@@ -33,17 +33,18 @@ class RouterContext:
         text: str,
         *,
         keyboard: MaxInlineKeyboard | None = None,
+        attachments: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         """Send a text reply to the event chat or user when possible."""
 
         chat_id = _int_from_string(self.event.chat_id)
         if chat_id is not None:
-            await self.sender.send_to_chat(chat_id, text, keyboard=keyboard)
+            await self.sender.send_to_chat(chat_id, text, keyboard=keyboard, attachments=attachments)
             return
 
         user_id = _int_from_string(self.event.max_user_id or self.event.platform_user_id)
         if user_id is not None:
-            await self.sender.send_to_user(user_id, text, keyboard=keyboard)
+            await self.sender.send_to_user(user_id, text, keyboard=keyboard, attachments=attachments)
             return
 
         logger.warning(

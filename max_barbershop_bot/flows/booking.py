@@ -12,6 +12,7 @@ from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
+from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.booking import (
     BookingCatalog,
@@ -29,6 +30,7 @@ from max_barbershop_bot.services.booking import (
     has_available_masters,
     has_available_services,
 )
+from max_barbershop_bot.services.master_photos import MasterPhotosService
 from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.services.reminders import send_immediate_confirmation
 from max_barbershop_bot.ui.buttons import (
@@ -61,7 +63,6 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_CONFIRMATION_MISSING_DATA_TEXT,
     BOOKING_CREATE_ERROR_TEXT,
     BOOKING_CREATE_IN_PROGRESS_TEXT,
-    BOOKING_DATES_TEXT,
     BOOKING_EMPTY_TEXT,
     BOOKING_MASTER_TEXT,
     BOOKING_MASTERS_EMPTY_TEXT,
@@ -802,13 +803,16 @@ async def _show_dates(
         _push_current_screen(context, state.BOOKING_DATES_SCREEN)
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_DATES_SCREEN)
+    master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
+    attachment = _master_photo_service().photo_attachment(str(master_id) if master_id else None)
     await context.send_text(
-        BOOKING_DATES_TEXT,
+        _booking_step_text(context, tail="📅 Выберите дату:", include_selected_date=False),
         keyboard=booking_dates_keyboard(
             dates[:_MAX_CALLBACK_ITEMS],
             lambda value: format_date_button(value, timezone_name=timezone_name),
             back_payload=BOOKING_BACK_PAYLOAD,
         ),
+        attachments=[attachment] if attachment is not None else None,
     )
 
 
@@ -869,6 +873,24 @@ def _masters(context: RouterContext) -> list[BookingMasterItem] | None:
     return None
 
 
+
+
+def _booking_step_text(context: RouterContext, *, tail: str, include_selected_date: bool = True) -> str:
+    service_name = str(_state_value(context, _SELECTED_SERVICE_NAME_STATE_KEY) or "—").strip() or "—"
+    master_name = str(_state_value(context, _SELECTED_MASTER_NAME_STATE_KEY) or "Любой мастер").strip() or "Любой мастер"
+    lines = [
+        f"✂️ Услуга: {service_name}",
+        f"💈 Мастер: {master_name}",
+    ]
+    if include_selected_date:
+        selected_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
+        lines.append(f"📅 Дата: {_format_selected_date(str(selected_date)) if selected_date else '—'}")
+    lines.append(tail)
+    return "\n".join(lines)
+
+
+def _master_photo_service() -> MasterPhotosService:
+    return MasterPhotosService(MasterPhotosRepository(_database_path()), YClientsSettingsRepository(_database_path()))
 
 
 def _slots(context: RouterContext) -> list[BookingSlotItem] | None:

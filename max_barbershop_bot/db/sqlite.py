@@ -135,6 +135,22 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS master_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            yclients_staff_id TEXT NOT NULL,
+            master_name TEXT,
+            photo_file_id TEXT,
+            photo_url TEXT,
+            photo_attachment_json TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_by_platform_user_id TEXT,
+            updated_by_platform_user_id TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(platform, yclients_staff_id)
+        );
+
         CREATE TABLE IF NOT EXISTS notification_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -190,6 +206,10 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON settings_audit_log(section);
         CREATE INDEX IF NOT EXISTS idx_settings_audit_log_created_at
             ON settings_audit_log(created_at);
+        CREATE INDEX IF NOT EXISTS idx_master_photos_staff
+            ON master_photos(platform, yclients_staff_id);
+        CREATE INDEX IF NOT EXISTS idx_master_photos_active
+            ON master_photos(platform, is_active);
         CREATE INDEX IF NOT EXISTS idx_notification_history_platform_user_id
             ON notification_history(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_notification_history_yclients_record_id
@@ -233,6 +253,17 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "settings_audit_log", "target_platform_user_id", "TEXT")
     _ensure_column(connection, "settings_audit_log", "metadata_json", "TEXT")
     _ensure_column(connection, "settings_audit_log", "created_at", "TEXT")
+    _ensure_column(connection, "master_photos", "platform", "TEXT NOT NULL DEFAULT 'max'")
+    _ensure_column(connection, "master_photos", "yclients_staff_id", "TEXT")
+    _ensure_column(connection, "master_photos", "master_name", "TEXT")
+    _ensure_column(connection, "master_photos", "photo_file_id", "TEXT")
+    _ensure_column(connection, "master_photos", "photo_url", "TEXT")
+    _ensure_column(connection, "master_photos", "photo_attachment_json", "TEXT")
+    _ensure_column(connection, "master_photos", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(connection, "master_photos", "created_by_platform_user_id", "TEXT")
+    _ensure_column(connection, "master_photos", "updated_by_platform_user_id", "TEXT")
+    _ensure_column(connection, "master_photos", "created_at", "TEXT")
+    _ensure_column(connection, "master_photos", "updated_at", "TEXT")
     _ensure_column(connection, "notification_history", "max_user_id", "TEXT")
     _ensure_column(connection, "notification_history", "chat_id", "TEXT")
     _ensure_column(connection, "notification_history", "yclients_client_id", "TEXT")

@@ -37,12 +37,19 @@ ADMIN_NOTIFICATION_HISTORY_PAYLOAD = "admin:notification_history"
 SETTINGS_YCLIENTS_PAYLOAD = "settings:yclients"
 SETTINGS_CONTACTS_PAYLOAD = "settings:contacts"
 SETTINGS_NOTIFICATIONS_PAYLOAD = "settings:notifications"
+SETTINGS_MASTER_PHOTOS_PAYLOAD = "settings:master_photos"
 SETTINGS_ROLES_PAYLOAD = "settings:roles"
 SETTINGS_DIAGNOSTICS_PAYLOAD = "settings:diagnostics"
 SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD = "settings:diagnostics:notification_history"
 SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD = "settings:diagnostics:yclients_check"
 SETTINGS_BACK_PAYLOAD = "settings:back"
 SETTINGS_HOME_PAYLOAD = "settings:home"
+MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX = "settings:mp:select:"
+MASTER_PHOTOS_UPLOAD_PAYLOAD = "settings:mp:upload"
+MASTER_PHOTOS_DELETE_PAYLOAD = "settings:mp:delete"
+MASTER_PHOTOS_DELETE_CONFIRM_PAYLOAD = "settings:mp:delete:confirm"
+MASTER_PHOTOS_BACK_PAYLOAD = "settings:mp:back"
+MASTER_PHOTOS_HOME_PAYLOAD = "settings:mp:home"
 
 STATISTICS_TODAY_PAYLOAD = "stats:period:today"
 STATISTICS_7_DAYS_PAYLOAD = "stats:period:7"
@@ -180,6 +187,7 @@ def settings_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     if can_view_yclients_settings(normalized_role):
         rows.append([MaxButton(text="🧩 YClients", payload=SETTINGS_YCLIENTS_PAYLOAD)])
     if can_view_contacts_settings(normalized_role):
+        rows.append([MaxButton(text="🖼️ Редактировать фото мастеров", payload=SETTINGS_MASTER_PHOTOS_PAYLOAD)])
         rows.append([MaxButton(text="📍 Контакты", payload=SETTINGS_CONTACTS_PAYLOAD)])
     if can_view_notification_settings(normalized_role):
         rows.append([MaxButton(text="🔔 Уведомления", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)])
@@ -191,6 +199,66 @@ def settings_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
+
+
+def master_photos_list_keyboard(masters: list[object]) -> MaxInlineKeyboard:
+    """Build master photo settings master list."""
+
+    rows = [
+        [
+            MaxButton(
+                text=_master_photo_button_text(master),
+                payload=f"{MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX}{index}",
+            )
+        ]
+        for index, master in enumerate(masters[:20])
+    ]
+    rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+
+def _master_photo_button_text(master: object) -> str:
+    name = str(getattr(master, "name", "—") or "—").strip() or "—"
+    specialization = str(getattr(master, "specialization", "") or "").strip()
+    status = "✅" if getattr(master, "has_photo", False) else "—"
+    title = f"{name} · {specialization}" if specialization else name
+    return f"{title} {status}"
+
+def master_photo_detail_keyboard(*, has_photo: bool) -> MaxInlineKeyboard:
+    """Build actions for one master photo card."""
+
+    upload_text = "📤 Загрузить / заменить фото"
+    rows = [[MaxButton(text=upload_text, payload=MASTER_PHOTOS_UPLOAD_PAYLOAD)]]
+    if has_photo:
+        rows.append([MaxButton(text="🗑️ Удалить фото", payload=MASTER_PHOTOS_DELETE_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=MASTER_PHOTOS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=MASTER_PHOTOS_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def master_photo_wait_keyboard() -> MaxInlineKeyboard:
+    """Build navigation while waiting for a master photo upload."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=MASTER_PHOTOS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=MASTER_PHOTOS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def master_photo_delete_confirm_keyboard() -> MaxInlineKeyboard:
+    """Build master photo deletion confirmation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Удалить", payload=MASTER_PHOTOS_DELETE_CONFIRM_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=MASTER_PHOTOS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=MASTER_PHOTOS_HOME_PAYLOAD)],
+        ]
+    )
 
 def settings_status_keyboard(*, include_contacts: bool = False) -> MaxInlineKeyboard:
     """Build settings subsection navigation buttons."""
