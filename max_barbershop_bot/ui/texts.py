@@ -37,9 +37,7 @@ REGISTRATION_NAME_INVALID_TEXT = "Введите имя текстом, мини
 REGISTRATION_COMPLETE_TEXT = "Готово! Вы зарегистрированы ✅"
 REGISTRATION_REQUIRED_TEXT = "Сначала нужно завершить регистрацию 🙏"
 
-BOOKING_CATEGORY_TEXT = """✂️ Запись
-
-Выберите категорию услуг:"""
+BOOKING_CATEGORY_TEXT = "✂️ Выберите категорию услуг 😊"
 BOOKING_SERVICE_TEXT = """✂️ Запись
 
 Выберите услугу:"""
