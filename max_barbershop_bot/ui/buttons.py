@@ -110,6 +110,7 @@ BOOKING_MASTER_NEXT_PAYLOAD = "booking:master_page:next"
 BOOKING_DATE_PAYLOAD_PREFIX = "booking:date:"
 BOOKING_SLOT_PAYLOAD_PREFIX = "booking:slot:"
 BOOKING_CONFIRM_PAYLOAD = "booking:confirm"
+BOOKING_CANCEL_DRAFT_PAYLOAD = "booking:cancel_draft"
 BOOKING_PHONE_USE_REGISTERED_PAYLOAD = "booking:phone:use_registered"
 
 MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX = "my_bookings:details:"
@@ -687,6 +688,7 @@ def booking_confirmation_keyboard(*, back_payload: str = BOOKING_BACK_PAYLOAD) -
     return MaxInlineKeyboard.from_rows(
         [
             [MaxButton(text="✅ Подтвердить запись", payload=BOOKING_CONFIRM_PAYLOAD)],
+            [MaxButton(text="❌ Отменить", payload=BOOKING_CANCEL_DRAFT_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=back_payload)],
             [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
