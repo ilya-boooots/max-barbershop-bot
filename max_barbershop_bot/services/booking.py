@@ -557,10 +557,20 @@ def format_booking_confirmation_text(
     )
 
 
-def format_booking_success(booking_state: dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+def format_booking_success(
+    booking_state: dict[str, Any],
+    *,
+    contacts: object | None = None,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+) -> str:
     """Format successful booking text in the Telegram reference style."""
 
-    return _format_booking_details("✅ Готово! Вы записаны 💈\n", booking_state, timezone_name=timezone_name)
+    return _format_booking_details(
+        "✅ Готово! Вы записаны 💈\n",
+        booking_state,
+        contacts=contacts,
+        timezone_name=timezone_name,
+    )
 
 
 def extract_yclients_record_id(created: YClientsBookingRecord | CreatedBooking | dict[str, Any] | list[Any]) -> str | None:
