@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import Config
@@ -106,6 +106,11 @@ class Router:
     async def dispatch(self, event: NormalizedEvent, sender: MaxMessageSender) -> None:
         """Route one normalized event and keep runtime safe on handler errors."""
 
+        if event.update_type == "message_created" and not event.attachments:
+            raw_attachments = _raw_attachments(event.raw_update)
+            if raw_attachments:
+                event = replace(event, attachments=raw_attachments)
+
         self._log_contact_diagnostic(event)
         handler = self._resolve_handler(event)
         if handler is None:
@@ -139,7 +144,7 @@ class Router:
         if event.text is not None and event.text in self._text_handlers:
             return self._text_handlers[event.text]
 
-        if current_screen == state.REGISTRATION_PHONE_SCREEN:
+        if current_screen in {state.REGISTRATION_PHONE_SCREEN, state.BOOKING_PHONE_SCREEN}:
             return self._screen_text_handlers.get(current_screen)
         if event.text is None and not event.attachments:
             return None
@@ -158,24 +163,20 @@ class Router:
 
         current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
         attachment_types = _attachment_types(diagnostic_attachments)
-        payload_keys = _payload_keys(diagnostic_attachments)
         vcf_info_exists = _vcf_info_exists(diagnostic_attachments)
         vcf_has_tel = _vcf_info_has_tel(diagnostic_attachments)
         extracted_phone = extract_contact_phone(diagnostic_attachments)
         logger.info(
-            "MAX contact diagnostic: update_type=%s screen_id=%s platform_user_id=%s "
-            "chat_id=%s text_exists=%s attachment_locations=%s attachment_count=%s "
-            "attachment_types=%s payload_keys=%s vcf_info_exists=%s vcf_info_has_tel=%s "
+            "MAX booking phone contact diagnostic: update_type=%s screen_id=%s "
+            "platform_user_id_present=%s chat_id_present=%s attachment_count=%s "
+            "attachment_types=%s vcf_info_exists=%s vcf_info_has_tel=%s "
             "phone_extraction_succeeded=%s masked_phone=%s",
             event.update_type,
             current_screen,
-            event.platform_user_id,
-            event.chat_id,
-            event.text is not None,
-            _attachment_locations(event.raw_update),
+            event.platform_user_id is not None,
+            event.chat_id is not None,
             len(diagnostic_attachments),
             attachment_types,
-            payload_keys,
             vcf_info_exists,
             vcf_has_tel,
             extracted_phone is not None,
@@ -308,10 +309,6 @@ def _attachment_types(attachments: list[object]) -> list[str]:
         attachment_type = attachment.get("type")
         types.append(str(attachment_type) if attachment_type is not None else "<missing>")
     return types
-
-
-def _payload_keys(attachments: list[object]) -> list[list[str]]:
-    return [payload_keys for _, payload_keys in _attachment_type_and_payload_keys(attachments)]
 
 
 def _attachment_type_and_payload_keys(attachments: list[object]) -> list[tuple[str, list[str]]]:

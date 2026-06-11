@@ -92,9 +92,31 @@ def _message_attachments(message: object, raw_update: dict[str, Any]) -> list[An
         return list(body_attachments)
 
     message_attachments = raw_message.get("attachments")
-    if isinstance(message_attachments, list):
+    if isinstance(message_attachments, list) and message_attachments:
         return list(message_attachments)
-    return []
+
+    return _first_raw_attachment_list(raw_update)
+
+
+def _first_raw_attachment_list(raw_update: dict[str, Any]) -> list[Any]:
+    attachments = _find_attachment_list(raw_update)
+    return list(attachments) if attachments is not None else []
+
+
+def _find_attachment_list(value: Any) -> list[Any] | None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "attachments" and isinstance(child, list) and child:
+                return child
+            found = _find_attachment_list(child)
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for child in value:
+            found = _find_attachment_list(child)
+            if found is not None:
+                return found
+    return None
 
 
 def _message_callback_event(update: MaxUpdate, raw_update: dict[str, Any]) -> NormalizedEvent:
