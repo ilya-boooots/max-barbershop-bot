@@ -6,11 +6,15 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.endpoints import get_company
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.utils import safe_str
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
+from max_barbershop_bot.services.yclients_context import (
+    build_yclients_client_from_active_settings,
+    has_required_yclients_credentials,
+    load_active_yclients_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +83,7 @@ class ContactsService:
             return contact_info_from_override(override)
 
         try:
-            settings = self._settings_repository.get_active()
+            settings = load_active_yclients_settings(self._settings_repository, operation="get_contacts")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
                 "Contacts fallback after active settings error: error_class=%s",
@@ -90,7 +94,7 @@ class ContactsService:
             logger.info("Contacts fallback: no active YClients settings")
             return fallback_contact_info()
 
-        if not settings.company_id or not settings.partner_token:
+        if not has_required_yclients_credentials(settings):
             logger.info(
                 "Contacts fallback: incomplete YClients settings company_id_present=%s "
                 "partner_token_present=%s user_token_present=%s",
@@ -101,11 +105,7 @@ class ContactsService:
             return fallback_contact_info()
 
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 payload = await get_company(client, company_id=settings.company_id)
         except YClientsError as exc:
             logger.warning(

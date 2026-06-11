@@ -8,7 +8,6 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.exceptions import (
     YClientsAuthError,
     YClientsError,
@@ -22,6 +21,11 @@ from max_barbershop_bot.integrations.yclients.service import YClientsServiceLaye
 from max_barbershop_bot.integrations.yclients.utils import safe_str
 from max_barbershop_bot.repositories.users import User
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
+from max_barbershop_bot.services.yclients_context import (
+    build_yclients_client_from_active_settings,
+    has_required_yclients_credentials,
+    load_active_yclients_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +153,7 @@ class MyBookingsService:
             raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
 
         try:
-            settings = self._settings_repository.get_active()
+            settings = load_active_yclients_settings(self._settings_repository, operation="get_my_bookings")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
                 "My bookings settings lookup failed: operation=get_my_bookings platform_user_id=%s "
@@ -162,7 +166,7 @@ class MyBookingsService:
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
 
         timezone_name = _timezone_name(settings.branch_timezone if settings else None)
-        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+        if not has_required_yclients_credentials(settings):
             logger.info(
                 "My bookings unavailable: operation=get_my_bookings platform_user_id=%s settings_present=%s "
                 "company_id_present=%s partner_token_present=%s user_token_present=%s "
@@ -179,11 +183,7 @@ class MyBookingsService:
 
         now = datetime.now(_zoneinfo(timezone_name))
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 payload = await yclients.get_future_records(
                     company_id=settings.company_id,
@@ -254,7 +254,7 @@ class MyBookingsService:
             raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
 
         try:
-            settings = self._settings_repository.get_active()
+            settings = load_active_yclients_settings(self._settings_repository, operation="get_my_bookings")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
                 "Booking cancellation settings lookup failed: operation=cancel_booking platform_user_id=%s "
@@ -265,7 +265,7 @@ class MyBookingsService:
             )
             raise MyBookingCancellationError(MY_BOOKING_CANCEL_ERROR_TEXT) from exc
 
-        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+        if not has_required_yclients_credentials(settings):
             logger.info(
                 "Booking cancellation unavailable: operation=cancel_booking platform_user_id=%s yclients_record_id=%s "
                 "settings_present=%s company_id_present=%s partner_token_present=%s user_token_present=%s",
@@ -279,11 +279,7 @@ class MyBookingsService:
             raise MyBookingCancellationError(MY_BOOKING_CANCEL_ERROR_TEXT)
 
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 result = await yclients.cancel_booking(
                     company_id=settings.company_id,
@@ -360,11 +356,7 @@ class MyBookingsService:
         settings = self._active_settings_for_reschedule(platform_user_id=platform_user_id, record_id=record_id)
         timezone_name = _timezone_name(settings.branch_timezone)
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 details = await yclients.get_booking_details(
                     company_id=settings.company_id,
@@ -454,11 +446,7 @@ class MyBookingsService:
 
         settings = self._active_settings_for_reschedule(platform_user_id=platform_user_id, record_id=record_id)
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 await yclients.reschedule_booking(
                     company_id=settings.company_id,
@@ -525,7 +513,7 @@ class MyBookingsService:
 
     def _active_settings_for_reschedule(self, *, platform_user_id: str | None, record_id: str):
         try:
-            settings = self._settings_repository.get_active()
+            settings = load_active_yclients_settings(self._settings_repository, operation="get_my_bookings")
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Booking reschedule settings lookup failed: operation=reschedule_booking platform_user_id=%s "
@@ -535,7 +523,7 @@ class MyBookingsService:
                 type(exc).__name__,
             )
             raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT) from exc
-        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+        if not has_required_yclients_credentials(settings):
             logger.info(
                 "Booking reschedule unavailable: operation=reschedule_booking platform_user_id=%s yclients_record_id=%s "
                 "settings_present=%s company_id_present=%s partner_token_present=%s user_token_present=%s",

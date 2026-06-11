@@ -13,6 +13,11 @@ from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.endpoints import list_bookings_by_date_range, list_clients
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
+from max_barbershop_bot.services.yclients_context import (
+    build_yclients_client_from_active_settings,
+    has_required_yclients_credentials,
+    load_active_yclients_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +201,8 @@ class ClientSegmentService:
         return result
 
     def _require_settings(self) -> YClientsSettings:
-        settings = self._settings_repository.get_active()
-        if not settings or not settings.company_id or not settings.partner_token:
+        settings = load_active_yclients_settings(self._settings_repository, operation="get_client_segments")
+        if not has_required_yclients_credentials(settings):
             raise ClientSegmentsNotConfiguredError("yclients_settings_missing")
         return settings
 
@@ -332,7 +337,7 @@ def mask_phone(phone: str | None) -> str:
 
 
 def _build_client(settings: YClientsSettings) -> YClientsClient:
-    return YClientsClient(partner_token=str(settings.partner_token), user_token=settings.user_token, company_id=settings.company_id)
+    return build_yclients_client_from_active_settings(settings)
 
 
 def _is_valid_past_visit(record: dict[str, Any], now_utc: datetime) -> bool:

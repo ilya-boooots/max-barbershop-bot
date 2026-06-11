@@ -10,13 +10,17 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
+from max_barbershop_bot.services.yclients_context import (
+    build_yclients_client_from_active_settings,
+    has_required_yclients_credentials,
+    load_active_yclients_settings,
+)
 from max_barbershop_bot.services.notifications import (
     NotificationHistoryRecord,
     BOOKING_CONFIRMATION_IMMEDIATE,
@@ -226,8 +230,11 @@ async def get_due_reminders(
 ) -> list[DueReminder]:
     """Find due reminders from local attribution and verify each record in YClients."""
 
-    settings = YClientsSettingsRepository(database_path).get_active()
-    if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+    settings = load_active_yclients_settings(
+        YClientsSettingsRepository(database_path),
+        operation="get_due_reminders",
+    )
+    if not has_required_yclients_credentials(settings):
         logger.info("booking_reminders_skipped_yclients_not_configured")
         return []
 
@@ -239,11 +246,7 @@ async def get_due_reminders(
     if not attributions:
         return due
 
-    async with YClientsClient(
-        partner_token=settings.partner_token,
-        user_token=settings.user_token,
-        company_id=settings.company_id,
-    ) as client:
+    async with build_yclients_client_from_active_settings(settings) as client:
         service = YClientsServiceLayer(client, company_id=settings.company_id)
         for attribution in attributions:
             if not attribution.yclients_record_id:
@@ -314,7 +317,10 @@ async def send_due_reminders(
 ) -> int:
     """Send all currently due booking reminders safely."""
 
-    settings = YClientsSettingsRepository(database_path).get_active()
+    settings = load_active_yclients_settings(
+        YClientsSettingsRepository(database_path),
+        operation="send_due_reminders_timezone",
+    )
     branch_timezone_name = timezone_name or (settings.branch_timezone if settings else DEFAULT_BRANCH_TIMEZONE)
     sent_or_recorded = 0
     for reminder in await get_due_reminders(database_path=database_path, now=now, timezone_name=branch_timezone_name):

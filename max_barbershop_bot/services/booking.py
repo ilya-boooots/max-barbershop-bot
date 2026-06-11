@@ -8,7 +8,6 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.dto import (
     YClientsBookingRecord,
     YClientsService,
@@ -20,6 +19,11 @@ from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, normalize_phone
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
+from max_barbershop_bot.services.yclients_context import (
+    build_yclients_client_from_active_settings,
+    has_required_yclients_credentials,
+    load_active_yclients_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,53 +122,9 @@ class BookingService:
         self._settings_repository = settings_repository
 
     def load_active_settings_for_booking(self, *, operation: str) -> YClientsSettings | None:
-        """Load active YClients settings and emit sanitized booking diagnostics."""
+        """Load active YClients settings through the shared DB-primary loader."""
 
-        database_path = getattr(self._settings_repository, "database_path", "unknown")
-        settings = None
-        error_class = None
-        try:
-            settings = self._settings_repository.get_active()
-        except Exception as exc:  # noqa: BLE001 - sanitized diagnostics are required here.
-            error_class = type(exc).__name__
-            self._log_settings_diagnostic(
-                operation=operation,
-                database_path=database_path,
-                settings=None,
-                error_class=error_class,
-            )
-            raise
-
-        self._log_settings_diagnostic(
-            operation=operation,
-            database_path=database_path,
-            settings=settings,
-            error_class=error_class,
-        )
-        return settings
-
-    def _log_settings_diagnostic(
-        self,
-        *,
-        operation: str,
-        database_path: str,
-        settings: YClientsSettings | None,
-        error_class: str | None,
-    ) -> None:
-        logger.info(
-            "MAX booking settings diagnostic: database_path=%s active_settings_found=%s "
-            "company_id_present=%s partner_token_present=%s user_token_present=%s "
-            "branch_timezone=%s is_active=%s operation=%s error_class=%s",
-            database_path,
-            settings is not None,
-            bool(settings and settings.company_id),
-            bool(settings and settings.partner_token),
-            bool(settings and settings.user_token),
-            settings.branch_timezone if settings else None,
-            settings.is_active if settings else None,
-            operation,
-            error_class,
-        )
+        return load_active_yclients_settings(self._settings_repository, operation=operation)
 
     def get_branch_timezone(self) -> str:
         """Return the active branch timezone with a safe repository default."""
@@ -225,7 +185,7 @@ class BookingService:
             )
             raise BookingSettingsMissingError(BOOKING_CREATE_NOT_CONFIGURED_TEXT) from exc
 
-        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+        if not has_required_yclients_credentials(settings):
             logger.info(
                 "Booking create unavailable: operation=create_booking settings_present=%s "
                 "company_id_present=%s partner_token_present=%s user_token_present=%s service_id=%s master_id=%s datetime=%s",
@@ -240,11 +200,7 @@ class BookingService:
             raise BookingSettingsMissingError(BOOKING_CREATE_NOT_CONFIGURED_TEXT)
 
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 created = await yclients.create_booking(company_id=settings.company_id, **payload)
         except YClientsError as exc:
@@ -338,7 +294,7 @@ class BookingService:
             )
             return []
 
-        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+        if not has_required_yclients_credentials(settings):
             logger.info(
                 "Booking slots unavailable: operation=get_booking_slots settings_present=%s "
                 "company_id_present=%s partner_token_present=%s user_token_present=%s service_id=%s master_id=%s date=%s",
@@ -353,11 +309,7 @@ class BookingService:
             raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT)
 
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 slots_payload = await yclients.get_available_slots(
                     company_id=settings.company_id,
@@ -415,7 +367,7 @@ class BookingService:
             )
             raise BookingSettingsMissingError(BOOKING_NOT_CONFIGURED_TEXT) from exc
 
-        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+        if not has_required_yclients_credentials(settings):
             logger.info(
                 "Booking catalog unavailable: operation=get_booking_catalog settings_present=%s "
                 "company_id_present=%s partner_token_present=%s user_token_present=%s",
@@ -427,11 +379,7 @@ class BookingService:
             raise BookingSettingsMissingError(BOOKING_NOT_CONFIGURED_TEXT)
 
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 categories_payload = await yclients.get_service_categories(company_id=settings.company_id)
                 services_payload = await yclients.get_available_services(company_id=settings.company_id)
@@ -490,7 +438,7 @@ class BookingService:
             )
             raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT) from exc
 
-        if settings is None or not settings.company_id or not settings.partner_token or not settings.user_token:
+        if not has_required_yclients_credentials(settings):
             logger.info(
                 "Booking masters unavailable: operation=get_booking_masters settings_present=%s "
                 "company_id_present=%s partner_token_present=%s user_token_present=%s service_id=%s",
@@ -503,11 +451,7 @@ class BookingService:
             raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT)
 
         try:
-            async with YClientsClient(
-                partner_token=settings.partner_token,
-                user_token=settings.user_token,
-                company_id=settings.company_id,
-            ) as client:
+            async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 masters_payload = await yclients.get_available_masters(
                     company_id=settings.company_id,

@@ -10,11 +10,15 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
-from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.repositories.platform_attribution import PLATFORM_MAX, PlatformAttributionRepository
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
+from max_barbershop_bot.services.yclients_context import (
+    build_yclients_client_from_active_settings,
+    has_required_yclients_credentials,
+    load_active_yclients_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,19 +76,18 @@ class StatisticsLoadError(RuntimeError):
 async def get_statistics_for_period(days: int | None, period_name: str) -> StatisticsResult:
     """Load period statistics from YClients and MAX attribution from the local DB."""
 
-    settings = YClientsSettingsRepository(_database_path()).get_active()
-    if not settings or not settings.company_id or not settings.partner_token or not settings.user_token:
+    settings = load_active_yclients_settings(
+        YClientsSettingsRepository(_database_path()),
+        operation="get_statistics",
+    )
+    if not has_required_yclients_credentials(settings):
         raise StatisticsSettingsMissingError("YClients settings are incomplete")
 
     timezone = _safe_zoneinfo(settings.branch_timezone)
     period = _build_period(days=days, period_name=period_name, timezone=timezone)
 
     try:
-        async with YClientsClient(
-            partner_token=settings.partner_token,
-            user_token=settings.user_token,
-            company_id=settings.company_id,
-        ) as client:
+        async with build_yclients_client_from_active_settings(settings) as client:
             service = YClientsServiceLayer(client, company_id=settings.company_id)
             rows = await get_records_for_period_from_yclients(service, period=period)
             detailed_rows = await _load_record_details(service, rows)
