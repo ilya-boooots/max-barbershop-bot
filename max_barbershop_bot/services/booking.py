@@ -1005,9 +1005,19 @@ def _extract_staff_rating(staff: dict[str, Any]) -> str | None:
 
 def _format_price(service: BookingServiceItem) -> str | None:
     price = service.price_min if service.price_min not in (None, "") else service.price_max
-    if price in (None, ""):
+    text = _clean_text(price)
+    if not text:
         return None
-    return f"{price} ₽"
+    if any(marker in text.lower() for marker in ("₽", "руб")):
+        return text
+    try:
+        amount = float(text.replace(",", "."))
+    except ValueError:
+        return f"{text} ₽"
+    if amount <= 0:
+        return None
+    normalized = int(amount) if amount.is_integer() else amount
+    return f"{normalized} ₽"
 
 
 def _clean_text(value: object) -> str:
