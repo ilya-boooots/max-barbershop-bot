@@ -557,10 +557,20 @@ def format_booking_confirmation_text(
     )
 
 
-def format_booking_success(booking_state: dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+def format_booking_success(
+    booking_state: dict[str, Any],
+    *,
+    contacts: object | None = None,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+) -> str:
     """Format successful booking text in the Telegram reference style."""
 
-    return _format_booking_details("✅ Готово! Вы записаны 💈\n", booking_state, timezone_name=timezone_name)
+    return _format_booking_details(
+        "✅ Готово! Вы записаны 💈\n",
+        booking_state,
+        contacts=contacts,
+        timezone_name=timezone_name,
+    )
 
 
 def extract_yclients_record_id(created: YClientsBookingRecord | CreatedBooking | dict[str, Any] | list[Any]) -> str | None:
@@ -995,9 +1005,19 @@ def _extract_staff_rating(staff: dict[str, Any]) -> str | None:
 
 def _format_price(service: BookingServiceItem) -> str | None:
     price = service.price_min if service.price_min not in (None, "") else service.price_max
-    if price in (None, ""):
+    text = _clean_text(price)
+    if not text:
         return None
-    return f"{price} ₽"
+    if any(marker in text.lower() for marker in ("₽", "руб")):
+        return text
+    try:
+        amount = float(text.replace(",", "."))
+    except ValueError:
+        return f"{text} ₽"
+    if amount <= 0:
+        return None
+    normalized = int(amount) if amount.is_integer() else amount
+    return f"{normalized} ₽"
 
 
 def _clean_text(value: object) -> str:

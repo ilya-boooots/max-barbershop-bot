@@ -64,6 +64,7 @@ from max_barbershop_bot.ui.buttons import (
 )
 from max_barbershop_bot.ui.texts import (
     BOOKING_CATEGORY_EMPTY_TEXT,
+    BOOKING_CATEGORY_SERVICES_EMPTY_TEXT,
     BOOKING_CATEGORY_TEXT,
     BOOKING_CONFIRMATION_MISSING_DATA_TEXT,
     BOOKING_CREATE_ERROR_TEXT,
@@ -78,7 +79,6 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_REGISTERED_PHONE_MISSING_TEXT,
     BOOKING_SERVICE_TEXT,
     BOOKING_SLOTS_EMPTY_TEXT,
-    BOOKING_SLOTS_TEXT,
 )
 
 logger = logging.getLogger(__name__)
@@ -294,11 +294,11 @@ async def handle_booking_date(context: RouterContext) -> None:
 async def handle_booking_slot(context: RouterContext) -> None:
     """Save selected slot and show the next-step placeholder."""
 
-    await context.answer_callback("Время выбрано ✅")
     slot_time = _mapped_value(context, _SLOT_MAP_STATE_KEY, context.event.callback_payload)
     slots = _slots(context)
     booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
     if not slot_time or slots is None or not isinstance(booking_date, str):
+        await context.answer_callback("😔 Это окно уже неактуально. Обновляю список 🙂")
         if isinstance(booking_date, str) and booking_date:
             await _open_booking_slots(context, booking_date, push_current=False)
             return
@@ -307,9 +307,11 @@ async def handle_booking_slot(context: RouterContext) -> None:
 
     slot = next((item for item in slots if item.time == slot_time), None)
     if slot is None:
+        await context.answer_callback("😔 Это окно уже неактуально. Обновляю список 🙂")
         await _open_booking_slots(context, booking_date, push_current=False)
         return
 
+    await context.answer_callback("Время выбрано ✅")
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, slot.time)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_SLOT_STATE_KEY, slot.time)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, slot.datetime_iso)
@@ -666,9 +668,11 @@ async def _show_booking_success(context: RouterContext) -> None:
     timezone_name = booking_service.get_branch_timezone()
     state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SUCCESS_SCREEN)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+    contacts = await _booking_contacts_safely()
     await context.send_text(
-        format_booking_success(_booking_state_snapshot(context), timezone_name=timezone_name),
+        format_booking_success(_booking_state_snapshot(context), contacts=contacts, timezone_name=timezone_name),
         keyboard=booking_success_keyboard(),
+        attachments=_selected_master_photo_attachment(context),
     )
 
 
@@ -858,7 +862,8 @@ async def _show_services(
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SERVICES_SCREEN)
     if not display_services:
-        await context.send_text(BOOKING_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        empty_text = BOOKING_CATEGORY_SERVICES_EMPTY_TEXT if category_title else BOOKING_EMPTY_TEXT
+        await context.send_text(empty_text, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
         return
     logger.info(
         "Booking services screen shown: service_count=%s category_title_present=%s",
@@ -935,8 +940,7 @@ async def _show_dates(
         _push_current_screen(context, state.BOOKING_DATES_SCREEN)
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_DATES_SCREEN)
-    master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
-    attachment = _master_photo_service().photo_attachment(str(master_id) if master_id else None)
+    attachment = _selected_master_photo_attachment(context)
     await context.send_text(
         _booking_step_text(context, tail="📅 Выберите дату:", include_selected_date=False),
         keyboard=booking_dates_keyboard(
@@ -959,12 +963,18 @@ async def _show_slots(context: RouterContext, slots: list[BookingSlotItem], *, p
         _push_current_screen(context, state.BOOKING_SLOTS_SCREEN)
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SLOTS_SCREEN)
+    attachment = _selected_master_photo_attachment(context)
     if not display_slots:
-        await context.send_text(BOOKING_SLOTS_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await context.send_text(
+            BOOKING_SLOTS_EMPTY_TEXT,
+            keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
+            attachments=attachment,
+        )
         return
     await context.send_text(
-        BOOKING_SLOTS_TEXT,
+        _booking_step_text(context, tail="🕐 Выберите удобное время:"),
         keyboard=booking_slots_keyboard(display_slots, format_slot_button, back_payload=BOOKING_BACK_PAYLOAD),
+        attachments=attachment,
     )
 
 
@@ -1019,10 +1029,6 @@ def _booking_step_text(context: RouterContext, *, tail: str, include_selected_da
         lines.append(f"📅 Дата: {_format_selected_date(str(selected_date)) if selected_date else '—'}")
     lines.append(tail)
     return "\n".join(lines)
-
-
-def _master_photo_service() -> MasterPhotosService:
-    return MasterPhotosService(MasterPhotosRepository(_database_path()), YClientsSettingsRepository(_database_path()))
 
 
 def _slots(context: RouterContext) -> list[BookingSlotItem] | None:

@@ -42,6 +42,7 @@ BOOKING_SERVICE_TEXT = "Выберите услугу ✂️"
 BOOKING_EMPTY_TEXT = """Сейчас нет доступных услуг для записи 🙏
 
 Пожалуйста, попробуйте позже."""
+BOOKING_CATEGORY_SERVICES_EMPTY_TEXT = "😕 В этой категории пока нет доступных услуг."
 BOOKING_CATEGORY_EMPTY_TEXT = "😔 Пока нет доступных категорий услуг."
 BOOKING_MASTER_TEXT = "Выберите мастера 💈"
 BOOKING_MASTERS_EMPTY_TEXT = """😔 Для этой услуги пока нет мастеров со свободными окнами.
@@ -55,9 +56,7 @@ BOOKING_DATES_TEXT = """✂️ Запись
 BOOKING_SLOTS_TEXT = """✂️ Запись
 
 Выберите свободное время:"""
-BOOKING_SLOTS_EMPTY_TEXT = """На эту дату свободного времени нет 🙏
-
-Выберите другой день."""
+BOOKING_SLOTS_EMPTY_TEXT = "😔 На эту дату свободного времени нет. Выберите другую дату."
 BOOKING_CONFIRMATION_MISSING_DATA_TEXT = """Не хватает данных для записи 🙏
 
 Нажмите /start и пройдите регистрацию заново."""
@@ -72,7 +71,7 @@ BOOKING_REGISTERED_PHONE_MISSING_TEXT = "📱 Чтобы записать вас
 BOOKING_CREATE_ERROR_TEXT = """Не удалось создать запись 🙏
 
 Возможно, это время уже заняли. Попробуйте выбрать другой слот."""
-BOOKING_CREATE_IN_PROGRESS_TEXT = "Запись уже создаётся, подождите немного ⏳"
+BOOKING_CREATE_IN_PROGRESS_TEXT = "⏳ Уже создаём запись, секундочку 🙂"
 
 
 STAFF_MENU_TEXT = """👥 Персонал
