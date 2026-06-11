@@ -89,8 +89,12 @@ _SELECTED_CATEGORY_STATE_KEY = "selected_yclients_category_id"
 _SELECTED_CATEGORY_NAME_STATE_KEY = "selected_category_name"
 _SELECTED_SERVICE_STATE_KEY = "selected_yclients_service_id"
 _SELECTED_SERVICE_NAME_STATE_KEY = "selected_service_name"
+_SELECTED_SERVICE_PRICE_STATE_KEY = "selected_service_price"
+_SELECTED_SERVICE_DURATION_STATE_KEY = "selected_service_duration"
 _SELECTED_MASTER_STATE_KEY = "selected_yclients_master_id"
 _SELECTED_MASTER_NAME_STATE_KEY = "selected_master_name"
+_SELECTED_MASTER_SPECIALIZATION_STATE_KEY = "selected_master_specialization"
+_SELECTED_MASTER_RATING_STATE_KEY = "selected_master_rating"
 _SELECTED_DATE_STATE_KEY = "selected_booking_date"
 _SELECTED_SLOT_TIME_STATE_KEY = "selected_booking_slot_time"
 _SELECTED_SLOT_DATETIME_STATE_KEY = "selected_booking_datetime"
@@ -162,8 +166,12 @@ async def handle_booking_service(context: RouterContext) -> None:
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_STATE_KEY, service.yclients_service_id)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_NAME_STATE_KEY, service.title)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_PRICE_STATE_KEY, _service_price_text(service))
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_DURATION_STATE_KEY, service.duration)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_SPECIALIZATION_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_RATING_STATE_KEY, None)
     await _open_booking_masters(context, service.yclients_service_id)
 
 
@@ -244,6 +252,8 @@ async def handle_booking_master(context: RouterContext) -> None:
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, master.yclients_master_id)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, master.title)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_SPECIALIZATION_STATE_KEY, master.specialization)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_RATING_STATE_KEY, master.rating)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_DATE_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
@@ -416,8 +426,12 @@ async def _open_booking_catalog(context: RouterContext, *, push_current: bool = 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_CATEGORY_NAME_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_NAME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_PRICE_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_DURATION_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_SPECIALIZATION_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_RATING_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _MASTERS_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _DATES_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, None)
@@ -583,8 +597,12 @@ def _booking_state_snapshot(context: RouterContext) -> dict[str, object | None]:
     return {
         "selected_service_id": _state_value(context, _SELECTED_SERVICE_STATE_KEY),
         "selected_service_name": _state_value(context, _SELECTED_SERVICE_NAME_STATE_KEY),
+        "selected_service_price": _state_value(context, _SELECTED_SERVICE_PRICE_STATE_KEY),
+        "selected_service_duration": _state_value(context, _SELECTED_SERVICE_DURATION_STATE_KEY),
         "selected_master_id": _state_value(context, _SELECTED_MASTER_STATE_KEY),
         "selected_master_name": _state_value(context, _SELECTED_MASTER_NAME_STATE_KEY),
+        "selected_master_specialization": _state_value(context, _SELECTED_MASTER_SPECIALIZATION_STATE_KEY),
+        "selected_master_rating": _state_value(context, _SELECTED_MASTER_RATING_STATE_KEY),
         "selected_date": _state_value(context, _SELECTED_DATE_STATE_KEY),
         "selected_slot_time": _state_value(context, _SELECTED_SLOT_TIME_STATE_KEY),
         "selected_datetime": _state_value(context, _SELECTED_SLOT_DATETIME_STATE_KEY),
@@ -832,6 +850,11 @@ def _push_current_screen(context: RouterContext, next_screen: str) -> None:
     if current_screen != next_screen:
         state.push_screen(_user_id(context), _chat_id(context), current_screen)
     state.set_current_screen(_user_id(context), _chat_id(context), next_screen)
+
+
+def _service_price_text(service: BookingServiceItem) -> str | None:
+    price = service.price_min if service.price_min not in (None, "") else service.price_max
+    return f"{price} ₽" if price not in (None, "") else None
 
 
 def _catalog(context: RouterContext) -> BookingCatalog | None:
