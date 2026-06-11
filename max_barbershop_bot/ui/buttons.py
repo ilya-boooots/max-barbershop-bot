@@ -98,6 +98,9 @@ YCLIENTS_BACK_PAYLOAD = "yclients:back"
 YCLIENTS_HOME_PAYLOAD = "yclients:home"
 
 BOOKING_BACK_PAYLOAD = "booking:back"
+BOOKING_HUB_SERVICE_PAYLOAD = "booking:hub:service"
+BOOKING_HUB_STAFF_PAYLOAD = "booking:hub:staff"
+BOOKING_HUB_DATETIME_PAYLOAD = "booking:hub:datetime"
 BOOKING_CATEGORY_PAYLOAD_PREFIX = "booking:category:"
 BOOKING_SERVICE_PAYLOAD_PREFIX = "booking:service:"
 BOOKING_CATEGORY_PREV_PAYLOAD = "booking:category_page:prev"
@@ -546,6 +549,20 @@ def navigation_keyboard(*, back_payload: str = NAV_BACK_PAYLOAD) -> MaxInlineKey
                 MaxButton(text="⬅️ Назад", payload=back_payload),
                 MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD),
             ]
+        ]
+    )
+
+
+def booking_hub_keyboard(*, back_payload: str = BOOKING_BACK_PAYLOAD) -> MaxInlineKeyboard:
+    """Build booking entry-mode picker in the Telegram reference order."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="👨‍🔧 Выбрать специалиста", payload=BOOKING_HUB_STAFF_PAYLOAD)],
+            [MaxButton(text="📅 Выбрать дату и время", payload=BOOKING_HUB_DATETIME_PAYLOAD)],
+            [MaxButton(text="🧾 Выбрать услуги", payload=BOOKING_HUB_SERVICE_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=back_payload)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
 
