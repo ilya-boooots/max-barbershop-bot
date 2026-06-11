@@ -111,6 +111,8 @@ class Router:
             if raw_attachments:
                 event = replace(event, attachments=raw_attachments)
 
+        event = self._recover_booking_phone_contact_chat(event)
+
         self._log_contact_diagnostic(event)
         handler = self._resolve_handler(event)
         if handler is None:
@@ -152,6 +154,41 @@ class Router:
         handler = self._screen_text_handlers.get(current_screen)
         self._log_yclients_setup_text_diagnostic(event, current_screen, handler is not None)
         return handler or self._unknown_text_handler
+
+    def _recover_booking_phone_contact_chat(self, event: NormalizedEvent) -> NormalizedEvent:
+        if event.update_type != "message_created" or not _looks_like_contact_event(event):
+            return event
+
+        original_chat_id_present = event.chat_id is not None
+        current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
+        recovered_chat_id = None
+        route_recovered = False
+        if current_screen != state.BOOKING_PHONE_SCREEN:
+            recovered_chat_id = state.find_chat_id_for_current_screen(
+                event.platform_user_id,
+                state.BOOKING_PHONE_SCREEN,
+            )
+            if recovered_chat_id is not None:
+                event = replace(event, chat_id=recovered_chat_id)
+                route_recovered = True
+
+        screen_after = state.get_current_screen(event.platform_user_id, event.chat_id)
+        diagnostic_attachments = event.attachments or _raw_attachments(event.raw_update)
+        logger.info(
+            "MAX booking phone contact route recovery: "
+            "original_chat_id_present=%s recovered_chat_id_present=%s "
+            "platform_user_id_present=%s screen_before=%s screen_after=%s "
+            "attachment_count=%s attachment_types=%s route_recovered=%s",
+            original_chat_id_present,
+            recovered_chat_id is not None,
+            event.platform_user_id is not None,
+            current_screen,
+            screen_after,
+            len(diagnostic_attachments),
+            _attachment_types(diagnostic_attachments),
+            route_recovered,
+        )
+        return event
 
     def _log_contact_diagnostic(self, event: NormalizedEvent) -> None:
         if event.update_type != "message_created":
@@ -291,6 +328,15 @@ def _collect_attachment_lists(
         for index, child in enumerate(value):
             if isinstance(child, dict):
                 _collect_attachment_lists(child, [*path, str(index)], locations)
+
+
+def _looks_like_contact_event(event: NormalizedEvent) -> bool:
+    if event.attachments:
+        return any(
+            attachment_type == "contact" or "vcf_info" in payload_keys
+            for attachment_type, payload_keys in _attachment_type_and_payload_keys(event.attachments)
+        )
+    return _looks_like_contact_update(event.raw_update)
 
 
 def _looks_like_contact_update(raw_update: dict[str, object]) -> bool:
