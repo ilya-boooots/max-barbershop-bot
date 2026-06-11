@@ -30,6 +30,7 @@ from max_barbershop_bot.services.booking import (
     has_available_masters,
     has_available_services,
 )
+from max_barbershop_bot.services.contacts import ContactsService
 from max_barbershop_bot.services.master_photos import MasterPhotosService
 from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.services.registration import contains_contact_attachment, extract_contact_phone, normalize_phone
@@ -40,6 +41,7 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_CATEGORY_PAYLOAD_PREFIX,
     BOOKING_CATEGORY_PREV_PAYLOAD,
     BOOKING_CONFIRM_PAYLOAD,
+    BOOKING_CANCEL_DRAFT_PAYLOAD,
     BOOKING_PHONE_USE_REGISTERED_PAYLOAD,
     BOOKING_MASTER_NEXT_PAYLOAD,
     BOOKING_DATE_PAYLOAD_PREFIX,
@@ -123,6 +125,7 @@ def register_booking_routes(router: Router) -> None:
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
     router.on_callback(BOOKING_CONFIRM_PAYLOAD, handle_booking_confirm)
+    router.on_callback(BOOKING_CANCEL_DRAFT_PAYLOAD, handle_booking_cancel_draft)
     router.on_callback(BOOKING_PHONE_USE_REGISTERED_PAYLOAD, handle_booking_phone_use_registered)
     router.on_screen_text(state.BOOKING_PHONE_SCREEN, handle_booking_phone_input)
     router.on_callback(BOOKING_CATEGORY_PREV_PAYLOAD, handle_booking_category_page)
@@ -347,6 +350,15 @@ async def handle_booking_phone_input(context: RouterContext) -> None:
         await context.send_text(BOOKING_PHONE_INVALID_TEXT)
         return
     await _save_booking_phone_and_confirm(context, phone=phone, source=source)
+
+
+async def handle_booking_cancel_draft(context: RouterContext) -> None:
+    """Cancel only the draft booking flow before a YClients record is created."""
+
+    await context.answer_callback("Запись отменена 🙏")
+    state.clear_state_data(_user_id(context), _chat_id(context))
+    await context.send_text("❌ Запись отменена.")
+    await show_home(context)
 
 
 async def handle_booking_confirm(context: RouterContext) -> None:
@@ -604,13 +616,49 @@ async def _save_booking_phone_and_confirm(context: RouterContext, *, phone: str,
 
 
 async def _show_booking_confirmation(context: RouterContext) -> None:
+    booking_data = _booking_state_snapshot(context)
+    if normalize_phone(str(booking_data.get("booking_phone") or "")) is None:
+        await context.send_text(BOOKING_PHONE_INVALID_TEXT)
+        await _show_booking_phone(context, push_current=False)
+        return
+    if not booking_data.get("selected_service_id") or not booking_data.get("selected_master_id"):
+        await context.send_text(BOOKING_CONFIRMATION_MISSING_DATA_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+    if not booking_data.get("selected_date") or not booking_data.get("selected_slot_time"):
+        await context.send_text(BOOKING_CONFIRMATION_MISSING_DATA_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _show_booking_dates(context, push_current=False)
+        return
+
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     timezone_name = booking_service.get_branch_timezone()
+    contacts = await _booking_contacts_safely()
     _push_current_screen(context, state.BOOKING_CONFIRMATION_SCREEN)
     await context.send_text(
-        format_booking_summary(_booking_state_snapshot(context), timezone_name=timezone_name),
+        format_booking_summary(booking_data, contacts=contacts, timezone_name=timezone_name),
         keyboard=booking_confirmation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
+        attachments=_selected_master_photo_attachment(context),
     )
+
+
+def _selected_master_photo_attachment(context: RouterContext) -> list[dict[str, object]] | None:
+    try:
+        service = MasterPhotosService(
+            MasterPhotosRepository(_database_path()),
+            YClientsSettingsRepository(_database_path()),
+        )
+        attachment = service.photo_attachment(_optional_state_text(_state_value(context, _SELECTED_MASTER_STATE_KEY)))
+    except Exception as exc:  # noqa: BLE001 - photo is optional for confirmation UX.
+        logger.warning("Booking master photo skipped safely: error_class=%s", type(exc).__name__)
+        return None
+    return [attachment] if attachment else None
+
+
+async def _booking_contacts_safely():
+    try:
+        return await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
+    except Exception as exc:  # noqa: BLE001 - contacts must not block confirmation.
+        logger.warning("Booking contacts skipped safely: error_class=%s", type(exc).__name__)
+        return None
 
 
 async def _show_booking_success(context: RouterContext) -> None:

@@ -529,10 +529,32 @@ def build_booking_payload(
     }
 
 
-def format_booking_summary(booking_state: dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+def format_booking_summary(
+    booking_state: dict[str, Any],
+    *,
+    contacts: object | None = None,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+) -> str:
     """Format final confirmation text in the Telegram reference style."""
 
-    return _format_booking_details("Подтвердите запись, пожалуйста 🙂\n", booking_state, timezone_name=timezone_name)
+    return format_booking_confirmation_text(booking_state, contacts=contacts, timezone_name=timezone_name)
+
+
+def format_booking_confirmation_text(
+    booking_state: dict[str, Any],
+    contacts: object | None = None,
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+) -> str:
+    """Format final confirmation text in the Telegram reference style."""
+
+    return _format_booking_details(
+        "Подтвердите запись, пожалуйста 🙂\n",
+        booking_state,
+        contacts=contacts,
+        include_phone=True,
+        timezone_name=timezone_name,
+    )
 
 
 def format_booking_success(booking_state: dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
@@ -737,7 +759,14 @@ def format_service_title(service: BookingServiceItem | dict[str, Any]) -> str:
     return f"{normalized.title}{suffix}"
 
 
-def _format_booking_details(header: str, booking_state: dict[str, Any], *, timezone_name: str) -> str:
+def _format_booking_details(
+    header: str,
+    booking_state: dict[str, Any],
+    *,
+    contacts: object | None = None,
+    include_phone: bool = False,
+    timezone_name: str,
+) -> str:
     service_name = _clean_text(booking_state.get("selected_service_name") or booking_state.get("service_name")) or "—"
     master_name = _clean_text(
         booking_state.get("selected_master_name")
@@ -754,7 +783,62 @@ def _format_booking_details(header: str, booking_state: dict[str, Any], *, timez
             f"🕒 Время: {booking_time_value}",
         ]
     )
+    price = _display_price(booking_state.get("selected_service_price") or booking_state.get("service_price"))
+    duration = _display_duration(booking_state.get("selected_service_duration") or booking_state.get("service_duration"))
+    if price:
+        lines.append(f"💰 Цена: {price}")
+    if duration:
+        lines.append(f"⏳ Длительность: {duration}")
+    address, branch_phone = _contact_fields(contacts)
+    if address:
+        lines.append(f"📍 Адрес: {address}")
+    if branch_phone:
+        lines.append(f"📞 Контакты: {branch_phone}")
+    client_phone = _clean_text(booking_state.get("booking_phone") or booking_state.get("client_phone"))
+    if include_phone and client_phone:
+        lines.append(f"📱 Телефон: {client_phone}")
     return "\n".join(lines)
+
+
+def _display_price(value: object) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    if any(marker in text.lower() for marker in ("₽", "руб")):
+        return text
+    try:
+        amount = float(text.replace(",", "."))
+    except ValueError:
+        return text
+    if amount <= 0:
+        return ""
+    normalized = int(amount) if amount.is_integer() else amount
+    return f"{normalized} ₽"
+
+
+def _display_duration(value: object) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("мин", "час")):
+        return text
+    try:
+        normalized = int(float(text.replace(",", ".")))
+    except ValueError:
+        return text
+    if normalized <= 0:
+        return ""
+    minutes = ceil(normalized / 60) if normalized > 600 and normalized % 60 == 0 else normalized
+    return f"{minutes} мин"
+
+
+def _contact_fields(contacts: object | None) -> tuple[str, str]:
+    if contacts is None:
+        return "", ""
+    if isinstance(contacts, dict):
+        return _clean_text(contacts.get("address")), _clean_text(contacts.get("phone") or contacts.get("contacts"))
+    return _clean_text(getattr(contacts, "address", None)), _clean_text(getattr(contacts, "phone", None))
 
 
 def _display_date_time(booking_state: dict[str, Any], *, timezone_name: str) -> tuple[str, str]:
