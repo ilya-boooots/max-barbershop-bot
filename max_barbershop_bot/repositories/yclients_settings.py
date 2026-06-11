@@ -72,7 +72,7 @@ class YClientsSettingsRepository:
             row = connection.execute(
                 """
                 SELECT * FROM yclients_settings
-                WHERE is_active = 1
+                WHERE LOWER(COALESCE(CAST(is_active AS TEXT), '1')) IN ('1', 'true', 'yes', 'on')
                 ORDER BY id DESC
                 LIMIT 1
                 """
@@ -317,10 +317,20 @@ def _row_to_settings(row: sqlite3.Row | None) -> YClientsSettings | None:
         branch_timezone=row["branch_timezone"] or DEFAULT_BRANCH_TIMEZONE,
         branch_title=row["branch_title"],
         contacts_override_json=row["contacts_override_json"],
-        is_active=bool(row["is_active"]),
+        is_active=_bool_from_db(row["is_active"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _bool_from_db(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    if value is None:
+        return True
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _mask_secret(value: str | None) -> str | None:

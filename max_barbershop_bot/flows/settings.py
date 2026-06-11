@@ -25,6 +25,7 @@ from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRe
 from max_barbershop_bot.services.contacts import has_useful_override
 from max_barbershop_bot.services.navigation import go_back, show_home
 from max_barbershop_bot.services.settings_audit import log_settings_action
+from max_barbershop_bot.services.yclients_context import load_active_yclients_settings
 from max_barbershop_bot.ui.buttons import (
     ADMIN_SETTINGS_PAYLOAD,
     SETTINGS_BACK_PAYLOAD,
@@ -100,7 +101,7 @@ async def handle_settings_contacts(context: RouterContext) -> None:
     settings_repository = YClientsSettingsRepository(_database_path())
     override = settings_repository.get_contacts_override()
     manual_override = has_useful_override(override)
-    active_settings = settings_repository.get_active()
+    active_settings = load_active_yclients_settings(settings_repository, operation="settings_contacts_status")
     effective_source = _contacts_effective_source(active_settings, manual_override)
     text = (
         "📍 Контакты\n\n"

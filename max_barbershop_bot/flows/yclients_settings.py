@@ -14,6 +14,7 @@ from max_barbershop_bot.repositories.users import PLATFORM_MAX
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
 from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.services.settings_audit import log_settings_action
+from max_barbershop_bot.services.yclients_context import load_active_yclients_settings
 from max_barbershop_bot.services.yclients_settings import (
     check_yclients_connection,
     is_configured,
@@ -292,7 +293,7 @@ async def handle_connection_check(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context, "Проверяем подключение 🔍")
-    settings = _settings_repository().get_active()
+    settings = load_active_yclients_settings(_settings_repository(), operation="check_yclients_connection")
     if not is_configured(settings):
         await context.send_text(YCLIENTS_NOT_CONFIGURED_TEXT, keyboard=yclients_settings_keyboard())
         return
@@ -352,7 +353,7 @@ async def _show_settings_menu(context: RouterContext, *, push: bool = False) -> 
         _push_current_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
     else:
         _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
-    settings = _settings_repository().get_active()
+    settings = load_active_yclients_settings(_settings_repository(), operation="show_yclients_status")
     await context.send_text(_settings_status_text(settings), keyboard=yclients_settings_keyboard())
 
 

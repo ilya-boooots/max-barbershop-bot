@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.dto import YClientsHealthCheckResult
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
+from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings
 
 logger = logging.getLogger(__name__)
@@ -52,19 +52,13 @@ def normalize_support_timezone(value: str | None) -> str:
 def is_configured(settings: YClientsSettings | None) -> bool:
     """Return True when active settings contain all credentials needed for booking flows."""
 
-    return bool(
-        settings
-        and settings.is_active
-        and settings.company_id
-        and settings.partner_token
-        and settings.user_token
-    )
+    return has_required_yclients_credentials(settings)
 
 
 async def check_yclients_connection(settings: YClientsSettings) -> YClientsHealthCheckResult:
     """Run a read-only YClients health check using saved settings."""
 
-    if not settings.company_id or not settings.partner_token or not settings.user_token:
+    if not has_required_yclients_credentials(settings):
         return YClientsHealthCheckResult(
             ok=False,
             status_code=None,
@@ -72,11 +66,7 @@ async def check_yclients_connection(settings: YClientsSettings) -> YClientsHealt
         )
 
     try:
-        async with YClientsClient(
-            partner_token=settings.partner_token,
-            user_token=settings.user_token,
-            company_id=settings.company_id,
-        ) as client:
+        async with build_yclients_client_from_active_settings(settings) as client:
             service = YClientsServiceLayer(client, company_id=settings.company_id)
             return await service.health_check(company_id=settings.company_id)
     except YClientsError as exc:
