@@ -124,6 +124,26 @@ async def get_available_slots(
     return await client.get(f"/api/v1/book_times/{company_id}/{normalized_staff_id}/{date}", params=params)
 
 
+async def get_available_dates(
+    client: YClientsClient,
+    *,
+    company_id: str,
+    service_id: str,
+    date_from: str,
+    date_to: str,
+    staff_id: str | None = None,
+) -> dict[str, Any] | list[Any]:
+    """Return candidate booking dates for a service/staff/date range."""
+
+    params = {
+        "staff_id": staff_id or "0",
+        "service_ids[]": service_id,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    return await client.get(f"/api/v1/book_dates/{company_id}", params=params)
+
+
 async def get_slots_by_service_staff_date(
     client: YClientsClient,
     *,

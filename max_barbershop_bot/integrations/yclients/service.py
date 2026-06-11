@@ -22,6 +22,7 @@ from .endpoints import (
     create_booking as endpoint_create_booking,
     create_client as endpoint_create_client,
     cancel_booking as endpoint_cancel_booking,
+    get_available_dates as endpoint_get_available_dates,
     get_available_slots as endpoint_get_available_slots,
     get_client_details as endpoint_get_client_details,
     get_company,
@@ -138,6 +139,27 @@ class YClientsServiceLayer:
             date=date,
         )
         return [_slot_from_payload(item, fallback_staff_id=staff_id) for item in _extract_slot_rows(payload)]
+
+    async def get_available_dates(
+        self,
+        *,
+        service_id: str,
+        date_from: str,
+        date_to: str,
+        company_id: str | int | None = None,
+        staff_id: str | None = None,
+    ) -> list[str]:
+        """Return normalized candidate booking dates for a service/staff range."""
+
+        payload = await endpoint_get_available_dates(
+            self._client,
+            company_id=self.require_company_id(company_id),
+            service_id=service_id,
+            staff_id=staff_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return _extract_available_date_rows(payload)
 
     async def create_booking(
         self,
@@ -508,6 +530,49 @@ def _staff_from_payload(item: dict[str, Any]) -> YClientsStaff:
         raw=item,
     )
 
+
+
+def _extract_available_date_rows(payload: dict[str, Any] | list[Any]) -> list[str]:
+    data: Any = payload.get("data") if isinstance(payload, dict) else payload
+    seen: set[str] = set()
+
+    def add_iso(raw: Any) -> None:
+        value = safe_str(raw)
+        if not value:
+            return
+        try:
+            seen.add(value[:10])
+        except (TypeError, ValueError):
+            return
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            add_iso(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+            return
+        if isinstance(value, dict):
+            for key in ("booking_dates", "working_dates", "dates"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    walk(nested)
+            for key in ("booking_days", "working_days"):
+                month_days = value.get(key)
+                if not isinstance(month_days, dict):
+                    continue
+                for month_raw, days in month_days.items():
+                    if not isinstance(days, list):
+                        continue
+                    for day_raw in days:
+                        month = safe_str(month_raw).zfill(2)
+                        day = safe_str(day_raw).zfill(2)
+                        if month.isdigit() and day.isdigit():
+                            add_iso(f"0000-{month}-{day}")
+
+    walk(data)
+    return sorted(seen)
 
 
 def _extract_slot_rows(payload: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
