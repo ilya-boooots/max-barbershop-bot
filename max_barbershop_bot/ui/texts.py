@@ -61,6 +61,14 @@ BOOKING_SLOTS_EMPTY_TEXT = """На эту дату свободного врем
 BOOKING_CONFIRMATION_MISSING_DATA_TEXT = """Не хватает данных для записи 🙏
 
 Нажмите /start и пройдите регистрацию заново."""
+BOOKING_PHONE_TEXT = """📱 Чтобы записать вас, отправьте номер телефона 😊
+
+Можно использовать номер из регистрации:
+{registered_phone}"""
+BOOKING_PHONE_WITHOUT_REGISTERED_TEXT = "📱 Чтобы записать вас, отправьте номер телефона 😊"
+BOOKING_PHONE_INVALID_TEXT = "😔 Номер выглядит неверно. Отправьте телефон в формате +79991234567 🙂"
+BOOKING_CONTACT_PHONE_MISSING_TEXT = "😔 Номер выглядит неверно. Отправьте телефон в формате +79991234567 🙂"
+BOOKING_REGISTERED_PHONE_MISSING_TEXT = "📱 Чтобы записать вас, отправьте номер телефона 😊"
 BOOKING_CREATE_ERROR_TEXT = """Не удалось создать запись 🙏
 
 Возможно, это время уже заняли. Попробуйте выбрать другой слот."""
