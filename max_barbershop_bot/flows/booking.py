@@ -675,9 +675,6 @@ async def _show_categories(context: RouterContext, categories: list, *, page: in
         return
     await context.send_text(
         BOOKING_CATEGORY_TEXT,
-    BOOKING_CONFIRMATION_MISSING_DATA_TEXT,
-    BOOKING_CREATE_ERROR_TEXT,
-    BOOKING_CREATE_IN_PROGRESS_TEXT,
         keyboard=booking_categories_keyboard(
             display_categories,
             page=page,
