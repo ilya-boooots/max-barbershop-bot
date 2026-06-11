@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from math import ceil
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -77,6 +78,7 @@ class BookingServiceItem:
     category_title: str | None = None
     price_min: int | float | None = None
     price_max: int | float | None = None
+    duration: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,7 @@ class BookingMasterItem:
     yclients_master_id: str
     title: str
     specialization: str | None = None
+    rating: str | None = None
 
 
 @dataclass(frozen=True)
@@ -412,6 +415,8 @@ class BookingService:
         ]
         if not categories:
             categories = _categories_from_services(services)
+        else:
+            categories = sorted(categories, key=lambda item: item.title)
 
         logger.info(
             "Booking catalog loaded: operation=get_booking_catalog category_count=%s service_count=%s",
@@ -477,7 +482,10 @@ class BookingService:
             raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
 
         masters = [_normalize_master(item) for item in masters_payload]
-        masters = [item for item in masters if item.yclients_master_id and item.title]
+        masters = sorted(
+            [item for item in masters if item.yclients_master_id and item.title],
+            key=lambda item: item.title.lower(),
+        )
         logger.info(
             "Booking masters loaded: operation=get_booking_masters service_id=%s masters_count=%s",
             service_id,
@@ -700,7 +708,12 @@ def format_master_title(master: BookingMasterItem | dict[str, Any]) -> str:
     """Format a booking master button title in the reference bot style."""
 
     normalized = _normalize_master(master)
-    suffix = f" ({normalized.specialization})" if normalized.specialization else ""
+    details: list[str] = []
+    if normalized.specialization:
+        details.append(normalized.specialization)
+    if normalized.rating:
+        details.append(f"⭐️ {normalized.rating}")
+    suffix = f" ({', '.join(details)})" if details else ""
     return f"💈 {normalized.title}{suffix}"
 
 
@@ -718,6 +731,8 @@ def format_service_title(service: BookingServiceItem | dict[str, Any]) -> str:
     price = _format_price(normalized)
     if price:
         details.append(price)
+    if normalized.duration:
+        details.append(normalized.duration)
     suffix = f" ({', '.join(details)})" if details else ""
     return f"{normalized.title}{suffix}"
 
@@ -806,6 +821,7 @@ def _normalize_master(item: BookingMasterItem | YClientsStaff | dict[str, Any]) 
             yclients_master_id=item.id,
             title=item.name or "",
             specialization=item.specialization,
+            rating=_extract_staff_rating(item.raw),
         )
     return BookingMasterItem(
         yclients_master_id=_clean_text(
@@ -816,7 +832,8 @@ def _normalize_master(item: BookingMasterItem | YClientsStaff | dict[str, Any]) 
             or item.get("master_id")
         ),
         title=_clean_text(item.get("title") or item.get("name")),
-        specialization=_clean_text(item.get("specialization") or item.get("position") or item.get("profession")) or None,
+        specialization=_clean_text(item.get("specialization") or item.get("position") or item.get("post") or item.get("profession")) or None,
+        rating=_extract_staff_rating(item),
     )
 
 
@@ -842,6 +859,7 @@ def _normalize_service(item: BookingServiceItem | YClientsService | dict[str, An
             category_title=category_title,
             price_min=item.price_min,
             price_max=item.price_max,
+            duration=_extract_duration(item.raw),
         )
     return BookingServiceItem(
         yclients_service_id=_clean_text(item.get("yclients_service_id") or item.get("id") or item.get("service_id")),
@@ -850,6 +868,7 @@ def _normalize_service(item: BookingServiceItem | YClientsService | dict[str, An
         category_title=_clean_text(item.get("category_title") or item.get("category_name")) or None,
         price_min=item.get("price_min") or item.get("price") or item.get("cost"),
         price_max=item.get("price_max") or item.get("price") or item.get("cost"),
+        duration=_extract_duration(item),
     )
 
 
@@ -869,6 +888,25 @@ def _is_empty_category(category_id: str, title: str) -> bool:
     if title.strip().lower() == "без группы":
         return True
     return category_id.strip().lower() in {"", "0", "none", "null"}
+
+
+def _extract_duration(service: dict[str, Any]) -> str | None:
+    value = service.get("duration") or service.get("seance_length") or service.get("length")
+    if value is None:
+        return None
+    try:
+        normalized = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if normalized <= 0:
+        return None
+    minutes = ceil(normalized / 60) if normalized > 600 and normalized % 60 == 0 else normalized
+    return f"{minutes} мин"
+
+
+def _extract_staff_rating(staff: dict[str, Any]) -> str | None:
+    rating = _clean_text(staff.get("rating"))
+    return rating or None
 
 
 def _format_price(service: BookingServiceItem) -> str | None:
