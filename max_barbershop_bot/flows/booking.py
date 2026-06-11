@@ -78,7 +78,6 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_REGISTERED_PHONE_MISSING_TEXT,
     BOOKING_SERVICE_TEXT,
     BOOKING_SLOTS_EMPTY_TEXT,
-    BOOKING_SLOTS_TEXT,
 )
 
 logger = logging.getLogger(__name__)
@@ -666,9 +665,11 @@ async def _show_booking_success(context: RouterContext) -> None:
     timezone_name = booking_service.get_branch_timezone()
     state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SUCCESS_SCREEN)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+    contacts = await _booking_contacts_safely()
     await context.send_text(
-        format_booking_success(_booking_state_snapshot(context), timezone_name=timezone_name),
+        format_booking_success(_booking_state_snapshot(context), contacts=contacts, timezone_name=timezone_name),
         keyboard=booking_success_keyboard(),
+        attachments=_selected_master_photo_attachment(context),
     )
 
 
@@ -959,12 +960,18 @@ async def _show_slots(context: RouterContext, slots: list[BookingSlotItem], *, p
         _push_current_screen(context, state.BOOKING_SLOTS_SCREEN)
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SLOTS_SCREEN)
+    attachment = _selected_master_photo_attachment(context)
     if not display_slots:
-        await context.send_text(BOOKING_SLOTS_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await context.send_text(
+            BOOKING_SLOTS_EMPTY_TEXT,
+            keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
+            attachments=attachment,
+        )
         return
     await context.send_text(
-        BOOKING_SLOTS_TEXT,
+        _booking_step_text(context, tail="🕐 Выберите удобное время:"),
         keyboard=booking_slots_keyboard(display_slots, format_slot_button, back_payload=BOOKING_BACK_PAYLOAD),
+        attachments=attachment,
     )
 
 

@@ -55,9 +55,7 @@ BOOKING_DATES_TEXT = """✂️ Запись
 BOOKING_SLOTS_TEXT = """✂️ Запись
 
 Выберите свободное время:"""
-BOOKING_SLOTS_EMPTY_TEXT = """На эту дату свободного времени нет 🙏
-
-Выберите другой день."""
+BOOKING_SLOTS_EMPTY_TEXT = "😔 На эту дату свободного времени нет. Выберите другую дату."
 BOOKING_CONFIRMATION_MISSING_DATA_TEXT = """Не хватает данных для записи 🙏
 
 Нажмите /start и пройдите регистрацию заново."""
