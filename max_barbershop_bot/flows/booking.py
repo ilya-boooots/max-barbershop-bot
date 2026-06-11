@@ -32,6 +32,7 @@ from max_barbershop_bot.services.booking import (
 )
 from max_barbershop_bot.services.master_photos import MasterPhotosService
 from max_barbershop_bot.services.navigation import show_home
+from max_barbershop_bot.services.registration import contains_contact_attachment, extract_contact_phone, normalize_phone
 from max_barbershop_bot.services.reminders import send_immediate_confirmation
 from max_barbershop_bot.ui.buttons import (
     BOOKING_BACK_PAYLOAD,
@@ -39,6 +40,7 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_CATEGORY_PAYLOAD_PREFIX,
     BOOKING_CATEGORY_PREV_PAYLOAD,
     BOOKING_CONFIRM_PAYLOAD,
+    BOOKING_PHONE_USE_REGISTERED_PAYLOAD,
     BOOKING_MASTER_NEXT_PAYLOAD,
     BOOKING_DATE_PAYLOAD_PREFIX,
     BOOKING_MASTER_PAYLOAD_PREFIX,
@@ -54,6 +56,7 @@ from max_barbershop_bot.ui.buttons import (
     booking_services_keyboard,
     booking_slots_keyboard,
     booking_confirmation_keyboard,
+    booking_phone_keyboard,
     booking_success_keyboard,
     navigation_keyboard,
 )
@@ -65,7 +68,12 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_CREATE_IN_PROGRESS_TEXT,
     BOOKING_EMPTY_TEXT,
     BOOKING_MASTER_TEXT,
+    BOOKING_CONTACT_PHONE_MISSING_TEXT,
     BOOKING_MASTERS_EMPTY_TEXT,
+    BOOKING_PHONE_INVALID_TEXT,
+    BOOKING_PHONE_TEXT,
+    BOOKING_PHONE_WITHOUT_REGISTERED_TEXT,
+    BOOKING_REGISTERED_PHONE_MISSING_TEXT,
     BOOKING_SERVICE_TEXT,
     BOOKING_SLOTS_EMPTY_TEXT,
     BOOKING_SLOTS_TEXT,
@@ -104,6 +112,9 @@ _BOOKING_DATE_STATE_KEY = "booking_date"
 _BOOKING_SLOT_STATE_KEY = "booking_slot"
 _BOOKING_CREATION_IN_PROGRESS_STATE_KEY = "booking_creation_in_progress"
 _BOOKING_COMPLETED_RECORD_ID_STATE_KEY = "booking_completed_record_id"
+_BOOKING_PHONE_STATE_KEY = "booking_phone"
+_BOOKING_PHONE_SOURCE_STATE_KEY = "booking_phone_source"
+_REGISTERED_PHONE_STATE_KEY = "registered_phone"
 
 
 def register_booking_routes(router: Router) -> None:
@@ -112,6 +123,8 @@ def register_booking_routes(router: Router) -> None:
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
     router.on_callback(BOOKING_CONFIRM_PAYLOAD, handle_booking_confirm)
+    router.on_callback(BOOKING_PHONE_USE_REGISTERED_PAYLOAD, handle_booking_phone_use_registered)
+    router.on_screen_text(state.BOOKING_PHONE_SCREEN, handle_booking_phone_input)
     router.on_callback(BOOKING_CATEGORY_PREV_PAYLOAD, handle_booking_category_page)
     router.on_callback(BOOKING_CATEGORY_NEXT_PAYLOAD, handle_booking_category_page)
     router.on_callback(BOOKING_SERVICE_PREV_PAYLOAD, handle_booking_service_page)
@@ -300,7 +313,40 @@ async def handle_booking_slot(context: RouterContext) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, slot.raw)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_COMPLETED_RECORD_ID_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
-    await _show_booking_confirmation(context)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_PHONE_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_PHONE_SOURCE_STATE_KEY, None)
+    await _show_booking_phone(context)
+
+
+async def handle_booking_phone_use_registered(context: RouterContext) -> None:
+    """Use the saved profile phone for booking and continue to confirmation."""
+
+    await context.answer_callback("Телефон выбран ✅")
+    user = _current_user(context)
+    phone = normalize_phone(user.phone if user is not None else None)
+    if phone is None:
+        await context.send_text(
+            BOOKING_REGISTERED_PHONE_MISSING_TEXT,
+            keyboard=booking_phone_keyboard(include_registered_phone=False, back_payload=BOOKING_BACK_PAYLOAD),
+        )
+        return
+    await _save_booking_phone_and_confirm(context, phone=phone, source="registered")
+
+
+async def handle_booking_phone_input(context: RouterContext) -> None:
+    """Accept contact/manual phone on the booking phone step."""
+
+    phone = extract_contact_phone(context.event.attachments)
+    source = "contact" if phone is not None else "manual"
+    if phone is None and contains_contact_attachment(context.event.attachments):
+        await context.send_text(BOOKING_CONTACT_PHONE_MISSING_TEXT)
+        return
+
+    phone = phone or normalize_phone(context.event.text)
+    if phone is None:
+        await context.send_text(BOOKING_PHONE_INVALID_TEXT)
+        return
+    await _save_booking_phone_and_confirm(context, phone=phone, source=source)
 
 
 async def handle_booking_confirm(context: RouterContext) -> None:
@@ -315,7 +361,12 @@ async def handle_booking_confirm(context: RouterContext) -> None:
 
     booking_data = _booking_state_snapshot(context)
     user = _current_user(context)
-    if user is None or not user.phone or not booking_data.get("selected_service_id") or not booking_data.get("selected_master_id") or not booking_data.get("selected_date") or not booking_data.get("selected_slot_time"):
+    booking_phone = normalize_phone(str(booking_data.get("booking_phone") or ""))
+    if booking_phone is None:
+        await context.answer_callback("Не хватает телефона 🙏")
+        await _show_booking_phone(context, push_current=False)
+        return
+    if user is None or not booking_data.get("selected_service_id") or not booking_data.get("selected_master_id") or not booking_data.get("selected_date") or not booking_data.get("selected_slot_time"):
         await context.answer_callback("Не хватает данных 🙏")
         await context.send_text(BOOKING_CONFIRMATION_MISSING_DATA_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
         return
@@ -331,7 +382,7 @@ async def handle_booking_confirm(context: RouterContext) -> None:
             booking_slot=str(booking_data["selected_slot_time"]),
             selected_datetime=_optional_state_text(booking_data.get("selected_datetime")),
             client_name=_user_full_name(user),
-            client_phone=user.phone,
+            client_phone=booking_phone,
             comment=MAX_BOOKING_COMMENT_MARKER,
         )
     except BookingServiceError as exc:
@@ -392,7 +443,7 @@ async def handle_booking_back(context: RouterContext) -> None:
     if current_screen == state.BOOKING_SLOTS_SCREEN:
         await _show_booking_dates(context, push_current=False)
         return
-    if current_screen in {state.BOOKING_SLOT_SELECTED_SCREEN, state.BOOKING_CONFIRMATION_SCREEN}:
+    if current_screen == state.BOOKING_PHONE_SCREEN:
         booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
         if isinstance(booking_date, str) and booking_date:
             slots = _slots(context)
@@ -402,6 +453,9 @@ async def handle_booking_back(context: RouterContext) -> None:
             await _open_booking_slots(context, booking_date, push_current=False)
             return
         await _show_booking_dates(context, push_current=False)
+        return
+    if current_screen in {state.BOOKING_SLOT_SELECTED_SCREEN, state.BOOKING_CONFIRMATION_SCREEN}:
+        await _show_booking_phone(context, push_current=False)
         return
     if current_screen == state.BOOKING_SUCCESS_SCREEN:
         await show_home(context)
@@ -522,6 +576,33 @@ async def _open_booking_slots(context: RouterContext, booking_date: str, *, push
 
 
 
+async def _show_booking_phone(context: RouterContext, *, push_current: bool = True) -> None:
+    user = _current_user(context)
+    registered_phone = normalize_phone(user.phone if user is not None else None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _REGISTERED_PHONE_STATE_KEY, registered_phone)
+    if push_current:
+        _push_current_screen(context, state.BOOKING_PHONE_SCREEN)
+    else:
+        state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_PHONE_SCREEN)
+    if registered_phone:
+        text = BOOKING_PHONE_TEXT.format(registered_phone=registered_phone)
+    else:
+        text = BOOKING_PHONE_WITHOUT_REGISTERED_TEXT
+    await context.send_text(
+        text,
+        keyboard=booking_phone_keyboard(
+            include_registered_phone=bool(registered_phone),
+            back_payload=BOOKING_BACK_PAYLOAD,
+        ),
+    )
+
+
+async def _save_booking_phone_and_confirm(context: RouterContext, *, phone: str, source: str) -> None:
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_PHONE_STATE_KEY, phone)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_PHONE_SOURCE_STATE_KEY, source)
+    await _show_booking_confirmation(context)
+
+
 async def _show_booking_confirmation(context: RouterContext) -> None:
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     timezone_name = booking_service.get_branch_timezone()
@@ -607,6 +688,9 @@ def _booking_state_snapshot(context: RouterContext) -> dict[str, object | None]:
         "selected_date": _state_value(context, _SELECTED_DATE_STATE_KEY),
         "selected_slot_time": _state_value(context, _SELECTED_SLOT_TIME_STATE_KEY),
         "selected_datetime": _state_value(context, _SELECTED_SLOT_DATETIME_STATE_KEY),
+        "selected_slot_raw": _state_value(context, _SELECTED_SLOT_RAW_STATE_KEY),
+        "booking_phone": _state_value(context, _BOOKING_PHONE_STATE_KEY),
+        "booking_phone_source": _state_value(context, _BOOKING_PHONE_SOURCE_STATE_KEY),
     }
 
 

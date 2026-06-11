@@ -110,6 +110,7 @@ BOOKING_MASTER_NEXT_PAYLOAD = "booking:master_page:next"
 BOOKING_DATE_PAYLOAD_PREFIX = "booking:date:"
 BOOKING_SLOT_PAYLOAD_PREFIX = "booking:slot:"
 BOOKING_CONFIRM_PAYLOAD = "booking:confirm"
+BOOKING_PHONE_USE_REGISTERED_PAYLOAD = "booking:phone:use_registered"
 
 MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX = "my_bookings:details:"
 MY_BOOKINGS_CANCEL_START_PAYLOAD = "my_bookings:cancel:start"
@@ -663,6 +664,18 @@ def booking_slots_keyboard(
     ]
     for index in range(0, len(slot_buttons), 3):
         rows.append(slot_buttons[index : index + 3])
+    rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def booking_phone_keyboard(*, include_registered_phone: bool, back_payload: str = BOOKING_BACK_PAYLOAD) -> MaxInlineKeyboard:
+    """Build booking phone-step buttons in the reference UX order."""
+
+    rows: list[list[MaxButton]] = []
+    if include_registered_phone:
+        rows.append([MaxButton(text="📱 Использовать номер из регистрации", payload=BOOKING_PHONE_USE_REGISTERED_PAYLOAD)])
+    rows.append([MaxButton(text="📞 Поделиться контактом", type="request_contact")])
     rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
