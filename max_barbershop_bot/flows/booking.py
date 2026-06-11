@@ -21,6 +21,7 @@ from max_barbershop_bot.services.booking import (
     BookingMasterItem,
     BookingServiceItem,
     BookingSlotItem,
+    BOOKING_DATES_EMPTY_TEXT,
     format_booking_success,
     format_booking_summary,
     format_date_button,
@@ -85,7 +86,8 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_PHONE_WITHOUT_REGISTERED_TEXT,
     BOOKING_REGISTERED_PHONE_MISSING_TEXT,
     BOOKING_SERVICE_TEXT,
-    BOOKING_SLOTS_EMPTY_TEXT,
+    BOOKING_STALE_DATE_TEXT,
+    BOOKING_STALE_SLOT_TEXT,
     BOOKING_STAFF_FIRST_CATEGORY_TEXT,
 )
 
@@ -182,11 +184,11 @@ async def handle_booking_hub_staff(context: RouterContext) -> None:
 
 
 async def handle_booking_hub_datetime(context: RouterContext) -> None:
-    """Start the date-first booking route from the hub."""
+    """Start the safe date/time-first route from the hub."""
 
-    await context.answer_callback("Выбираем дату 📅")
+    await context.answer_callback("Сначала уточним услугу ✂️")
     state.set_state_data_value(_user_id(context), _chat_id(context), _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_DATETIME_FIRST)
-    await _show_booking_dates(context)
+    await _open_booking_catalog(context)
 
 
 async def handle_booking_category(context: RouterContext) -> None:
@@ -334,7 +336,7 @@ async def handle_booking_master(context: RouterContext) -> None:
         return
     booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
     if entry_mode == _ENTRY_MODE_DATETIME_FIRST and isinstance(booking_date, str) and booking_date:
-        await _open_booking_slots(context, booking_date)
+        await _open_booking_slots(context, booking_date, stale_if_empty=True)
         return
     await _show_booking_dates(context)
 
@@ -352,7 +354,7 @@ async def handle_booking_date(context: RouterContext) -> None:
     if not _state_value(context, _SELECTED_SERVICE_STATE_KEY) or not _state_value(context, _SELECTED_MASTER_STATE_KEY):
         await _open_booking_catalog(context)
         return
-    await _open_booking_slots(context, booking_date)
+    await _open_booking_slots(context, booking_date, stale_if_empty=True)
 
 
 async def handle_booking_slot(context: RouterContext) -> None:
@@ -364,7 +366,7 @@ async def handle_booking_slot(context: RouterContext) -> None:
     if not slot_time or slots is None or not isinstance(booking_date, str):
         await context.answer_callback("😔 Это окно уже неактуально. Обновляю список 🙂")
         if isinstance(booking_date, str) and booking_date:
-            await _open_booking_slots(context, booking_date, push_current=False)
+            await _open_booking_slots(context, booking_date, push_current=False, stale_if_empty=True)
             return
         await _show_booking_dates(context, push_current=False)
         return
@@ -372,7 +374,7 @@ async def handle_booking_slot(context: RouterContext) -> None:
     slot = next((item for item in slots if item.time == slot_time), None)
     if slot is None:
         await context.answer_callback("😔 Это окно уже неактуально. Обновляю список 🙂")
-        await _open_booking_slots(context, booking_date, push_current=False)
+        await _open_booking_slots(context, booking_date, push_current=False, stale_if_empty=True)
         return
 
     await context.answer_callback("Время выбрано ✅")
@@ -452,6 +454,30 @@ async def handle_booking_confirm(context: RouterContext) -> None:
     await context.answer_callback("Создаём запись ✂️")
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, True)
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    try:
+        fresh_slots = await booking_service.get_available_slots(
+            yclients_service_id=str(booking_data["selected_service_id"]),
+            yclients_master_id=str(booking_data["selected_master_id"]),
+            booking_date=str(booking_data["selected_date"]),
+        )
+    except BookingServiceError as exc:
+        logger.warning(
+            "Booking slot recheck failed: operation=confirm_booking_recheck service_id=%s master_id=%s date=%s slot_time=%s error_class=%s",
+            booking_data.get("selected_service_id"),
+            booking_data.get("selected_master_id"),
+            booking_data.get("selected_date"),
+            booking_data.get("selected_slot_time"),
+            type(exc).__name__,
+        )
+        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+        return
+    selected_slot_time = str(booking_data.get("selected_slot_time") or "")
+    if not any(item.time == selected_slot_time for item in fresh_slots):
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+        await context.send_text(BOOKING_STALE_SLOT_TEXT)
+        await _open_booking_slots(context, str(booking_data["selected_date"]), push_current=False, stale_if_empty=True)
+        return
     try:
         created = await booking_service.create_booking(
             yclients_service_id=str(booking_data["selected_service_id"]),
@@ -551,7 +577,7 @@ async def handle_booking_back(context: RouterContext) -> None:
             if slots is not None:
                 await _show_slots(context, slots, push_current=False)
                 return
-            await _open_booking_slots(context, booking_date, push_current=False)
+            await _open_booking_slots(context, booking_date, push_current=False, stale_if_empty=True)
             return
         await _show_booking_dates(context, push_current=False)
         return
@@ -677,14 +703,47 @@ async def _open_booking_masters(context: RouterContext, yclients_service_id: str
 
 
 async def _show_booking_dates(context: RouterContext, *, push_current: bool = True) -> None:
+    service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
+    master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
+    if not isinstance(service_id, str) or not service_id or not isinstance(master_id, str) or not master_id:
+        await _open_booking_catalog(context, push_current=push_current)
+        return
+
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     timezone_name = booking_service.get_branch_timezone()
-    dates = booking_service.get_available_dates(days=14)
+    try:
+        dates = await booking_service.get_available_dates_for_selection(
+            yclients_service_id=service_id,
+            yclients_master_id=master_id,
+            days=14,
+        )
+    except BookingServiceError as exc:
+        logger.warning(
+            "Booking dates screen failed: operation=show_booking_dates entry_mode=%s service_id_present=%s master_id_present=%s error_class=%s",
+            _entry_mode(context),
+            bool(service_id),
+            bool(master_id),
+            type(exc).__name__,
+        )
+        if push_current:
+            _push_current_screen(context, state.BOOKING_DATES_SCREEN)
+        else:
+            state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_DATES_SCREEN)
+        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+
     state.set_state_data_value(_user_id(context), _chat_id(context), _DATES_STATE_KEY, dates)
+    if not dates:
+        if push_current:
+            _push_current_screen(context, state.BOOKING_DATES_SCREEN)
+        else:
+            state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_DATES_SCREEN)
+        await context.send_text(BOOKING_DATES_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
     await _show_dates(context, dates, timezone_name=timezone_name, push_current=push_current)
 
 
-async def _open_booking_slots(context: RouterContext, booking_date: str, *, push_current: bool = True) -> None:
+async def _open_booking_slots(context: RouterContext, booking_date: str, *, push_current: bool = True, stale_if_empty: bool = False) -> None:
     service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
     master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
     if not isinstance(service_id, str) or not service_id or not isinstance(master_id, str) or not master_id:
@@ -714,8 +773,21 @@ async def _open_booking_slots(context: RouterContext, booking_date: str, *, push
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, slots)
+    if not slots:
+        await _refresh_dates_after_stale_slot(context, stale_text=BOOKING_STALE_DATE_TEXT if stale_if_empty else None, push_current=push_current)
+        return
     await _show_slots(context, slots, push_current=push_current)
 
+
+async def _refresh_dates_after_stale_slot(
+    context: RouterContext,
+    *,
+    stale_text: str | None,
+    push_current: bool,
+) -> None:
+    if stale_text:
+        await context.send_text(stale_text)
+    await _show_booking_dates(context, push_current=push_current)
 
 
 async def _show_booking_phone(context: RouterContext, *, push_current: bool = True) -> None:
@@ -1076,7 +1148,7 @@ async def _show_dates(
             lambda value: format_date_button(value, timezone_name=timezone_name),
             back_payload=BOOKING_BACK_PAYLOAD,
         ),
-        attachments=[attachment] if attachment is not None else None,
+        attachments=attachment,
     )
 
 
@@ -1093,11 +1165,7 @@ async def _show_slots(context: RouterContext, slots: list[BookingSlotItem], *, p
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SLOTS_SCREEN)
     attachment = _selected_master_photo_attachment(context)
     if not display_slots:
-        await context.send_text(
-            BOOKING_SLOTS_EMPTY_TEXT,
-            keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
-            attachments=attachment,
-        )
+        await _refresh_dates_after_stale_slot(context, stale_text=BOOKING_STALE_DATE_TEXT, push_current=push_current)
         return
     await context.send_text(
         _booking_step_text(context, tail="🕐 Выберите удобное время:"),

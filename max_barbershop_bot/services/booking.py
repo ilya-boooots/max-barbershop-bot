@@ -34,6 +34,7 @@ BOOKING_MASTERS_NOT_CONFIGURED_TEXT = "Запись пока не настрое
 BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить мастеров 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_SLOTS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_SLOTS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить свободное время 🙏\n\nПожалуйста, попробуйте позже."
+BOOKING_DATES_EMPTY_TEXT = "Пока нет свободных окон для выбранных параметров 🙏\n\nПопробуйте выбрать другую услугу или мастера."
 BOOKING_CREATE_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_CREATE_YCLIENTS_ERROR_TEXT = "Не удалось создать запись 🙏\n\nВозможно, это время уже заняли. Попробуйте выбрать другой слот."
 
@@ -143,9 +144,115 @@ class BookingService:
         return _timezone_name(settings.branch_timezone if settings else None)
 
     def get_available_dates(self, *, days: int = 14) -> list[date]:
-        """Return selectable dates in the active branch timezone."""
+        """Return branch-timezone candidate dates without claiming availability."""
 
         return build_booking_dates(days=days, timezone_name=self.get_branch_timezone())
+
+    async def get_available_dates_for_selection(
+        self,
+        *,
+        yclients_service_id: str,
+        yclients_master_id: str,
+        days: int = 14,
+    ) -> list[date]:
+        """Return only dates that YClients confirms have future slots."""
+
+        service_id = _clean_text(yclients_service_id)
+        master_id = _clean_text(yclients_master_id)
+        if not service_id or not master_id:
+            logger.warning(
+                "MAX booking availability diagnostic: selected_service_id_present=%s selected_master_id_present=%s",
+                bool(service_id),
+                bool(master_id),
+            )
+            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT)
+
+        try:
+            settings = self.load_active_settings_for_booking(operation="get_booking_dates")
+        except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
+            logger.warning(
+                "MAX booking availability diagnostic: yclients_settings_found=False selected_service_id_present=%s "
+                "selected_master_id_present=%s api_error_class=%s",
+                bool(service_id),
+                bool(master_id),
+                type(exc).__name__,
+            )
+            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT) from exc
+
+        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        candidate_dates = build_booking_dates(days=days, timezone_name=timezone_name)
+        if not has_required_yclients_credentials(settings):
+            logger.info(
+                "MAX booking availability diagnostic: yclients_settings_found=%s selected_service_id_present=%s "
+                "selected_master_id_present=%s candidate_dates_count=%s branch_timezone=%s",
+                settings is not None,
+                bool(service_id),
+                bool(master_id),
+                len(candidate_dates),
+                timezone_name,
+            )
+            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT)
+
+        try:
+            async with build_yclients_client_from_active_settings(settings) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                date_from = candidate_dates[0].isoformat()
+                date_to = candidate_dates[-1].isoformat()
+                yclients_dates = await yclients.get_available_dates(
+                    company_id=settings.company_id,
+                    service_id=service_id,
+                    staff_id=master_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+                candidate_iso = {item.isoformat() for item in candidate_dates}
+                dates_to_check = [item for item in _normalize_available_date_candidates(yclients_dates, today=candidate_dates[0]) if item.isoformat() in candidate_iso]
+                if not dates_to_check:
+                    dates_to_check = candidate_dates
+                available_dates: list[date] = []
+                for item in dates_to_check:
+                    slots_payload = await yclients.get_available_slots(
+                        company_id=settings.company_id,
+                        service_id=service_id,
+                        staff_id=master_id,
+                        date=item.isoformat(),
+                    )
+                    slots = filter_available_slots(slots_payload, booking_date=item.isoformat(), timezone_name=timezone_name)
+                    if slots:
+                        available_dates.append(item)
+        except YClientsError as exc:
+            logger.warning(
+                "MAX booking availability diagnostic: selected_service_id_present=%s selected_master_id_present=%s "
+                "candidate_dates_count=%s branch_timezone=%s yclients_settings_found=True api_error_class=%s",
+                bool(service_id),
+                bool(master_id),
+                len(candidate_dates),
+                timezone_name,
+                type(exc).__name__,
+            )
+            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
+        except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
+            logger.warning(
+                "MAX booking availability diagnostic: selected_service_id_present=%s selected_master_id_present=%s "
+                "candidate_dates_count=%s branch_timezone=%s yclients_settings_found=True api_error_class=%s",
+                bool(service_id),
+                bool(master_id),
+                len(candidate_dates),
+                timezone_name,
+                type(exc).__name__,
+            )
+            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
+
+        logger.info(
+            "MAX booking availability diagnostic: selected_service_id_present=%s selected_master_id_present=%s "
+            "candidate_dates_count=%s available_dates_count=%s branch_timezone=%s yclients_settings_found=True",
+            bool(service_id),
+            bool(master_id),
+            len(candidate_dates),
+            len(available_dates),
+            timezone_name,
+        )
+        return available_dates
 
 
     async def create_booking(
@@ -342,19 +449,15 @@ class BookingService:
             )
             raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
 
-        slots = [_normalize_slot(item, timezone_name=timezone_name) for item in slots_payload]
-        now = datetime.now(_zoneinfo(timezone_name))
-        slots = [
-            item
-            for item in slots
-            if item.time and _slot_is_future(item, booking_date=booking_date_value, now=now)
-        ]
+        slots = filter_available_slots(slots_payload, booking_date=booking_date_value, timezone_name=timezone_name)
         logger.info(
-            "Booking slots loaded: operation=get_booking_slots service_id=%s master_id=%s date=%s slots_count=%s",
-            service_id,
-            master_id,
+            "MAX booking availability diagnostic: selected_service_id_present=%s selected_master_id_present=%s "
+            "selected_date=%s slots_count=%s branch_timezone=%s yclients_settings_found=True",
+            bool(service_id),
+            bool(master_id),
             booking_date_value,
             len(slots),
+            timezone_name,
         )
         return slots
 
@@ -550,6 +653,65 @@ class BookingService:
 
 
 
+def filter_available_slots(
+    slots_payload: list[BookingSlotItem] | list[YClientsSlot] | list[dict[str, Any]],
+    *,
+    booking_date: str,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+) -> list[BookingSlotItem]:
+    """Normalize and keep only future displayable YClients slots."""
+
+    now = datetime.now(_zoneinfo(timezone_name))
+    normalized = [_normalize_slot(item, timezone_name=timezone_name) for item in slots_payload]
+    return [
+        item
+        for item in normalized
+        if item.time
+        and _slot_is_available(item.raw)
+        and _slot_is_future(item, booking_date=booking_date, now=now, timezone_name=timezone_name)
+    ]
+
+
+def _normalize_available_date_candidates(values: list[str], *, today: date) -> list[date]:
+    normalized: set[date] = set()
+    for value in values:
+        raw = _clean_text(value)
+        if not raw:
+            continue
+        try:
+            if raw.startswith("0000-"):
+                candidate = date(today.year, int(raw[5:7]), int(raw[8:10]))
+                if candidate < today:
+                    candidate = date(today.year + 1, candidate.month, candidate.day)
+            else:
+                candidate = datetime.fromisoformat(raw[:10]).date()
+        except (TypeError, ValueError):
+            continue
+        if candidate >= today:
+            normalized.add(candidate)
+    return sorted(normalized)
+
+
+def _slot_is_available(raw: dict[str, Any] | None) -> bool:
+    if not raw:
+        return True
+    for key in ("available", "is_available", "bookable", "is_bookable", "free", "is_free"):
+        if key in raw and _raw_bool_is_false(raw[key]):
+            return False
+    status = _clean_text(raw.get("status") or raw.get("state")).lower()
+    return status not in {"busy", "unavailable", "blocked", "not_available"}
+
+
+def _raw_bool_is_false(value: Any) -> bool:
+    if value is False:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"0", "false", "no", "нет"}
+    if isinstance(value, int | float):
+        return value == 0
+    return False
+
+
 def build_booking_payload(
     *,
     yclients_service_id: str,
@@ -710,13 +872,13 @@ def _normalize_slot_time(value: Any, *, timezone_name: str) -> str | None:
     return None
 
 
-def _slot_is_future(slot: BookingSlotItem, *, booking_date: str, now: datetime) -> bool:
-    parsed = _parse_datetime(slot.datetime_iso, timezone_name=str(now.tzinfo) if now.tzinfo else DEFAULT_BRANCH_TIMEZONE)
+def _slot_is_future(slot: BookingSlotItem, *, booking_date: str, now: datetime, timezone_name: str) -> bool:
+    parsed = _parse_datetime(slot.datetime_iso, timezone_name=timezone_name)
     if parsed is None:
-        parsed = _parse_datetime(f"{booking_date}T{slot.time}:00", timezone_name=str(now.tzinfo) if now.tzinfo else DEFAULT_BRANCH_TIMEZONE)
+        parsed = _parse_datetime(f"{booking_date}T{slot.time}:00", timezone_name=timezone_name)
     if parsed is None:
         return False
-    return parsed.astimezone(now.tzinfo) > now
+    return parsed.astimezone(_zoneinfo(timezone_name)) > now
 
 
 def _parse_datetime(value: Any, *, timezone_name: str) -> datetime | None:
@@ -765,7 +927,21 @@ def _zoneinfo(timezone_name: str) -> ZoneInfo:
 def _safe_raw_slot(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
-    return {key: raw.get(key) for key in ("time", "datetime", "date", "staff_id") if key in raw}
+    safe_keys = (
+        "time",
+        "datetime",
+        "date",
+        "staff_id",
+        "available",
+        "is_available",
+        "bookable",
+        "is_bookable",
+        "free",
+        "is_free",
+        "status",
+        "state",
+    )
+    return {key: raw.get(key) for key in safe_keys if key in raw}
 
 def group_services_by_category(
     categories: list[BookingCategory] | list[dict[str, Any]],
