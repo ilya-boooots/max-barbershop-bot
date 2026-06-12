@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -37,6 +38,8 @@ BOOKING_SLOTS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить св
 BOOKING_DATES_EMPTY_TEXT = "Пока нет свободных окон для выбранных параметров 🙏\n\nПопробуйте выбрать другую услугу или мастера."
 BOOKING_CREATE_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_CREATE_YCLIENTS_ERROR_TEXT = "Не удалось создать запись 🙏\n\nВозможно, это время уже заняли. Попробуйте выбрать другой слот."
+DATE_LOOKAHEAD_DAYS = 28
+YCLIENTS_SLOT_CONCURRENCY = 4
 
 _RU_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
@@ -254,6 +257,235 @@ class BookingService:
         )
         return available_dates
 
+    async def get_datetime_first_available_dates(self, *, days: int = DATE_LOOKAHEAD_DAYS) -> list[date]:
+        """Port Telegram datetime-first date loading: keep only YClients dates with future slots."""
+
+        settings, timezone_name, catalog = await self._load_datetime_first_context(operation="get_datetime_first_dates")
+        candidate_dates = build_booking_dates(days=days, timezone_name=timezone_name)
+        candidate_iso = {item.isoformat() for item in candidate_dates}
+        date_candidates: set[str] = set()
+
+        async with build_yclients_client_from_active_settings(settings) as client:
+            yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+            for service in catalog.services:
+                try:
+                    yclients_dates = await yclients.get_available_dates(
+                        company_id=settings.company_id,
+                        service_id=service.yclients_service_id,
+                        staff_id=None,
+                        date_from=candidate_dates[0].isoformat(),
+                        date_to=candidate_dates[-1].isoformat(),
+                    )
+                except YClientsError:
+                    logger.warning(
+                        "MAX booking datetime-first diagnostic: entry_mode=%s telegram_reference_function_used=%s "
+                        "selected_date=%s eligible_services_count=%s branch_timezone=%s yclients_settings_found=True",
+                        "datetime_first",
+                        "_load_datetime_first_dates",
+                        "n/a",
+                        0,
+                        timezone_name,
+                    )
+                    continue
+                for item in _normalize_available_date_candidates(yclients_dates, today=candidate_dates[0]):
+                    iso_date = item.isoformat()
+                    if iso_date in candidate_iso:
+                        date_candidates.add(iso_date)
+
+        if not date_candidates:
+            date_candidates = candidate_iso
+        filtered: list[date] = []
+        for iso_date in sorted(date_candidates):
+            slots = await self.get_datetime_first_slots_for_date(iso_date, catalog=catalog)
+            if slots:
+                filtered.append(_date_value(iso_date))
+        logger.info(
+            "MAX booking datetime-first diagnostic: entry_mode=%s telegram_reference_function_used=%s "
+            "candidate_dates_count=%s available_dates_count=%s branch_timezone=%s yclients_settings_found=True",
+            "datetime_first",
+            "_load_datetime_first_dates",
+            len(candidate_dates),
+            len(filtered),
+            timezone_name,
+        )
+        return filtered
+
+    async def get_datetime_first_slots_for_date(
+        self,
+        booking_date: str | date,
+        *,
+        catalog: BookingCatalog | None = None,
+    ) -> list[BookingSlotItem]:
+        """Port Telegram datetime-first slot loading: union future slots across services."""
+
+        settings, timezone_name, resolved_catalog = await self._load_datetime_first_context(
+            operation="get_datetime_first_slots",
+            catalog=catalog,
+        )
+        booking_date_value = _booking_date_iso(booking_date)
+        if not booking_date_value or is_past_date(booking_date_value, timezone_name=timezone_name):
+            return []
+
+        semaphore = asyncio.Semaphore(YCLIENTS_SLOT_CONCURRENCY)
+
+        async def load_for_service(service: BookingServiceItem) -> list[BookingSlotItem]:
+            async with semaphore:
+                try:
+                    async with build_yclients_client_from_active_settings(settings) as client:
+                        yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                        payload = await yclients.get_available_slots(
+                            company_id=settings.company_id,
+                            service_id=service.yclients_service_id,
+                            staff_id=None,
+                            date=booking_date_value,
+                        )
+                except YClientsError:
+                    return []
+                return filter_available_slots(payload, booking_date=booking_date_value, timezone_name=timezone_name)
+
+        results = await asyncio.gather(*(load_for_service(service) for service in resolved_catalog.services))
+        by_time: dict[str, BookingSlotItem] = {}
+        for slots in results:
+            for slot in slots:
+                by_time.setdefault(slot.time, slot)
+        normalized = sorted(by_time.values(), key=lambda item: item.time)
+        logger.info(
+            "MAX booking datetime-first diagnostic: entry_mode=%s telegram_reference_function_used=%s "
+            "selected_date=%s candidate_times_count=%s available_times_count=%s eligible_services_count=%s branch_timezone=%s yclients_settings_found=True",
+            "datetime_first",
+            "_load_datetime_first_slots_for_date",
+            booking_date_value,
+            sum(len(items) for items in results),
+            len(normalized),
+            len(resolved_catalog.services),
+            timezone_name,
+        )
+        return normalized
+
+    async def get_datetime_first_services_for_slot(
+        self,
+        *,
+        booking_date: str | date,
+        booking_time: str,
+        catalog: BookingCatalog | None = None,
+    ) -> BookingCatalog:
+        """Return only services that still expose the chosen date/time in YClients."""
+
+        settings, timezone_name, resolved_catalog = await self._load_datetime_first_context(
+            operation="get_datetime_first_services",
+            catalog=catalog,
+        )
+        booking_date_value = _booking_date_iso(booking_date)
+        selected_time = _clean_text(booking_time)
+        if not booking_date_value or not selected_time:
+            return BookingCatalog(categories=[], services=[])
+
+        semaphore = asyncio.Semaphore(YCLIENTS_SLOT_CONCURRENCY)
+
+        async def service_has_time(service: BookingServiceItem) -> tuple[BookingServiceItem, bool]:
+            async with semaphore:
+                try:
+                    async with build_yclients_client_from_active_settings(settings) as client:
+                        yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                        payload = await yclients.get_available_slots(
+                            company_id=settings.company_id,
+                            service_id=service.yclients_service_id,
+                            staff_id=None,
+                            date=booking_date_value,
+                        )
+                except YClientsError:
+                    return service, False
+                slots = filter_available_slots(payload, booking_date=booking_date_value, timezone_name=timezone_name)
+                return service, any(slot.time == selected_time for slot in slots)
+
+        results = await asyncio.gather(*(service_has_time(service) for service in resolved_catalog.services))
+        services = [service for service, available in results if available]
+        service_category_ids = {item.yclients_category_id for item in services if item.yclients_category_id}
+        categories = [category for category in resolved_catalog.categories if category.yclients_category_id in service_category_ids]
+        if not categories:
+            categories = _categories_from_services(services)
+        logger.info(
+            "MAX booking datetime-first diagnostic: entry_mode=%s telegram_reference_function_used=%s selected_date=%s "
+            "selected_time=%s eligible_services_count=%s branch_timezone=%s yclients_settings_found=True",
+            "datetime_first",
+            "_get_valid_services_for_context",
+            booking_date_value,
+            selected_time,
+            len(services),
+            timezone_name,
+        )
+        return BookingCatalog(categories=categories, services=services)
+
+    async def get_datetime_first_masters_for_slot(
+        self,
+        *,
+        yclients_service_id: str,
+        booking_date: str | date,
+        booking_time: str,
+    ) -> list[BookingMasterItem]:
+        """Return only masters that can book the selected service at selected date/time."""
+
+        service_id = _clean_text(yclients_service_id)
+        settings = self.load_active_settings_for_booking(operation="get_datetime_first_masters")
+        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        if not has_required_yclients_credentials(settings) or not service_id:
+            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT)
+        masters = await self.get_available_masters_for_service(service_id)
+        booking_date_value = _booking_date_iso(booking_date)
+        selected_time = _clean_text(booking_time)
+        semaphore = asyncio.Semaphore(YCLIENTS_SLOT_CONCURRENCY)
+
+        async def master_has_time(master: BookingMasterItem) -> tuple[BookingMasterItem, bool]:
+            async with semaphore:
+                try:
+                    slots = await self.get_available_slots(
+                        yclients_service_id=service_id,
+                        yclients_master_id=master.yclients_master_id,
+                        booking_date=booking_date_value,
+                    )
+                except BookingServiceError:
+                    return master, False
+                return master, any(slot.time == selected_time for slot in slots)
+
+        results = await asyncio.gather(*(master_has_time(master) for master in masters))
+        eligible = [master for master, available in results if available]
+        logger.info(
+            "MAX booking datetime-first diagnostic: entry_mode=%s telegram_reference_function_used=%s selected_date=%s "
+            "selected_time=%s eligible_masters_count=%s branch_timezone=%s yclients_settings_found=True",
+            "datetime_first",
+            "_show_staff availability_filtered",
+            booking_date_value,
+            selected_time,
+            len(eligible),
+            timezone_name,
+        )
+        return eligible
+
+    async def _load_datetime_first_context(
+        self,
+        *,
+        operation: str,
+        catalog: BookingCatalog | None = None,
+    ) -> tuple[YClientsSettings, str, BookingCatalog]:
+        try:
+            settings = self.load_active_settings_for_booking(operation=operation)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MAX booking datetime-first diagnostic: entry_mode=%s yclients_settings_found=False api_error_class=%s",
+                "datetime_first",
+                type(exc).__name__,
+            )
+            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT) from exc
+        if not has_required_yclients_credentials(settings):
+            logger.info(
+                "MAX booking datetime-first diagnostic: entry_mode=%s yclients_settings_found=%s",
+                "datetime_first",
+                settings is not None,
+            )
+            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT)
+        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        resolved_catalog = catalog if catalog is not None else await self.get_service_categories_and_services()
+        return settings, timezone_name, resolved_catalog
 
     async def create_booking(
         self,
