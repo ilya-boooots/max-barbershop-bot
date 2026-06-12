@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -9,7 +10,7 @@ from typing import Any
 import aiohttp
 
 from max_barbershop_bot.core.config import Config, load_config
-from max_barbershop_bot.max_api.models import MaxInlineKeyboard, MaxMessage, MaxUpdate
+from max_barbershop_bot.max_api.models import MaxInlineKeyboard, MaxMessage, MaxUpdate, build_media_attachment
 
 logger = logging.getLogger(__name__)
 
@@ -91,20 +92,58 @@ class MaxApiClient:
         self,
         *,
         text: str | None,
-        user_id: int | None = None,
-        chat_id: int | None = None,
+        user_id: int | str | None = None,
+        chat_id: int | str | None = None,
         keyboard: MaxInlineKeyboard | None = None,
         attachments: Sequence[Mapping[str, Any]] | None = None,
         disable_link_preview: bool | None = None,
         notify: bool | None = None,
         text_format: str | None = None,
     ) -> MaxMessage | None:
-        """Send a text message to a MAX user or chat."""
+        """Send a MAX message using documented /messages query recipient and body."""
+
+        params, body = self.build_send_message_payload(
+            text=text,
+            user_id=user_id,
+            chat_id=chat_id,
+            keyboard=keyboard,
+            attachments=attachments,
+            disable_link_preview=disable_link_preview,
+            notify=notify,
+            text_format=text_format,
+        )
+        response = await self._request("POST", "/messages", params=params, json=body)
+        if isinstance(response, dict):
+            message_payload = (
+                response.get("message")
+                if isinstance(response.get("message"), dict)
+                else response
+            )
+            return MaxMessage.from_payload(message_payload)
+        return None
+
+    def build_send_message_payload(
+        self,
+        *,
+        text: str | None,
+        user_id: int | str | None = None,
+        chat_id: int | str | None = None,
+        keyboard: MaxInlineKeyboard | None = None,
+        attachments: Sequence[Mapping[str, Any]] | None = None,
+        disable_link_preview: bool | None = None,
+        notify: bool | None = None,
+        text_format: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Build the documented MAX /messages query params and JSON body."""
 
         if user_id is None and chat_id is None:
             raise ValueError("Укажите user_id или chat_id для отправки сообщения MAX.")
         if user_id is not None and chat_id is not None:
             raise ValueError("Укажите только один адресат MAX: user_id или chat_id.")
+        if text is not None and len(text) > 4000:
+            raise ValueError("Текст сообщения MAX длиннее 4000 символов.")
+        if text_format is not None and text_format not in {"markdown", "html"}:
+            raise ValueError("MAX поддерживает только формат markdown или html.")
 
         params: dict[str, Any] = {}
         if user_id is not None:
@@ -126,16 +165,66 @@ class MaxApiClient:
             body["notify"] = notify
         if text_format is not None:
             body["format"] = text_format
+        return params, body
 
-        response = await self._request("POST", "/messages", params=params, json=body)
-        if isinstance(response, dict):
-            message_payload = (
-                response.get("message")
-                if isinstance(response.get("message"), dict)
-                else response
-            )
-            return MaxMessage.from_payload(message_payload)
-        return None
+    async def send_media(
+        self,
+        *,
+        media_type: str,
+        media_payload: Mapping[str, Any],
+        text: str | None = None,
+        user_id: int | str | None = None,
+        chat_id: int | str | None = None,
+        keyboard: MaxInlineKeyboard | None = None,
+        notify: bool | None = None,
+        text_format: str | None = None,
+    ) -> MaxMessage | None:
+        """Send an already-uploaded MAX media attachment by upload payload/token."""
+
+        attachment = build_media_attachment(media_type, media_payload)  # type: ignore[arg-type]
+        return await self.send_message(
+            text=text,
+            user_id=user_id,
+            chat_id=chat_id,
+            keyboard=keyboard,
+            attachments=[attachment],
+            notify=notify,
+            text_format=text_format,
+        )
+
+    async def send_photo(
+        self,
+        *,
+        image_payload: Mapping[str, Any],
+        text: str | None = None,
+        user_id: int | str | None = None,
+        chat_id: int | str | None = None,
+        keyboard: MaxInlineKeyboard | None = None,
+        notify: bool | None = None,
+        text_format: str | None = None,
+    ) -> MaxMessage | None:
+        """Send an already-uploaded MAX image attachment with optional text/keyboard."""
+
+        return await self.send_media(
+            media_type="image",
+            media_payload=image_payload,
+            text=text,
+            user_id=user_id,
+            chat_id=chat_id,
+            keyboard=keyboard,
+            notify=notify,
+            text_format=text_format,
+        )
+
+    async def create_upload_url(self, *, upload_type: str) -> dict[str, Any]:
+        """Return MAX upload URL metadata for image/video/audio/file uploads."""
+
+        if upload_type == "photo":
+            raise ValueError("MAX API больше не поддерживает type=photo; используйте type=image.")
+        if upload_type not in {"image", "video", "audio", "file"}:
+            raise ValueError("MAX upload_type должен быть image, video, audio или file.")
+        response = await self._request("POST", "/uploads", params={"type": upload_type})
+        return response if isinstance(response, dict) else {}
 
     async def answer_callback(
         self,
@@ -225,7 +314,7 @@ class MaxApiClient:
                 if response.status >= 400:
                     self._raise_for_status(response.status, payload)
                 return payload
-        except aiohttp.ClientError as error:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             logger.warning("Сетевая ошибка MAX API: method=%s path=%s", method, path)
             raise MaxApiNetworkError("Не удалось выполнить запрос к MAX API") from error
 

@@ -28,6 +28,7 @@ _EXPLICIT_RETRYABLE_STATUSES = {429, 503}
 _EXPLICIT_NON_RETRYABLE_STATUSES = {400, 401, 404, 405}
 _BLOCKED_ERROR_CODES = {"blocked", "bot_blocked", "user_blocked_bot"}
 _STOPPED_ERROR_CODES = {"stopped", "user_stopped_bot"}
+_RETRYABLE_ERROR_CODES = {"attachment.not.ready"}
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,54 @@ class MaxMessageSender:
             text_format=format,
         )
 
+    async def send_photo_to_user(
+        self,
+        user_id: int | str,
+        image_payload: Mapping[str, Any],
+        text: str | None = None,
+        *,
+        keyboard: MaxInlineKeyboard | None = None,
+        format: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> MaxSendResult:
+        """Send an uploaded MAX image attachment to a user safely."""
+
+        del metadata
+        return await self._send_media(
+            recipient_type="user",
+            recipient_id=str(user_id),
+            media_type="image",
+            media_payload=image_payload,
+            text=text,
+            user_id=user_id,
+            keyboard=keyboard,
+            text_format=format,
+        )
+
+    async def send_photo_to_chat(
+        self,
+        chat_id: int | str,
+        image_payload: Mapping[str, Any],
+        text: str | None = None,
+        *,
+        keyboard: MaxInlineKeyboard | None = None,
+        format: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> MaxSendResult:
+        """Send an uploaded MAX image attachment to a chat safely."""
+
+        del metadata
+        return await self._send_media(
+            recipient_type="chat",
+            recipient_id=str(chat_id),
+            media_type="image",
+            media_payload=image_payload,
+            text=text,
+            chat_id=chat_id,
+            keyboard=keyboard,
+            text_format=format,
+        )
+
     async def answer_callback(
         self,
         callback_id: str,
@@ -172,6 +221,36 @@ class MaxMessageSender:
                 text=text,
                 keyboard=keyboard,
                 attachments=attachments,
+                text_format=text_format,
+            )
+
+        return await self._run_with_retry(
+            operation,
+            recipient_type=recipient_type,
+            recipient_id=recipient_id,
+        )
+
+    async def _send_media(
+        self,
+        *,
+        recipient_type: RecipientType,
+        recipient_id: str,
+        media_type: str,
+        media_payload: Mapping[str, Any],
+        text: str | None,
+        user_id: int | str | None = None,
+        chat_id: int | str | None = None,
+        keyboard: MaxInlineKeyboard | None = None,
+        text_format: str | None = None,
+    ) -> MaxSendResult:
+        async def operation() -> MaxMessage | dict[str, Any] | None:
+            return await self._client.send_media(
+                media_type=media_type,
+                media_payload=media_payload,
+                user_id=user_id,
+                chat_id=chat_id,
+                text=text,
+                keyboard=keyboard,
                 text_format=text_format,
             )
 
@@ -248,15 +327,32 @@ def _success_result(
     attempts: int,
 ) -> MaxSendResult:
     message_id = _extract_message_id(response)
+    ok = _response_success(response)
     return MaxSendResult(
-        ok=True,
+        ok=ok,
         status_code=200,
         message_id=message_id,
         recipient_type=recipient_type,
         recipient_id=recipient_id,
+        error_code=None if ok else "max_success_false",
+        error_message=None if ok else _response_message(response),
+        is_retryable=False,
         attempts=attempts,
         raw_response=_safe_raw_response(response),
     )
+
+
+def _response_success(response: Any) -> bool:
+    if isinstance(response, dict) and response.get("success") is False:
+        return False
+    return True
+
+
+def _response_message(response: Any) -> str | None:
+    if not isinstance(response, dict):
+        return None
+    message = response.get("message")
+    return _safe_error_message(message) if isinstance(message, str) else None
 
 
 def _exception_result(
@@ -272,7 +368,9 @@ def _exception_result(
     is_stopped = normalized_code in _STOPPED_ERROR_CODES
     if status_code == 404 and normalized_code is None:
         normalized_code = "recipient_unavailable"
-    retryable = is_retryable_status(status_code) and not is_blocked and not is_stopped
+    retryable = (
+        is_retryable_status(status_code) or normalized_code in _RETRYABLE_ERROR_CODES
+    ) and not is_blocked and not is_stopped
 
     return MaxSendResult(
         ok=False,
