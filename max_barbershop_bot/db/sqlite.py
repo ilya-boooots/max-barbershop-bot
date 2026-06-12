@@ -136,6 +136,18 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            actor_platform_user_id TEXT,
+            target_platform_user_id TEXT,
+            target_max_user_id TEXT,
+            old_role TEXT,
+            new_role TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS master_photos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -207,6 +219,12 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON settings_audit_log(section);
         CREATE INDEX IF NOT EXISTS idx_settings_audit_log_created_at
             ON settings_audit_log(created_at);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_event_type
+            ON audit_log(event_type);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_target_platform_user_id
+            ON audit_log(target_platform_user_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_created_at
+            ON audit_log(created_at);
         CREATE INDEX IF NOT EXISTS idx_master_photos_staff
             ON master_photos(platform, yclients_staff_id);
         CREATE INDEX IF NOT EXISTS idx_master_photos_active
@@ -255,6 +273,14 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "settings_audit_log", "target_platform_user_id", "TEXT")
     _ensure_column(connection, "settings_audit_log", "metadata_json", "TEXT")
     _ensure_column(connection, "settings_audit_log", "created_at", "TEXT")
+    _ensure_column(connection, "audit_log", "event_type", "TEXT")
+    _ensure_column(connection, "audit_log", "actor_platform_user_id", "TEXT")
+    _ensure_column(connection, "audit_log", "target_platform_user_id", "TEXT")
+    _ensure_column(connection, "audit_log", "target_max_user_id", "TEXT")
+    _ensure_column(connection, "audit_log", "old_role", "TEXT")
+    _ensure_column(connection, "audit_log", "new_role", "TEXT")
+    _ensure_column(connection, "audit_log", "metadata_json", "TEXT")
+    _ensure_column(connection, "audit_log", "created_at", "TEXT")
     _ensure_column(connection, "master_photos", "platform", "TEXT NOT NULL DEFAULT 'max'")
     _ensure_column(connection, "master_photos", "yclients_staff_id", "TEXT")
     _ensure_column(connection, "master_photos", "master_name", "TEXT")

@@ -19,7 +19,11 @@ from max_barbershop_bot.core.permissions import (
     normalize_role,
 )
 from max_barbershop_bot.core.router import Router, RouterContext
-from max_barbershop_bot.repositories.staff_roles import StaffRole, StaffRolesRepository
+from max_barbershop_bot.repositories.staff_roles import (
+    ProtectedDeveloperRoleChangeError,
+    StaffRole,
+    StaffRolesRepository,
+)
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, User, UsersRepository
 from max_barbershop_bot.services.registration import mask_phone, normalize_phone
 from max_barbershop_bot.services.role_onboarding import notify_role_assigned, notify_role_removed
@@ -46,6 +50,7 @@ from max_barbershop_bot.ui.texts import (
     STAFF_LIST_EMPTY_TEXT,
     STAFF_NO_ACCESS_TEXT,
     STAFF_NO_EXTRA_ROLES_TEXT,
+    STAFF_PROTECTED_DEVELOPER_ROLE_TEXT,
     STAFF_REMOVE_IDENTIFIER_TEXT,
     STAFF_ROLE_ASSIGNED_TEXT,
     STAFF_ROLE_REMOVED_TEXT,
@@ -165,19 +170,25 @@ async def handle_assign_role(context: RouterContext) -> None:
         await _answer_callback_if_needed(context, "Данные потеряны")
         await context.send_text(STAFF_USER_NOT_FOUND_TEXT, keyboard=navigation_keyboard())
         return
-    if not can_assign_role(actor_role, new_role):
+    protected_target = _is_protected_target(target)
+    if not can_assign_role(actor_role, new_role) or (new_role == ROLE_DEVELOPER and not protected_target):
         await _send_no_access(context)
         return
-    if _is_protected_target(target) and new_role != ROLE_DEVELOPER:
-        await _send_no_access(context)
+    if protected_target and new_role != ROLE_DEVELOPER:
+        _log_protected_developer_block(context, target, attempted_role=new_role, action="role_assign")
+        await _send_protected_developer_block(context)
         return
 
-    _staff_repository().assign_role(
-        target.platform_user_id,
-        new_role,
-        assigned_by_platform_user_id=context.event.platform_user_id,
-        platform=PLATFORM_MAX,
-    )
+    try:
+        _staff_repository().assign_role(
+            target.platform_user_id,
+            new_role,
+            assigned_by_platform_user_id=context.event.platform_user_id,
+            platform=PLATFORM_MAX,
+        )
+    except ProtectedDeveloperRoleChangeError:
+        await _send_protected_developer_block(context)
+        return
     log_settings_action(
         actor_platform_user_id=context.event.platform_user_id,
         actor_role=actor_role,
@@ -252,14 +263,24 @@ async def handle_remove_role(context: RouterContext) -> None:
         await _answer_callback_if_needed(context, "Данные потеряны")
         await context.send_text(STAFF_USER_NOT_FOUND_TEXT, keyboard=navigation_keyboard())
         return
-    if _is_protected_target(target) and removed_role == ROLE_DEVELOPER:
-        await _send_no_access(context)
+    if _is_protected_target(target):
+        _log_protected_developer_block(context, target, attempted_role=ROLE_USER, action="role_remove")
+        await _send_protected_developer_block(context)
         return
     if not can_remove_role(actor_role, removed_role):
         await _send_no_access(context)
         return
 
-    removed = _staff_repository().remove_role(target.platform_user_id, removed_role, platform=PLATFORM_MAX)
+    try:
+        removed = _staff_repository().remove_role(
+            target.platform_user_id,
+            removed_role,
+            platform=PLATFORM_MAX,
+            actor_platform_user_id=context.event.platform_user_id,
+        )
+    except ProtectedDeveloperRoleChangeError:
+        await _send_protected_developer_block(context)
+        return
     if not removed:
         await context.send_text(STAFF_NO_EXTRA_ROLES_TEXT, keyboard=navigation_keyboard())
         return
@@ -335,9 +356,9 @@ def _target_from_state(context: RouterContext) -> User | None:
 def _removable_roles(actor_role: str, target: User) -> list[str]:
     roles = _staff_repository().get_roles(target.platform_user_id, platform=PLATFORM_MAX)
     removable: list[str] = []
+    if _is_protected_target(target):
+        return removable
     for role in roles:
-        if _is_protected_target(target) and role == ROLE_DEVELOPER:
-            continue
         if can_remove_role(actor_role, role):
             removable.append(role)
     return removable
@@ -373,6 +394,27 @@ def _push_current_screen(context: RouterContext, screen_id: str) -> None:
 async def _send_no_access(context: RouterContext) -> None:
     await _answer_callback_if_needed(context, STAFF_NO_ACCESS_TEXT)
     await context.send_text(STAFF_NO_ACCESS_TEXT)
+
+
+async def _send_protected_developer_block(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context, STAFF_PROTECTED_DEVELOPER_ROLE_TEXT)
+    await context.send_text(STAFF_PROTECTED_DEVELOPER_ROLE_TEXT)
+
+
+def _log_protected_developer_block(
+    context: RouterContext,
+    target: User,
+    *,
+    attempted_role: str | None,
+    action: str,
+) -> None:
+    _staff_repository().log_protected_developer_role_change_blocked(
+        actor_platform_user_id=context.event.platform_user_id,
+        target_platform_user_id=target.platform_user_id,
+        attempted_role=attempted_role,
+        action=action,
+        platform=PLATFORM_MAX,
+    )
 
 
 async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:

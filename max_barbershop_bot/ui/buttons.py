@@ -571,6 +571,23 @@ def broadcast_report_keyboard() -> MaxInlineKeyboard:
     )
 
 
+def stale_screen_keyboard() -> MaxInlineKeyboard:
+    """Build a safe return button for stale or unknown callback screens."""
+
+    return MaxInlineKeyboard.from_rows([[MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)]])
+
+
+def booking_stale_keyboard() -> MaxInlineKeyboard:
+    """Build safe restart buttons for stale booking callbacks."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
+
+
 def navigation_keyboard(*, back_payload: str = NAV_BACK_PAYLOAD) -> MaxInlineKeyboard:
     """Build Back/Home navigation buttons for section screens."""
 

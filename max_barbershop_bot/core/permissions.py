@@ -161,7 +161,25 @@ def is_protected_developer(
     protected_id = dev_max_user_id.strip()
     if not protected_id:
         return False
-    return platform_user_id == protected_id or max_user_id == protected_id
+    return _same_identity(platform_user_id, protected_id) or _same_identity(max_user_id, protected_id)
+
+
+def effective_role(
+    db_role: str | None,
+    *,
+    platform_user_id: str | None = None,
+    dev_max_user_id: str | None = None,
+    max_user_id: str | None = None,
+) -> str:
+    """Resolve a stored role with protected developer override."""
+
+    if is_protected_developer(platform_user_id, dev_max_user_id, max_user_id=max_user_id):
+        return ROLE_DEVELOPER
+    return normalize_role(db_role)
+
+
+def _same_identity(value: str | None, expected: str) -> bool:
+    return value is not None and str(value).strip() == expected
 
 
 def _priority(role: str) -> int:
