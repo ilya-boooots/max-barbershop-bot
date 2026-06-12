@@ -6,10 +6,6 @@ from max_barbershop_bot.core import state
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.services.navigation import go_back, open_screen, show_home
 from max_barbershop_bot.ui.buttons import (
-    ADMIN_SETTINGS_PAYLOAD,
-    ADMIN_STAFF_PAYLOAD,
-    ADMIN_STATISTICS_PAYLOAD,
-    MENU_CONTACTS_PAYLOAD,
     MENU_MASTERS_PAYLOAD,
     NAV_BACK_PAYLOAD,
     NAV_HOME_PAYLOAD,
@@ -18,9 +14,6 @@ from max_barbershop_bot.ui.texts import SECTION_SOON_TEXT
 
 MENU_SCREENS = {
     MENU_MASTERS_PAYLOAD: state.MASTERS_PLACEHOLDER_SCREEN,
-    MENU_CONTACTS_PAYLOAD: state.CONTACTS_PLACEHOLDER_SCREEN,
-    ADMIN_STAFF_PAYLOAD: state.STAFF_MENU_SCREEN,
-    ADMIN_STATISTICS_PAYLOAD: state.STATISTICS_PLACEHOLDER_SCREEN,
 }
 
 
