@@ -22,14 +22,18 @@ from max_barbershop_bot.flows.yclients_settings import handle_connection_check, 
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
-from max_barbershop_bot.services.contacts import has_useful_override
+from max_barbershop_bot.services.contacts import ContactInfo, ContactsService
 from max_barbershop_bot.services.navigation import go_back, show_home
 from max_barbershop_bot.services.settings_audit import log_settings_action
-from max_barbershop_bot.services.yclients_context import load_active_yclients_settings
 from max_barbershop_bot.ui.buttons import (
     ADMIN_SETTINGS_PAYLOAD,
     SETTINGS_BACK_PAYLOAD,
     SETTINGS_CONTACTS_PAYLOAD,
+    SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD,
+    SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD,
+    SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD,
+    SETTINGS_CONTACTS_PREVIEW_PAYLOAD,
+    SETTINGS_CONTACTS_RESET_PAYLOAD,
     SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD,
     SETTINGS_DIAGNOSTICS_PAYLOAD,
     SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD,
@@ -37,13 +41,14 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_NOTIFICATIONS_PAYLOAD,
     SETTINGS_ROLES_PAYLOAD,
     SETTINGS_YCLIENTS_PAYLOAD,
+    settings_contacts_input_keyboard,
+    settings_contacts_keyboard,
     settings_diagnostics_keyboard,
     settings_menu_keyboard,
     settings_notifications_keyboard,
     settings_status_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
-    SETTINGS_CONTACTS_EDIT_SOON_TEXT,
     SETTINGS_MENU_TEXT,
     SETTINGS_NO_ACCESS_TEXT,
     SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT,
@@ -56,6 +61,11 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(ADMIN_SETTINGS_PAYLOAD, handle_settings_menu)
     router.on_callback(SETTINGS_YCLIENTS_PAYLOAD, handle_settings_yclients)
     router.on_callback(SETTINGS_CONTACTS_PAYLOAD, handle_settings_contacts)
+    router.on_callback(SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD, handle_settings_contacts_edit_address)
+    router.on_callback(SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD, handle_settings_contacts_edit_phone)
+    router.on_callback(SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD, handle_settings_contacts_edit_schedule)
+    router.on_callback(SETTINGS_CONTACTS_PREVIEW_PAYLOAD, handle_settings_contacts_preview)
+    router.on_callback(SETTINGS_CONTACTS_RESET_PAYLOAD, handle_settings_contacts_reset)
     router.on_callback(SETTINGS_NOTIFICATIONS_PAYLOAD, handle_settings_notifications)
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
@@ -63,6 +73,9 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD, handle_settings_yclients_check)
     router.on_callback(SETTINGS_BACK_PAYLOAD, handle_settings_back)
     router.on_callback(SETTINGS_HOME_PAYLOAD, handle_settings_home)
+    router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, handle_settings_contacts_address_input)
+    router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, handle_settings_contacts_phone_input)
+    router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN, handle_settings_contacts_schedule_input)
 
 
 async def handle_settings_menu(context: RouterContext) -> None:
@@ -90,35 +103,84 @@ async def handle_settings_yclients(context: RouterContext) -> None:
 
 
 async def handle_settings_contacts(context: RouterContext) -> None:
-    """Show contacts override status without duplicating contacts editing."""
+    """Show contacts override editor ported from the Telegram settings UX."""
 
     actor_role = _actor_role(context)
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context, "Открываем контакты 📍")
+    _audit(context, actor_role, action="settings_section_opened", section="contacts")
+    await _show_contacts_editor(context)
+
+
+async def handle_settings_contacts_edit_address(context: RouterContext) -> None:
+    """Ask for a new contacts address."""
+
+    await _start_contacts_edit(context, state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, "🏠 Введите новый адрес:")
+
+
+async def handle_settings_contacts_edit_phone(context: RouterContext) -> None:
+    """Ask for a new contacts phone."""
+
+    await _start_contacts_edit(context, state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, "📞 Введите новый телефон:")
+
+
+async def handle_settings_contacts_edit_schedule(context: RouterContext) -> None:
+    """Ask for a new contacts work schedule."""
+
+    await _start_contacts_edit(context, state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN, "⏰ Введите новый режим работы:")
+
+
+async def handle_settings_contacts_preview(context: RouterContext) -> None:
+    """Show contacts preview using the same resolved contacts service as the public screen."""
+
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context, "Показываем предпросмотр 👁️")
+    contacts = await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_CONTACTS_SCREEN)
-    settings_repository = YClientsSettingsRepository(_database_path())
-    override = settings_repository.get_contacts_override()
-    manual_override = has_useful_override(override)
-    active_settings = load_active_yclients_settings(settings_repository, operation="settings_contacts_status")
-    effective_source = _contacts_effective_source(active_settings, manual_override)
-    text = (
-        "📍 Контакты\n\n"
-        f"Источник сейчас: {_contacts_source_label(effective_source)}\n"
-        f"Ручная замена: {'✅ настроена' if manual_override else '— не настроена'}\n"
-        f"YClients: {'✅ настроен' if _yclients_contacts_ready(active_settings) else '— не настроен'}\n\n"
-        "Текущий экран контактов можно открыть отдельной кнопкой ниже.\n\n"
-        f"{SETTINGS_CONTACTS_EDIT_SOON_TEXT}"
-    )
+    await context.send_text(_render_contacts_preview(contacts), keyboard=settings_contacts_keyboard())
+
+
+async def handle_settings_contacts_reset(context: RouterContext) -> None:
+    """Clear local contacts edits and fall back to YClients."""
+
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context, "Сбрасываем контакты ♻️")
+    YClientsSettingsRepository(_database_path()).set_contacts_override({})
     _audit(
         context,
         actor_role,
-        action="settings_section_opened",
+        action="contacts_override_cleared",
         section="contacts",
-        metadata={"manual_override_present": manual_override, "effective_source": effective_source},
+        metadata={"field": "contacts_override"},
     )
-    await context.send_text(text, keyboard=settings_status_keyboard(include_contacts=True))
+    await context.send_text("♻️ Локальные правки контактов сброшены. Теперь используются данные из YClients.")
+    await _show_contacts_editor(context)
+
+
+async def handle_settings_contacts_address_input(context: RouterContext) -> None:
+    """Save contacts address text input."""
+
+    await _save_contact_field(context, field="address", value=context.event.text or "")
+
+
+async def handle_settings_contacts_phone_input(context: RouterContext) -> None:
+    """Save contacts phone text input."""
+
+    await _save_contact_field(context, field="phone", value=context.event.text or "")
+
+
+async def handle_settings_contacts_schedule_input(context: RouterContext) -> None:
+    """Save contacts schedule text input."""
+
+    await _save_contact_field(context, field="schedule", value=context.event.text or "")
 
 
 async def handle_settings_notifications(context: RouterContext) -> None:
@@ -216,6 +278,9 @@ async def handle_settings_back(context: RouterContext) -> None:
         return
     await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
     current = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
+    if current in {state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN}:
+        await _show_contacts_editor(context)
+        return
     if current in {state.SETTINGS_CONTACTS_SCREEN, state.SETTINGS_NOTIFICATIONS_SCREEN, state.SETTINGS_DIAGNOSTICS_SCREEN}:
         await _show_settings_menu(context, actor_role)
         return
@@ -234,24 +299,66 @@ async def _show_settings_menu(context: RouterContext, actor_role: str) -> None:
     await context.send_text(SETTINGS_MENU_TEXT, keyboard=settings_menu_keyboard(actor_role))
 
 
-def _contacts_effective_source(active_settings: object | None, manual_override: bool) -> str:
-    if manual_override:
-        return "override"
-    if _yclients_contacts_ready(active_settings):
-        return "yclients"
-    return "fallback"
+async def _show_contacts_editor(context: RouterContext) -> None:
+    contacts = await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
+    text = (
+        "✏️ Редактирование контактов\n\n"
+        f"🏠 Адрес: {contacts.address or '—'}\n"
+        f"📞 Телефон: {contacts.phone or '—'}\n"
+        f"⏰ Режим работы: {contacts.schedule or '—'}"
+    )
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_CONTACTS_SCREEN)
+    await context.send_text(text, keyboard=settings_contacts_keyboard())
 
 
-def _contacts_source_label(source: str) -> str:
-    if source == "override":
-        return "ручная замена"
-    if source == "yclients":
-        return "YClients"
-    return "не настроено / запасной текст"
+def _render_contacts_preview(contacts: ContactInfo) -> str:
+    return (
+        "📍 Контакты Барбершоп\n\n"
+        f"🏠 Адрес: {contacts.address or '—'}\n"
+        f"📞 Телефон: {contacts.phone or '—'}\n"
+        f"⏰ Режим работы: {contacts.schedule or '—'}"
+    )
 
 
-def _yclients_contacts_ready(active_settings: object | None) -> bool:
-    return bool(active_settings is not None and getattr(active_settings, "company_id", None) and getattr(active_settings, "partner_token", None))
+async def _start_contacts_edit(context: RouterContext, screen_id: str, prompt: str) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context, "Введите значение ✏️")
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, screen_id)
+    await context.send_text(prompt, keyboard=settings_contacts_input_keyboard())
+
+
+async def _save_contact_field(context: RouterContext, *, field: str, value: str) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+
+    settings_repository = YClientsSettingsRepository(_database_path())
+    override = settings_repository.get_contacts_override()
+    override[field] = value.strip()
+    settings_repository.set_contacts_override(override)
+    _audit(
+        context,
+        actor_role,
+        action=_contacts_field_audit_action(field),
+        section="contacts",
+        metadata={"field": field},
+    )
+    await context.send_text("✅ Контакты обновлены")
+    await _show_contacts_editor(context)
+
+
+def _contacts_field_audit_action(field: str) -> str:
+    if field == "address":
+        return "contacts_override_address_updated"
+    if field == "phone":
+        return "contacts_override_phone_updated"
+    if field == "schedule":
+        return "contacts_override_schedule_updated"
+    return "contacts_override_updated"
 
 
 def _actor_role(context: RouterContext) -> str:
