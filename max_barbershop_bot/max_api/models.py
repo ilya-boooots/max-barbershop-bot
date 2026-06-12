@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from max_barbershop_bot.core.payloads import validate_callback_payload
+
 
 ButtonType = Literal[
     "callback",
@@ -29,6 +31,14 @@ class MaxButton:
     type: ButtonType = "callback"
     payload: str | None = None
     url: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate callback payloads before a keyboard reaches MAX API."""
+
+        if self.type == "callback":
+            if self.payload is None:
+                raise ValueError("MAX callback button requires a callback payload")
+            validate_callback_payload(self.payload)
 
     def to_payload(self) -> dict[str, Any]:
         """Convert the button into MAX API inline keyboard format."""
