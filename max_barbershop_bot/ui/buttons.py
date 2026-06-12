@@ -20,6 +20,7 @@ from max_barbershop_bot.core.permissions import (
     can_view_yclients_settings,
     normalize_role,
 )
+from max_barbershop_bot.core.payloads import indexed_payload
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 
 MENU_BOOKING_PAYLOAD = "menu:booking"
@@ -221,7 +222,7 @@ def master_photos_list_keyboard(masters: list[object]) -> MaxInlineKeyboard:
         [
             MaxButton(
                 text=_master_photo_button_text(master),
-                payload=f"{MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX}{index}",
+                payload=indexed_payload(MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX, index),
             )
         ]
         for index, master in enumerate(masters[:20])
@@ -384,7 +385,7 @@ def notification_history_keyboard(
             [
                 MaxButton(
                     text=f"#{getattr(record, 'id')}",
-                    payload=f"{NOTIFICATION_HISTORY_DETAIL_PAYLOAD_PREFIX}{index}",
+                    payload=indexed_payload(NOTIFICATION_HISTORY_DETAIL_PAYLOAD_PREFIX, index),
                 )
             ]
         )
@@ -613,7 +614,12 @@ def booking_categories_keyboard(
     """Build MAX-compatible category picker buttons."""
 
     rows = [
-        [MaxButton(text=getattr(category, "title"), payload=f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}{index}")]
+        [
+            MaxButton(
+                text=getattr(category, "title"),
+                payload=indexed_payload(BOOKING_CATEGORY_PAYLOAD_PREFIX, index),
+            )
+        ]
         for index, category in enumerate(categories)
     ]
     page_row = []
@@ -640,7 +646,12 @@ def booking_services_keyboard(
     """Build MAX-compatible service picker buttons."""
 
     rows = [
-        [MaxButton(text=title_formatter(service), payload=f"{BOOKING_SERVICE_PAYLOAD_PREFIX}{index}")]
+        [
+            MaxButton(
+                text=title_formatter(service),
+                payload=indexed_payload(BOOKING_SERVICE_PAYLOAD_PREFIX, index),
+            )
+        ]
         for index, service in enumerate(services)
     ]
     page_row = []
@@ -667,7 +678,12 @@ def booking_masters_keyboard(
     """Build MAX-compatible master picker buttons."""
 
     rows = [
-        [MaxButton(text=title_formatter(master), payload=f"{BOOKING_MASTER_PAYLOAD_PREFIX}{index}")]
+        [
+            MaxButton(
+                text=title_formatter(master),
+                payload=indexed_payload(BOOKING_MASTER_PAYLOAD_PREFIX, index),
+            )
+        ]
         for index, master in enumerate(masters)
     ]
     page_row = []
@@ -692,7 +708,10 @@ def booking_dates_keyboard(
 
     rows: list[list[MaxButton]] = []
     date_buttons = [
-        MaxButton(text=title_formatter(value), payload=f"{BOOKING_DATE_PAYLOAD_PREFIX}{index}")
+        MaxButton(
+            text=title_formatter(value),
+            payload=indexed_payload(BOOKING_DATE_PAYLOAD_PREFIX, index),
+        )
         for index, value in enumerate(dates)
     ]
     for index in range(0, len(date_buttons), 2):
@@ -712,7 +731,10 @@ def booking_slots_keyboard(
 
     rows: list[list[MaxButton]] = []
     slot_buttons = [
-        MaxButton(text=title_formatter(value), payload=f"{BOOKING_SLOT_PAYLOAD_PREFIX}{index}")
+        MaxButton(
+            text=title_formatter(value),
+            payload=indexed_payload(BOOKING_SLOT_PAYLOAD_PREFIX, index),
+        )
         for index, value in enumerate(slots)
     ]
     for index in range(0, len(slot_buttons), 3):
@@ -768,7 +790,12 @@ def my_bookings_list_keyboard(bookings_count: int, *, max_buttons: int = 20) -> 
     """Build future booking selection buttons with short MAX payloads."""
 
     rows: list[list[MaxButton]] = [
-        [MaxButton(text=f"📋 Запись {index + 1}", payload=f"{MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX}{index}")]
+        [
+            MaxButton(
+                text=f"📋 Запись {index + 1}",
+                payload=indexed_payload(MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX, index),
+            )
+        ]
         for index in range(min(max(bookings_count, 0), max_buttons))
     ]
     rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
@@ -818,7 +845,10 @@ def my_booking_reschedule_dates_keyboard(dates: list[object], title_formatter) -
 
     rows: list[list[MaxButton]] = []
     buttons = [
-        MaxButton(text=title_formatter(value), payload=f"{MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX}{index}")
+        MaxButton(
+            text=title_formatter(value),
+            payload=indexed_payload(MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX, index),
+        )
         for index, value in enumerate(dates)
     ]
     for index in range(0, len(buttons), 2):
@@ -833,7 +863,10 @@ def my_booking_reschedule_slots_keyboard(slots: list[object], title_formatter) -
 
     rows: list[list[MaxButton]] = []
     buttons = [
-        MaxButton(text=title_formatter(value), payload=f"{MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX}{index}")
+        MaxButton(
+            text=title_formatter(value),
+            payload=indexed_payload(MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX, index),
+        )
         for index, value in enumerate(slots)
     ]
     for index in range(0, len(buttons), 3):
