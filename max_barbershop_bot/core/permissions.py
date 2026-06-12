@@ -58,9 +58,9 @@ def can_view_staff(role: str) -> bool:
 
 
 def can_manage_roles(role: str) -> bool:
-    """Allow role management only for admins and developers."""
+    """Allow role management for developers and managers like Telegram reference."""
 
-    return is_admin_or_higher(role)
+    return normalize_role(role) in {ROLE_DEVELOPER, ROLE_MANAGER}
 
 
 def can_view_settings(role: str) -> bool:
@@ -132,8 +132,8 @@ def can_assign_role(actor_role: str, target_role: str) -> bool:
     target = normalize_role(target_role)
     if actor == ROLE_DEVELOPER:
         return True
-    if actor == ROLE_ADMIN:
-        return target in {ROLE_MANAGER, ROLE_USER}
+    if actor == ROLE_MANAGER:
+        return target in {ROLE_ADMIN, ROLE_MANAGER}
     return False
 
 
@@ -144,8 +144,8 @@ def can_remove_role(actor_role: str, target_role: str) -> bool:
     target = normalize_role(target_role)
     if actor == ROLE_DEVELOPER:
         return target in {ROLE_ADMIN, ROLE_MANAGER, ROLE_USER}
-    if actor == ROLE_ADMIN:
-        return target in {ROLE_MANAGER, ROLE_USER}
+    if actor == ROLE_MANAGER:
+        return target in {ROLE_ADMIN, ROLE_MANAGER, ROLE_USER}
     return False
 
 
@@ -161,7 +161,25 @@ def is_protected_developer(
     protected_id = dev_max_user_id.strip()
     if not protected_id:
         return False
-    return platform_user_id == protected_id or max_user_id == protected_id
+    return _same_identity(platform_user_id, protected_id) or _same_identity(max_user_id, protected_id)
+
+
+def effective_role(
+    db_role: str | None,
+    *,
+    platform_user_id: str | None = None,
+    dev_max_user_id: str | None = None,
+    max_user_id: str | None = None,
+) -> str:
+    """Resolve a stored role with protected developer override."""
+
+    if is_protected_developer(platform_user_id, dev_max_user_id, max_user_id=max_user_id):
+        return ROLE_DEVELOPER
+    return normalize_role(db_role)
+
+
+def _same_identity(value: str | None, expected: str) -> bool:
+    return value is not None and str(value).strip() == expected
 
 
 def _priority(role: str) -> int:
