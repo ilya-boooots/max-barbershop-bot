@@ -36,10 +36,14 @@ class Screen:
     keyboard: MaxInlineKeyboard | None = None
 
 
-def main_menu_screen(role: str | None = None) -> Screen:
+def main_menu_screen(role: str | None = None, *, display_name: str | None = None) -> Screen:
     """Build the main menu screen for the current role."""
 
-    return Screen(text=MAIN_MENU_TEXT, keyboard=main_menu_keyboard(role))
+    if display_name:
+        text = f"✨ {display_name}, выберите действие в меню ниже 👇"
+    else:
+        text = MAIN_MENU_TEXT
+    return Screen(text=text, keyboard=main_menu_keyboard(role))
 
 
 def settings_menu_screen(role: str | None = None) -> Screen:

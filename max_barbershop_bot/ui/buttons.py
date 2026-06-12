@@ -11,7 +11,6 @@ from max_barbershop_bot.core.permissions import (
     can_view_broadcasts,
     can_view_contacts_settings,
     can_view_diagnostics_settings,
-    can_view_notification_history,
     can_view_notification_settings,
     can_view_settings,
     can_view_staff,
@@ -153,7 +152,6 @@ MENU_PAYLOADS = frozenset(
     {
         MENU_BOOKING_PAYLOAD,
         MENU_MY_BOOKINGS_PAYLOAD,
-        MENU_MASTERS_PAYLOAD,
         MENU_CONTACTS_PAYLOAD,
         MENU_SUPPORT_PAYLOAD,
         ADMIN_STAFF_PAYLOAD,
@@ -173,20 +171,17 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     rows = [
         [MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)],
         [MaxButton(text="📅 Мои записи", payload=MENU_MY_BOOKINGS_PAYLOAD)],
-        [MaxButton(text="👥 Мастера", payload=MENU_MASTERS_PAYLOAD)],
         [MaxButton(text="📍 Контакты", payload=MENU_CONTACTS_PAYLOAD)],
         [MaxButton(text="🆘 Поддержка", payload=MENU_SUPPORT_PAYLOAD)],
     ]
+    if can_view_statistics(normalized_role):
+        rows.append([MaxButton(text="📊 Статистика", payload=ADMIN_STATISTICS_PAYLOAD)])
     if can_view_staff(normalized_role):
         rows.append([MaxButton(text="👥 Персонал", payload=ADMIN_STAFF_PAYLOAD)])
     if can_view_settings(normalized_role):
         rows.append([MaxButton(text="⚙️ Настройки", payload=ADMIN_SETTINGS_PAYLOAD)])
     if can_view_broadcasts(normalized_role):
         rows.append([MaxButton(text="📣 Рассылка", payload=ADMIN_BROADCASTS_PAYLOAD)])
-    if can_view_statistics(normalized_role):
-        rows.append([MaxButton(text="📊 Статистика", payload=ADMIN_STATISTICS_PAYLOAD)])
-    if can_view_notification_history(normalized_role):
-        rows.append([MaxButton(text="📜 История уведомлений", payload=ADMIN_NOTIFICATION_HISTORY_PAYLOAD)])
     if can_view_yclients(normalized_role):
         rows.append([MaxButton(text="🧩 YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
