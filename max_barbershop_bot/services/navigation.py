@@ -10,7 +10,9 @@ from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.services.registration import is_registered
+from max_barbershop_bot.ui.buttons import booking_stale_keyboard, stale_screen_keyboard
 from max_barbershop_bot.ui.screens import main_menu_screen, placeholder_screen, settings_menu_screen, staff_menu_screen
+from max_barbershop_bot.ui.texts import BOOKING_STALE_CALLBACK_TEXT, STALE_SCREEN_TEXT
 
 
 def _user_id(context: RouterContext) -> str | None:
@@ -69,6 +71,22 @@ async def render_screen(context: RouterContext, screen_id: str) -> None:
         screen = placeholder_screen()
 
     await context.send_text(screen.text, keyboard=screen.keyboard)
+
+
+async def show_stale_callback(context: RouterContext) -> None:
+    """Safely handle a stale non-booking callback without changing state."""
+
+    if context.event.callback_id:
+        await context.answer_callback("Экран устарел 🙏")
+    await context.send_text(STALE_SCREEN_TEXT, keyboard=stale_screen_keyboard())
+
+
+async def show_booking_stale_callback(context: RouterContext) -> None:
+    """Safely handle an old booking callback after state was reset."""
+
+    if context.event.callback_id:
+        await context.answer_callback("Запись устарела 🙏")
+    await context.send_text(BOOKING_STALE_CALLBACK_TEXT, keyboard=booking_stale_keyboard())
 
 
 def _current_role(context: RouterContext) -> str:

@@ -33,7 +33,7 @@ from max_barbershop_bot.services.booking import (
 )
 from max_barbershop_bot.services.contacts import ContactsService
 from max_barbershop_bot.services.master_photos import MasterPhotosService
-from max_barbershop_bot.services.navigation import show_home
+from max_barbershop_bot.services.navigation import show_booking_stale_callback, show_home
 from max_barbershop_bot.services.registration import contains_contact_attachment, extract_contact_phone, normalize_phone
 from max_barbershop_bot.services.reminders import send_immediate_confirmation
 from max_barbershop_bot.ui.buttons import (
@@ -172,6 +172,9 @@ async def handle_booking_start(context: RouterContext) -> None:
 async def handle_booking_hub_service(context: RouterContext) -> None:
     """Start the service-first booking route from the hub."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Выбираем услугу ✂️")
     state.set_state_data_value(_user_id(context), _chat_id(context), _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_SERVICE_FIRST)
     await _open_booking_catalog(context)
@@ -180,6 +183,9 @@ async def handle_booking_hub_service(context: RouterContext) -> None:
 async def handle_booking_hub_staff(context: RouterContext) -> None:
     """Start the staff-first booking route from the hub."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Выбираем специалиста 💈")
     state.set_state_data_value(_user_id(context), _chat_id(context), _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_STAFF_FIRST)
     await _open_booking_all_masters(context)
@@ -188,6 +194,9 @@ async def handle_booking_hub_staff(context: RouterContext) -> None:
 async def handle_booking_hub_datetime(context: RouterContext) -> None:
     """Start the Telegram-reference date/time-first route from the hub."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Выбираем дату и время 📅")
     state.set_state_data_value(_user_id(context), _chat_id(context), _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_DATETIME_FIRST)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_STATE_KEY, None)
@@ -200,6 +209,9 @@ async def handle_booking_hub_datetime(context: RouterContext) -> None:
 async def handle_booking_category(context: RouterContext) -> None:
     """Show services from the selected category."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Выбираем категорию ✂️")
     category_id = _mapped_value(context, _CATEGORY_MAP_STATE_KEY, context.event.callback_payload)
     catalog = _catalog(context)
@@ -217,6 +229,9 @@ async def handle_booking_category(context: RouterContext) -> None:
 async def handle_booking_service(context: RouterContext) -> None:
     """Save selected service and show the master selection step."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Услуга выбрана ✅")
     service_id = _mapped_value(context, _SERVICE_MAP_STATE_KEY, context.event.callback_payload)
     catalog = _catalog(context)
@@ -251,6 +266,9 @@ async def handle_booking_service(context: RouterContext) -> None:
 async def handle_booking_category_page(context: RouterContext) -> None:
     """Move between category pages using short registered payloads."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Листаем категории ✂️")
     catalog = _catalog(context)
     if catalog is None:
@@ -264,6 +282,9 @@ async def handle_booking_category_page(context: RouterContext) -> None:
 async def handle_booking_master_page(context: RouterContext) -> None:
     """Move between master pages using short registered payloads."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Листаем мастеров 💈")
     masters = _masters(context)
     if masters is None:
@@ -284,6 +305,9 @@ async def handle_booking_master_page(context: RouterContext) -> None:
 async def handle_booking_service_page(context: RouterContext) -> None:
     """Move between service pages using short registered payloads."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Листаем услуги ✂️")
     catalog = _catalog(context)
     if catalog is None:
@@ -310,6 +334,9 @@ async def handle_booking_service_page(context: RouterContext) -> None:
 async def handle_booking_master(context: RouterContext) -> None:
     """Save selected master and show date selection."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Мастер выбран ✅")
     master_id = _mapped_value(context, _MASTER_MAP_STATE_KEY, context.event.callback_payload)
     masters = _masters(context)
@@ -356,6 +383,9 @@ async def handle_booking_master(context: RouterContext) -> None:
 async def handle_booking_date(context: RouterContext) -> None:
     """Save selected date and load YClients slots."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Выбираем дату 📅")
     booking_date = _mapped_value(context, _DATE_MAP_STATE_KEY, context.event.callback_payload)
     if not booking_date:
@@ -376,6 +406,10 @@ async def handle_booking_date(context: RouterContext) -> None:
 
 async def handle_booking_slot(context: RouterContext) -> None:
     """Save selected slot and show the next-step placeholder."""
+
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
 
     slot_time = _mapped_value(context, _SLOT_MAP_STATE_KEY, context.event.callback_payload)
     slots = _slots(context)
@@ -414,6 +448,9 @@ async def handle_booking_slot(context: RouterContext) -> None:
 async def handle_booking_phone_use_registered(context: RouterContext) -> None:
     """Use the saved profile phone for booking and continue to confirmation."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Телефон выбран ✅")
     user = _current_user(context)
     phone = normalize_phone(user.phone if user is not None else None)
@@ -445,6 +482,9 @@ async def handle_booking_phone_input(context: RouterContext) -> None:
 async def handle_booking_cancel_draft(context: RouterContext) -> None:
     """Cancel only the draft booking flow before a YClients record is created."""
 
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
     await context.answer_callback("Запись отменена 🙏")
     state.clear_state_data(_user_id(context), _chat_id(context))
     await context.send_text("❌ Запись отменена.")
@@ -453,6 +493,10 @@ async def handle_booking_cancel_draft(context: RouterContext) -> None:
 
 async def handle_booking_confirm(context: RouterContext) -> None:
     """Create a real YClients booking after the final confirmation tap."""
+
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
 
     if _state_value(context, _BOOKING_CREATION_IN_PROGRESS_STATE_KEY) is True:
         await context.answer_callback(BOOKING_CREATE_IN_PROGRESS_TEXT)
@@ -631,6 +675,23 @@ async def handle_booking_back(context: RouterContext) -> None:
         await _show_selected_category_services(context)
         return
     await show_home(context)
+
+
+def _is_active_booking_screen(context: RouterContext) -> bool:
+    return state.get_current_screen(_user_id(context), _chat_id(context)) in {
+        state.BOOKING_HUB_SCREEN,
+        state.BOOKING_CATEGORIES_SCREEN,
+        state.BOOKING_SERVICES_SCREEN,
+        state.BOOKING_SERVICE_SELECTED_SCREEN,
+        state.BOOKING_MASTERS_SCREEN,
+        state.BOOKING_MASTER_SELECTED_SCREEN,
+        state.BOOKING_DATES_SCREEN,
+        state.BOOKING_SLOTS_SCREEN,
+        state.BOOKING_SLOT_SELECTED_SCREEN,
+        state.BOOKING_PHONE_SCREEN,
+        state.BOOKING_CONFIRMATION_SCREEN,
+        state.BOOKING_SUCCESS_SCREEN,
+    }
 
 
 async def _show_booking_hub(context: RouterContext, *, push_current: bool = True) -> None:
