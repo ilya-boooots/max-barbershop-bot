@@ -164,7 +164,7 @@ Company ID: {company_id}
 
 SETTINGS_MENU_TEXT = """⚙️ Настройки
 
-Выберите раздел:"""
-SETTINGS_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
+Выберите раздел 👇"""
+SETTINGS_NO_ACCESS_TEXT = "⛔ Раздел недоступен."
 SETTINGS_CONTACTS_EDIT_SOON_TEXT = "Редактирование контактов добавим отдельным шагом 🔧"
 SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT = "Управление уведомлениями добавим отдельным шагом 🔧"

@@ -44,6 +44,11 @@ SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD = "settings:diagnostics:notification_histor
 SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD = "settings:diagnostics:yclients_check"
 SETTINGS_BACK_PAYLOAD = "settings:back"
 SETTINGS_HOME_PAYLOAD = "settings:home"
+SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD = "settings:contacts:address"
+SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD = "settings:contacts:phone"
+SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD = "settings:contacts:schedule"
+SETTINGS_CONTACTS_RESET_PAYLOAD = "settings:contacts:reset"
+SETTINGS_CONTACTS_PREVIEW_PAYLOAD = "settings:contacts:preview"
 MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX = "settings:mp:select:"
 MASTER_PHOTOS_UPLOAD_PAYLOAD = "settings:mp:upload"
 MASTER_PHOTOS_DELETE_PAYLOAD = "settings:mp:delete"
@@ -193,7 +198,7 @@ def settings_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="🧩 YClients", payload=SETTINGS_YCLIENTS_PAYLOAD)])
     if can_view_contacts_settings(normalized_role):
         rows.append([MaxButton(text="🖼️ Редактировать фото мастеров", payload=SETTINGS_MASTER_PHOTOS_PAYLOAD)])
-        rows.append([MaxButton(text="📍 Контакты", payload=SETTINGS_CONTACTS_PAYLOAD)])
+        rows.append([MaxButton(text="✏️ Редактировать контакты", payload=SETTINGS_CONTACTS_PAYLOAD)])
     if can_view_notification_settings(normalized_role):
         rows.append([MaxButton(text="🔔 Уведомления", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)])
     if can_manage_roles(normalized_role):
@@ -278,6 +283,33 @@ def settings_status_keyboard(*, include_contacts: bool = False) -> MaxInlineKeyb
         ]
     )
     return MaxInlineKeyboard.from_rows(rows)
+
+
+def settings_contacts_keyboard() -> MaxInlineKeyboard:
+    """Build contacts override editor buttons from Telegram reference UX."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="🏠 Изменить адрес", payload=SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD)],
+            [MaxButton(text="📞 Изменить телефон", payload=SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD)],
+            [MaxButton(text="⏰ Изменить режим работы", payload=SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD)],
+            [MaxButton(text="♻️ Сбросить к данным YClients", payload=SETTINGS_CONTACTS_RESET_PAYLOAD)],
+            [MaxButton(text="👁️ Предпросмотр", payload=SETTINGS_CONTACTS_PREVIEW_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def settings_contacts_input_keyboard() -> MaxInlineKeyboard:
+    """Build Back/Home navigation while waiting for contacts text input."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
 
 
 def settings_notifications_keyboard() -> MaxInlineKeyboard:
