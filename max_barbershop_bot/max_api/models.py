@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
+
+MAX_MESSAGE_TEXT_LENGTH = 4000
+MAX_INLINE_KEYBOARD_ROWS = 30
+MAX_INLINE_KEYBOARD_BUTTONS = 210
+MAX_INLINE_KEYBOARD_BUTTONS_PER_ROW = 7
+MAX_INLINE_KEYBOARD_WIDE_BUTTONS_PER_ROW = 3
+MAX_LINK_BUTTON_URL_LENGTH = 2048
+WIDE_BUTTON_TYPES = {"link", "open_app", "request_geo_location", "request_contact"}
+MEDIA_ATTACHMENT_TYPES = {"image", "video", "audio", "file"}
 
 
 ButtonType = Literal[
@@ -18,7 +28,11 @@ ButtonType = Literal[
 
 
 def _int_or_none(value: Any) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
 
 
 @dataclass(frozen=True)
@@ -29,6 +43,19 @@ class MaxButton:
     type: ButtonType = "callback"
     payload: str | None = None
     url: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate documented MAX button constraints without changing payloads."""
+
+        if not self.text.strip():
+            raise ValueError("Текст кнопки MAX не должен быть пустым.")
+        if self.type == "callback" and not self.payload:
+            raise ValueError("Callback-кнопке MAX нужен непустой payload.")
+        if self.type == "link":
+            if not self.url:
+                raise ValueError("Link-кнопке MAX нужен непустой url.")
+            if len(self.url) > MAX_LINK_BUTTON_URL_LENGTH:
+                raise ValueError("URL link-кнопки MAX длиннее 2048 символов.")
 
     def to_payload(self) -> dict[str, Any]:
         """Convert the button into MAX API inline keyboard format."""
@@ -47,6 +74,24 @@ class MaxInlineKeyboard:
 
     rows: tuple[tuple[MaxButton, ...], ...]
 
+    def __post_init__(self) -> None:
+        """Validate documented MAX inline keyboard size limits."""
+
+        if len(self.rows) > MAX_INLINE_KEYBOARD_ROWS:
+            raise ValueError("Inline-клавиатура MAX не может содержать больше 30 рядов.")
+        button_count = sum(len(row) for row in self.rows)
+        if button_count > MAX_INLINE_KEYBOARD_BUTTONS:
+            raise ValueError("Inline-клавиатура MAX не может содержать больше 210 кнопок.")
+        for row in self.rows:
+            if len(row) > MAX_INLINE_KEYBOARD_BUTTONS_PER_ROW:
+                raise ValueError("В одном ряду inline-клавиатуры MAX не может быть больше 7 кнопок.")
+            wide_buttons = sum(1 for button in row if button.type in WIDE_BUTTON_TYPES)
+            if wide_buttons and len(row) > MAX_INLINE_KEYBOARD_WIDE_BUTTONS_PER_ROW:
+                raise ValueError(
+                    "В ряду с link/open_app/request_geo_location/request_contact "
+                    "кнопками MAX не может быть больше 3 кнопок."
+                )
+
     @classmethod
     def from_rows(cls, rows: list[list[MaxButton]] | tuple[tuple[MaxButton, ...], ...]) -> "MaxInlineKeyboard":
         """Build an immutable keyboard from button rows."""
@@ -62,6 +107,19 @@ class MaxInlineKeyboard:
                 "buttons": [[button.to_payload() for button in row] for row in self.rows],
             },
         }
+
+
+def build_media_attachment(
+    media_type: Literal["image", "video", "audio", "file"],
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build a MAX media attachment from an upload response payload."""
+
+    if media_type not in MEDIA_ATTACHMENT_TYPES:
+        raise ValueError("Неподдерживаемый тип медиа MAX.")
+    if not isinstance(payload, Mapping) or not payload:
+        raise ValueError("Payload медиа-вложения MAX не должен быть пустым.")
+    return {"type": media_type, "payload": dict(payload)}
 
 
 @dataclass(frozen=True)
