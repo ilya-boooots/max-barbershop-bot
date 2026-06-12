@@ -55,7 +55,11 @@ async def render_screen(context: RouterContext, screen_id: str) -> None:
     """Render a known screen id."""
 
     if screen_id == state.MAIN_MENU_SCREEN:
-        screen = main_menu_screen(_current_role(context))
+        user = _current_user(context)
+        screen = main_menu_screen(
+            _current_role(context, user),
+            display_name=_menu_display_name(context, user),
+        )
     elif screen_id == state.STAFF_MENU_SCREEN:
         screen = staff_menu_screen(_current_role(context))
     elif screen_id in {
@@ -71,17 +75,46 @@ async def render_screen(context: RouterContext, screen_id: str) -> None:
     await context.send_text(screen.text, keyboard=screen.keyboard)
 
 
-def _current_role(context: RouterContext) -> str:
+def _current_role(context: RouterContext, user: object | None = None) -> str:
     platform_user_id = context.event.platform_user_id
     if platform_user_id is None:
         return "user"
 
     database_path = _database_path()
-    users = UsersRepository(database_path)
-    user = users.find_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+    if user is None:
+        user = UsersRepository(database_path).find_by_platform_user_id(
+            platform_user_id,
+            platform=PLATFORM_MAX,
+        )
     if user is None:
         return "user"
     return StaffRolesRepository(database_path).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+
+
+def _current_user(context: RouterContext) -> object | None:
+    platform_user_id = context.event.platform_user_id
+    if platform_user_id is None:
+        return None
+    return UsersRepository(_database_path()).find_by_platform_user_id(
+        platform_user_id,
+        platform=PLATFORM_MAX,
+    )
+
+
+def _menu_display_name(context: RouterContext, user: object | None) -> str:
+    for value in (
+        getattr(user, "display_name", None),
+        getattr(user, "first_name", None),
+        " ".join(
+            part.strip()
+            for part in (context.event.first_name or "", context.event.last_name or "")
+            if part and part.strip()
+        ),
+    ):
+        cleaned = " ".join(str(value or "").split()).strip()
+        if cleaned:
+            return cleaned
+    return "гость"
 
 
 def _is_current_user_registered(context: RouterContext) -> bool:

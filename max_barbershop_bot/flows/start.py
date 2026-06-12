@@ -13,7 +13,6 @@ from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.services.registration import is_registered
 from max_barbershop_bot.ui.screens import main_menu_screen
-from max_barbershop_bot.ui.texts import START_GREETING_TEXT
 
 
 async def handle_bot_started(context: RouterContext) -> None:
@@ -56,8 +55,26 @@ async def _show_start_screen(context: RouterContext) -> None:
 
     state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
     role = staff_repository.get_highest_role(platform_user_id, platform=PLATFORM_MAX)
-    screen = main_menu_screen(role)
-    await context.send_text(f"{START_GREETING_TEXT}\n\n{screen.text}", keyboard=screen.keyboard)
+    screen = main_menu_screen(role, display_name=_menu_display_name(user, context))
+    await context.send_text(screen.text, keyboard=screen.keyboard)
+
+
+def _menu_display_name(user: object, context: RouterContext) -> str:
+    """Return the display name used in the Telegram main menu prompt."""
+
+    for value in (
+        getattr(user, "display_name", None),
+        getattr(user, "first_name", None),
+        " ".join(
+            part.strip()
+            for part in (context.event.first_name or "", context.event.last_name or "")
+            if part and part.strip()
+        ),
+    ):
+        cleaned = " ".join(str(value or "").split()).strip()
+        if cleaned:
+            return cleaned
+    return "гость"
 
 
 def _ensure_protected_developer(

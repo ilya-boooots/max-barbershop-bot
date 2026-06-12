@@ -9,8 +9,8 @@ ROLE_USER = "user"
 
 ROLE_PRIORITY = {
     ROLE_USER: 0,
-    ROLE_MANAGER: 1,
-    ROLE_ADMIN: 2,
+    ROLE_ADMIN: 1,
+    ROLE_MANAGER: 2,
     ROLE_DEVELOPER: 3,
 }
 VALID_ROLES = frozenset(ROLE_PRIORITY)
@@ -42,25 +42,25 @@ def is_developer(role: str) -> bool:
 def is_admin_or_higher(role: str) -> bool:
     """Check whether a role has admin-level access."""
 
-    return _priority(role) >= ROLE_PRIORITY[ROLE_ADMIN]
+    return normalize_role(role) in {ROLE_ADMIN, ROLE_DEVELOPER}
 
 
 def is_manager_or_higher(role: str) -> bool:
-    """Check whether a role has manager-level access."""
+    """Check whether a role has staff-level access."""
 
-    return _priority(role) >= ROLE_PRIORITY[ROLE_MANAGER]
+    return normalize_role(role) in {ROLE_ADMIN, ROLE_MANAGER, ROLE_DEVELOPER}
 
 
 def can_view_staff(role: str) -> bool:
     """Allow staff section for admins, managers and developers."""
 
-    return is_manager_or_higher(role)
+    return normalize_role(role) in {ROLE_ADMIN, ROLE_MANAGER, ROLE_DEVELOPER}
 
 
 def can_manage_roles(role: str) -> bool:
-    """Allow role management only for admins and developers."""
+    """Allow role management for managers and developers, like Telegram."""
 
-    return is_admin_or_higher(role)
+    return normalize_role(role) in {ROLE_MANAGER, ROLE_DEVELOPER}
 
 
 def can_view_settings(role: str) -> bool:
@@ -108,15 +108,15 @@ def can_view_broadcasts(role: str) -> bool:
 
 
 def can_view_statistics(role: str) -> bool:
-    """Allow statistics section for managers, admins and developers."""
+    """Allow statistics section for managers and developers, like Telegram."""
 
-    return is_manager_or_higher(role)
+    return normalize_role(role) in {ROLE_MANAGER, ROLE_DEVELOPER}
 
 
 def can_view_yclients(role: str) -> bool:
-    """Allow YClients section for managers, admins and developers."""
+    """Allow YClients section for managers and developers, like Telegram."""
 
-    return is_manager_or_higher(role)
+    return normalize_role(role) in {ROLE_MANAGER, ROLE_DEVELOPER}
 
 
 def can_view_notification_history(role: str) -> bool:
@@ -132,8 +132,8 @@ def can_assign_role(actor_role: str, target_role: str) -> bool:
     target = normalize_role(target_role)
     if actor == ROLE_DEVELOPER:
         return True
-    if actor == ROLE_ADMIN:
-        return target in {ROLE_MANAGER, ROLE_USER}
+    if actor == ROLE_MANAGER:
+        return target in {ROLE_ADMIN, ROLE_MANAGER}
     return False
 
 
@@ -144,8 +144,8 @@ def can_remove_role(actor_role: str, target_role: str) -> bool:
     target = normalize_role(target_role)
     if actor == ROLE_DEVELOPER:
         return target in {ROLE_ADMIN, ROLE_MANAGER, ROLE_USER}
-    if actor == ROLE_ADMIN:
-        return target in {ROLE_MANAGER, ROLE_USER}
+    if actor == ROLE_MANAGER:
+        return target in {ROLE_ADMIN, ROLE_MANAGER, ROLE_USER}
     return False
 
 
