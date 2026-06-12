@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from math import ceil
+from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -35,10 +36,13 @@ BOOKING_MASTERS_NOT_CONFIGURED_TEXT = "Запись пока не настрое
 BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить мастеров 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_SLOTS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_SLOTS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить свободное время 🙏\n\nПожалуйста, попробуйте позже."
+BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT = "Не удалось загрузить доступные даты и время 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_DATES_EMPTY_TEXT = "Пока нет свободных окон для выбранных параметров 🙏\n\nПопробуйте выбрать другую услугу или мастера."
 BOOKING_CREATE_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_CREATE_YCLIENTS_ERROR_TEXT = "Не удалось создать запись 🙏\n\nВозможно, это время уже заняли. Попробуйте выбрать другой слот."
 DATE_LOOKAHEAD_DAYS = 28
+DATETIME_FIRST_DATE_LIMIT = 7
+DATETIME_FIRST_SERVICE_CANDIDATE_LIMIT = 12
 YCLIENTS_SLOT_CONCURRENCY = 4
 
 _RU_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -258,57 +262,104 @@ class BookingService:
         return available_dates
 
     async def get_datetime_first_available_dates(self, *, days: int = DATE_LOOKAHEAD_DAYS) -> list[date]:
-        """Port Telegram datetime-first date loading: keep only YClients dates with future slots."""
+        """Return a small datetime-first date set without building a full availability matrix."""
 
-        settings, timezone_name, catalog = await self._load_datetime_first_context(operation="get_datetime_first_dates")
-        candidate_dates = build_booking_dates(days=days, timezone_name=timezone_name)
-        candidate_iso = {item.isoformat() for item in candidate_dates}
-        date_candidates: set[str] = set()
+        started_at = perf_counter()
+        settings: YClientsSettings | None = None
+        timezone_name = DEFAULT_BRANCH_TIMEZONE
+        service_catalog_loaded = False
+        service_count = 0
+        candidate_dates_count = 0
+        available_dates_count = 0
+        try:
+            settings, timezone_name, catalog = await self._load_datetime_first_context(operation="get_datetime_first_dates")
+            service_catalog_loaded = True
+            service_count = len(catalog.services)
+            candidate_dates = build_booking_dates(days=days, timezone_name=timezone_name)
+            candidate_dates_count = len(candidate_dates)
+            if not candidate_dates:
+                return []
+            candidate_iso = {item.isoformat() for item in candidate_dates}
+            date_candidates: set[str] = set()
 
-        async with build_yclients_client_from_active_settings(settings) as client:
-            yclients = YClientsServiceLayer(client, company_id=settings.company_id)
-            for service in catalog.services:
-                try:
-                    yclients_dates = await yclients.get_available_dates(
-                        company_id=settings.company_id,
-                        service_id=service.yclients_service_id,
-                        staff_id=None,
-                        date_from=candidate_dates[0].isoformat(),
-                        date_to=candidate_dates[-1].isoformat(),
-                    )
-                except YClientsError:
-                    logger.warning(
-                        "MAX booking datetime-first diagnostic: entry_mode=%s telegram_reference_function_used=%s "
-                        "selected_date=%s eligible_services_count=%s branch_timezone=%s yclients_settings_found=True",
-                        "datetime_first",
-                        "_load_datetime_first_dates",
-                        "n/a",
-                        0,
-                        timezone_name,
-                    )
-                    continue
-                for item in _normalize_available_date_candidates(yclients_dates, today=candidate_dates[0]):
-                    iso_date = item.isoformat()
-                    if iso_date in candidate_iso:
-                        date_candidates.add(iso_date)
+            # The first datetime-first screen must not run the old service × date × slot matrix.
+            # YClients available-dates endpoint is the cheap source for valid date buttons here;
+            # stop as soon as the UI has enough dates for the first page.
+            async with build_yclients_client_from_active_settings(settings) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                for service in catalog.services[:DATETIME_FIRST_SERVICE_CANDIDATE_LIMIT]:
+                    try:
+                        yclients_dates = await yclients.get_available_dates(
+                            company_id=settings.company_id,
+                            service_id=service.yclients_service_id,
+                            staff_id=None,
+                            date_from=candidate_dates[0].isoformat(),
+                            date_to=candidate_dates[-1].isoformat(),
+                        )
+                    except YClientsError:
+                        continue
+                    for item in _normalize_available_date_candidates(yclients_dates, today=candidate_dates[0]):
+                        iso_date = item.isoformat()
+                        if iso_date in candidate_iso:
+                            date_candidates.add(iso_date)
+                    if len(date_candidates) >= DATETIME_FIRST_DATE_LIMIT:
+                        break
 
-        if not date_candidates:
-            date_candidates = candidate_iso
-        filtered: list[date] = []
-        for iso_date in sorted(date_candidates):
-            slots = await self.get_datetime_first_slots_for_date(iso_date, catalog=catalog)
-            if slots:
-                filtered.append(_date_value(iso_date))
-        logger.info(
-            "MAX booking datetime-first diagnostic: entry_mode=%s telegram_reference_function_used=%s "
-            "candidate_dates_count=%s available_dates_count=%s branch_timezone=%s yclients_settings_found=True",
-            "datetime_first",
-            "_load_datetime_first_dates",
-            len(candidate_dates),
-            len(filtered),
-            timezone_name,
-        )
-        return filtered
+            filtered = [_date_value(iso_date) for iso_date in sorted(date_candidates)[:DATETIME_FIRST_DATE_LIMIT]]
+            available_dates_count = len(filtered)
+            logger.info(
+                "MAX datetime-first load diagnostic: entry_mode=%s step=%s service_catalog_loaded=%s "
+                "service_count=%s master_count=%s candidate_dates_count=%s available_dates_count=%s "
+                "elapsed_ms=%s error_class=%s yclients_settings_found=%s branch_timezone=%s",
+                "datetime_first",
+                "dates",
+                service_catalog_loaded,
+                service_count,
+                0,
+                candidate_dates_count,
+                available_dates_count,
+                int((perf_counter() - started_at) * 1000),
+                None,
+                settings is not None,
+                timezone_name,
+            )
+            return filtered
+        except BookingServiceError as exc:
+            logger.warning(
+                "MAX datetime-first load diagnostic: entry_mode=%s step=%s service_catalog_loaded=%s "
+                "service_count=%s master_count=%s candidate_dates_count=%s available_dates_count=%s "
+                "elapsed_ms=%s error_class=%s yclients_settings_found=%s branch_timezone=%s",
+                "datetime_first",
+                "dates",
+                service_catalog_loaded,
+                service_count,
+                0,
+                candidate_dates_count,
+                available_dates_count,
+                int((perf_counter() - started_at) * 1000),
+                type(exc).__name__,
+                settings is not None,
+                timezone_name,
+            )
+            raise BookingYClientsError(BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT) from exc
+        except Exception as exc:  # noqa: BLE001 - keep datetime-first UI error specific and safe.
+            logger.warning(
+                "MAX datetime-first load diagnostic: entry_mode=%s step=%s service_catalog_loaded=%s "
+                "service_count=%s master_count=%s candidate_dates_count=%s available_dates_count=%s "
+                "elapsed_ms=%s error_class=%s yclients_settings_found=%s branch_timezone=%s",
+                "datetime_first",
+                "dates",
+                service_catalog_loaded,
+                service_count,
+                0,
+                candidate_dates_count,
+                available_dates_count,
+                int((perf_counter() - started_at) * 1000),
+                type(exc).__name__,
+                settings is not None,
+                timezone_name,
+            )
+            raise BookingYClientsError(BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT) from exc
 
     async def get_datetime_first_slots_for_date(
         self,
@@ -484,7 +535,26 @@ class BookingService:
             )
             raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT)
         timezone_name = _timezone_name(settings.branch_timezone if settings else None)
-        resolved_catalog = catalog if catalog is not None else await self.get_service_categories_and_services()
+        try:
+            resolved_catalog = catalog if catalog is not None else await self.get_service_categories_and_services()
+        except BookingServiceError as exc:
+            logger.warning(
+                "MAX datetime-first load diagnostic: entry_mode=%s step=%s service_catalog_loaded=%s "
+                "service_count=%s master_count=%s candidate_dates_count=%s available_dates_count=%s "
+                "elapsed_ms=%s error_class=%s yclients_settings_found=%s branch_timezone=%s",
+                "datetime_first",
+                operation,
+                False,
+                0,
+                0,
+                0,
+                0,
+                0,
+                type(exc).__name__,
+                True,
+                timezone_name,
+            )
+            raise BookingYClientsError(BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT) from exc
         return settings, timezone_name, resolved_catalog
 
     async def create_booking(
