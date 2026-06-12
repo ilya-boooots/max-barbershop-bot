@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any
 
 from max_barbershop_bot.repositories.users import User, UsersRepository, UserProfileUpdate
@@ -12,7 +14,16 @@ _MIN_PHONE_DIGITS = 10
 _MAX_PHONE_DIGITS = 15
 _MIN_NAME_LENGTH = 2
 _MAX_NAME_LENGTH = 60
+_MIN_BIRTHDATE = date(1900, 1, 1)
 _VCARD_PHONE_RE = re.compile(r"(?:^|\r?\n)TEL[^:]*:([^\r\n]+)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class BirthdateValidationResult:
+    """Result of a DD.MM.YYYY birthdate validation."""
+
+    is_valid: bool
+    birthdate: str | None = None
 
 
 def normalize_phone(raw_phone: str | None) -> str | None:
@@ -55,10 +66,24 @@ def validate_name(raw_name: str | None) -> str | None:
     return name
 
 
+def validate_birthdate(raw_birthdate: str | None) -> BirthdateValidationResult:
+    """Validate Telegram-style birthdate input and return ISO date when accepted."""
+
+    if raw_birthdate is None:
+        return BirthdateValidationResult(is_valid=False)
+    try:
+        parsed = datetime.strptime(raw_birthdate.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        return BirthdateValidationResult(is_valid=False)
+    if parsed < _MIN_BIRTHDATE or parsed > date.today():
+        return BirthdateValidationResult(is_valid=False)
+    return BirthdateValidationResult(is_valid=True, birthdate=parsed.isoformat())
+
+
 def is_registered(user: User | None) -> bool:
     """Check whether the profile has enough data to use the bot."""
 
-    return bool(user and user.first_name and user.phone)
+    return bool(user and user.first_name and user.phone and user.birthdate)
 
 
 def save_registration_profile(
@@ -67,12 +92,13 @@ def save_registration_profile(
     platform_user_id: str,
     phone: str,
     first_name: str,
+    birthdate: str,
 ) -> User:
     """Persist the collected registration data into the existing user row."""
 
     user = repository.update_profile(
         platform_user_id,
-        UserProfileUpdate(first_name=first_name, display_name=first_name, phone=phone),
+        UserProfileUpdate(first_name=first_name, display_name=first_name, phone=phone, birthdate=birthdate),
     )
     if user is None:
         raise RuntimeError("Пользователь для завершения регистрации не найден")

@@ -45,6 +45,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             last_name TEXT,
             username TEXT,
             phone TEXT,
+            birthdate TEXT,
             role TEXT NOT NULL DEFAULT 'user',
             yclients_client_id TEXT,
             notifications_enabled INTEGER NOT NULL DEFAULT 1,
@@ -226,6 +227,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "users", "first_name", "TEXT")
     _ensure_column(connection, "users", "last_name", "TEXT")
     _ensure_column(connection, "users", "username", "TEXT")
+    _ensure_column(connection, "users", "birthdate", "TEXT")
     _ensure_column(
         connection,
         "users",
