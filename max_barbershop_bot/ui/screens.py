@@ -16,9 +16,12 @@ from max_barbershop_bot.ui.buttons import (
 )
 from max_barbershop_bot.ui.texts import (
     MAIN_MENU_TEXT,
+    REGISTRATION_BIRTHDATE_TEXT,
     REGISTRATION_NAME_TEXT,
+    REGISTRATION_PERSONAL_DATA_POLICY_TEXT,
     REGISTRATION_PHONE_TEXT,
-    REGISTRATION_WELCOME_TEXT,
+    REGISTRATION_POLICIES_TEXT,
+    REGISTRATION_PRIVACY_POLICY_TEXT,
     SECTION_SOON_TEXT,
     SETTINGS_MENU_TEXT,
     STAFF_MENU_TEXT,
@@ -57,10 +60,28 @@ def placeholder_screen() -> Screen:
     return Screen(text=SECTION_SOON_TEXT, keyboard=navigation_keyboard())
 
 
-def registration_consent_screen() -> Screen:
-    """Build the registration consent screen."""
+def registration_consent_screen(*, privacy_accepted: bool = False, personal_accepted: bool = False) -> Screen:
+    """Build the registration policy acceptance screen."""
 
-    return Screen(text=REGISTRATION_WELCOME_TEXT, keyboard=registration_consent_keyboard())
+    return Screen(
+        text=REGISTRATION_POLICIES_TEXT,
+        keyboard=registration_consent_keyboard(
+            privacy_accepted=privacy_accepted,
+            personal_accepted=personal_accepted,
+        ),
+    )
+
+
+def registration_privacy_policy_screen() -> Screen:
+    """Build the privacy policy screen."""
+
+    return Screen(text=REGISTRATION_PRIVACY_POLICY_TEXT, keyboard=registration_navigation_keyboard())
+
+
+def registration_personal_data_policy_screen() -> Screen:
+    """Build the personal data policy screen."""
+
+    return Screen(text=REGISTRATION_PERSONAL_DATA_POLICY_TEXT, keyboard=registration_navigation_keyboard())
 
 
 def registration_phone_screen() -> Screen:
@@ -73,3 +94,9 @@ def registration_name_screen() -> Screen:
     """Build the registration name screen."""
 
     return Screen(text=REGISTRATION_NAME_TEXT, keyboard=registration_navigation_keyboard())
+
+
+def registration_birthdate_screen() -> Screen:
+    """Build the registration birthdate screen."""
+
+    return Screen(text=REGISTRATION_BIRTHDATE_TEXT, keyboard=registration_navigation_keyboard())

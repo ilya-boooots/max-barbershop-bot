@@ -140,8 +140,11 @@ STAFF_REMOVE_MANAGER_PAYLOAD = "staff:remove:role:manager"
 STAFF_REMOVE_ADMIN_PAYLOAD = "staff:remove:role:admin"
 STAFF_REMOVE_DEVELOPER_PAYLOAD = "staff:remove:role:developer"
 
-REGISTRATION_CONSENT_ACCEPT_PAYLOAD = "registration:consent:accept"
-REGISTRATION_CONSENT_DECLINE_PAYLOAD = "registration:consent:decline"
+REGISTRATION_OPEN_PRIVACY_PAYLOAD = "registration:policy:open:privacy"
+REGISTRATION_OPEN_PERSONAL_PAYLOAD = "registration:policy:open:personal"
+REGISTRATION_TOGGLE_PRIVACY_PAYLOAD = "registration:policy:toggle:privacy"
+REGISTRATION_TOGGLE_PERSONAL_PAYLOAD = "registration:policy:toggle:personal"
+REGISTRATION_CONTINUE_PAYLOAD = "registration:policy:continue"
 REGISTRATION_BACK_PAYLOAD = "registration:nav:back"
 REGISTRATION_HOME_PAYLOAD = "registration:nav:home"
 
@@ -915,16 +918,30 @@ def staff_role_remove_keyboard(roles: list[str]) -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(rows)
 
 
-def registration_consent_keyboard() -> MaxInlineKeyboard:
-    """Build consent buttons for the registration start screen."""
+def registration_consent_keyboard(*, privacy_accepted: bool = False, personal_accepted: bool = False) -> MaxInlineKeyboard:
+    """Build policy acceptance buttons for the registration start screen."""
 
-    return MaxInlineKeyboard.from_rows(
-        [
-            [MaxButton(text="✅ Согласен", payload=REGISTRATION_CONSENT_ACCEPT_PAYLOAD)],
-            [MaxButton(text="❌ Не согласен", payload=REGISTRATION_CONSENT_DECLINE_PAYLOAD)],
-            [MaxButton(text="🏠 Главное меню", payload=REGISTRATION_HOME_PAYLOAD)],
-        ]
+    privacy_label = (
+        "✅ Принять политику конфиденциальности"
+        if privacy_accepted
+        else "⬜ Принять политику конфиденциальности"
     )
+    personal_label = (
+        "✅ Принять политику обработки персональных данных"
+        if personal_accepted
+        else "⬜ Принять политику обработки персональных данных"
+    )
+    rows = [
+        [MaxButton(text="🔐 Политика конфиденциальности", payload=REGISTRATION_OPEN_PRIVACY_PAYLOAD)],
+        [MaxButton(text="🔐 Политика обработки персональных данных", payload=REGISTRATION_OPEN_PERSONAL_PAYLOAD)],
+        [MaxButton(text=privacy_label, payload=REGISTRATION_TOGGLE_PRIVACY_PAYLOAD)],
+        [MaxButton(text=personal_label, payload=REGISTRATION_TOGGLE_PERSONAL_PAYLOAD)],
+    ]
+    if privacy_accepted and personal_accepted:
+        rows.append([MaxButton(text="Перейти к регистрации.", payload=REGISTRATION_CONTINUE_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=REGISTRATION_HOME_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=REGISTRATION_BACK_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
 
 
 def registration_phone_keyboard() -> MaxInlineKeyboard:
@@ -932,7 +949,7 @@ def registration_phone_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="📱 Отправить телефон", type="request_contact")],
+            [MaxButton(text="📞 Поделиться контактом", type="request_contact")],
             [
                 MaxButton(text="⬅️ Назад", payload=REGISTRATION_BACK_PAYLOAD),
                 MaxButton(text="🏠 Главное меню", payload=REGISTRATION_HOME_PAYLOAD),

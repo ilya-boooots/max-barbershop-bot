@@ -28,6 +28,7 @@ class User:
     last_name: str | None
     username: str | None
     phone: str | None
+    birthdate: str | None
     role: str
     yclients_client_id: str | None
     notifications_enabled: bool
@@ -48,6 +49,7 @@ class UserCreate:
     last_name: str | None = None
     username: str | None = None
     phone: str | None = None
+    birthdate: str | None = None
     role: str = DEFAULT_USER_ROLE
     yclients_client_id: str | None = None
     notifications_enabled: bool = DEFAULT_NOTIFICATIONS_ENABLED
@@ -66,6 +68,7 @@ class UserProfileUpdate:
     last_name: str | None = None
     username: str | None = None
     phone: str | None = None
+    birthdate: str | None = None
     role: str | None = None
     yclients_client_id: str | None = None
     notifications_enabled: bool | None = None
@@ -98,12 +101,13 @@ class UsersRepository:
                     last_name,
                     username,
                     phone,
+                    birthdate,
                     role,
                     yclients_client_id,
                     notifications_enabled,
                     notification_settings_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     platform,
@@ -115,6 +119,7 @@ class UsersRepository:
                     _optional_text(user.last_name),
                     _optional_text(user.username),
                     _optional_text(user.phone),
+                    _optional_text(user.birthdate),
                     _required_text(user.role, "role"),
                     _optional_text(user.yclients_client_id),
                     _bool_to_int(user.notifications_enabled),
@@ -271,6 +276,7 @@ class UsersRepository:
             "last_name": update.last_name,
             "username": update.username,
             "phone": update.phone,
+            "birthdate": update.birthdate,
             "role": update.role,
             "yclients_client_id": update.yclients_client_id,
         }
@@ -388,6 +394,7 @@ def _row_to_user(row: sqlite3.Row | None) -> User | None:
         last_name=_row_optional_text(row, "last_name"),
         username=_row_optional_text(row, "username"),
         phone=_row_optional_text(row, "phone"),
+        birthdate=_row_optional_text(row, "birthdate"),
         role=str(row["role"]),
         yclients_client_id=_row_optional_text(row, "yclients_client_id"),
         notifications_enabled=bool(row["notifications_enabled"]),
