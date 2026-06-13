@@ -69,12 +69,16 @@ _REMOVE_PAYLOAD_ROLES = {
     STAFF_REMOVE_ADMIN_PAYLOAD: ROLE_ADMIN,
     STAFF_REMOVE_DEVELOPER_PAYLOAD: ROLE_DEVELOPER,
 }
-_ROLE_EMOJI = {
-    ROLE_DEVELOPER: "👑",
-    ROLE_ADMIN: "🛡",
-    ROLE_MANAGER: "👔",
-    ROLE_USER: "👤",
+_ROLE_LABELS = {
+    ROLE_DEVELOPER: "💻 Разработчик",
+    ROLE_MANAGER: "👑 Управляющий",
+    ROLE_ADMIN: "🛡 Администратор",
+    ROLE_USER: "👤 Пользователь",
 }
+
+
+def _role_label(role: str | None) -> str:
+    return _ROLE_LABELS.get(normalize_role(role), _ROLE_LABELS[ROLE_USER])
 
 
 def register_staff_routes(router: Router) -> None:
@@ -171,7 +175,14 @@ async def handle_assign_role(context: RouterContext) -> None:
         await context.send_text(STAFF_USER_NOT_FOUND_TEXT, keyboard=navigation_keyboard())
         return
     protected_target = _is_protected_target(target)
-    if not can_assign_role(actor_role, new_role) or (new_role == ROLE_DEVELOPER and not protected_target):
+    if not can_assign_role(actor_role, new_role):
+        _log_role_change_blocked(
+            context,
+            target,
+            old_role=_staff_repository().get_highest_role(target.platform_user_id, platform=PLATFORM_MAX),
+            new_role=new_role,
+            action="role_assign",
+        )
         await _send_no_access(context)
         return
     if protected_target and new_role != ROLE_DEVELOPER:
@@ -268,6 +279,13 @@ async def handle_remove_role(context: RouterContext) -> None:
         await _send_protected_developer_block(context)
         return
     if not can_remove_role(actor_role, removed_role):
+        _log_role_change_blocked(
+            context,
+            target,
+            old_role=removed_role,
+            new_role=ROLE_USER,
+            action="role_remove",
+        )
         await _send_no_access(context)
         return
 
@@ -310,24 +328,24 @@ def _build_staff_list_text() -> str:
     if not staff:
         return STAFF_LIST_EMPTY_TEXT
     users = _users_repository()
-    lines = ["📋 Сотрудники", ""]
-    for staff_role in staff:
+    lines = ["👥 Персонал ресторана", f"Всего: {len(staff)}", ""]
+    for idx, staff_role in enumerate(staff, start=1):
         user = users.find_by_platform_user_id(staff_role.platform_user_id, platform=PLATFORM_MAX)
-        lines.extend(_staff_role_lines(staff_role, user))
+        lines.extend(_staff_role_lines(idx, staff_role, user))
         lines.append("")
     return "\n".join(lines).strip()
 
 
-def _staff_role_lines(staff_role: StaffRole, user: User | None) -> list[str]:
-    title = f"{_ROLE_EMOJI.get(staff_role.role, '👤')} {staff_role.role}"
-    name = _display_name(user) if user is not None else None
-    if name:
-        title = f"{title} — {name}"
-    lines = [title, f"ID: {staff_role.platform_user_id}"]
+def _staff_role_lines(idx: int, staff_role: StaffRole, user: User | None) -> list[str]:
+    name = _display_name(user) or "Без имени"
+    lines = [f"{idx}) {_role_label(staff_role.role)}", f"👤 {name}"]
     if user is not None and user.username:
         lines.append(f"@{user.username.lstrip('@')}")
     if user is not None and user.phone:
         lines.append(f"Телефон: {mask_phone(user.phone)}")
+    assigned_at = staff_role.updated_at or staff_role.created_at
+    if assigned_at:
+        lines.append(f"📅 С {assigned_at}")
     return lines
 
 
@@ -412,6 +430,24 @@ def _log_protected_developer_block(
         actor_platform_user_id=context.event.platform_user_id,
         target_platform_user_id=target.platform_user_id,
         attempted_role=attempted_role,
+        action=action,
+        platform=PLATFORM_MAX,
+    )
+
+
+def _log_role_change_blocked(
+    context: RouterContext,
+    target: User,
+    *,
+    old_role: str | None,
+    new_role: str | None,
+    action: str,
+) -> None:
+    _staff_repository().log_role_change_blocked(
+        actor_platform_user_id=context.event.platform_user_id,
+        target_platform_user_id=target.platform_user_id,
+        old_role=old_role,
+        new_role=new_role,
         action=action,
         platform=PLATFORM_MAX,
     )
