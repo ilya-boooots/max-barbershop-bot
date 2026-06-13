@@ -173,6 +173,7 @@ class YClientsServiceLayer:
         staff_id: str | None = None,
         email: str = "",
         comment: str = "",
+        marker: str | None = None,
     ):
         """Create a YClients booking with a MAX origin marker."""
 
@@ -187,6 +188,7 @@ class YClientsServiceLayer:
                 staff_id=staff_id,
                 email=email,
                 comment=comment,
+                **({"marker": marker} if marker else {}),
             )
         except YClientsError as exc:
             await self._notify_or_log("create_booking", exc)

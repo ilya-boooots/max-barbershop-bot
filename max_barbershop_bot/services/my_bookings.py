@@ -42,11 +42,17 @@ MY_BOOKING_CANCEL_ERROR_TEXT = "Не удалось отменить запис�
 MY_BOOKING_RESCHEDULE_UNAVAILABLE_TEXT = "Перенос записи через бота пока недоступен 🙏\n\nПожалуйста, напишите администратору."
 MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT = "Не получилось подготовить перенос записи 🙏\n\nПожалуйста, напишите администратору."
 MY_BOOKING_RESCHEDULE_ERROR_TEXT = "Не удалось перенести запись 🙏\n\nВозможно, это время уже заняли. Попробуйте выбрать другой слот."
-MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT = "Эту запись нельзя перенести через бота 🙏\n\nПожалуйста, напишите администратору."
+MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT = "Эту запись уже нельзя перенести 🙏\n\nВы можете отменить её и создать новую запись."
+MY_BOOKING_RESCHEDULE_CANCEL_OLD_FAILED_TEXT = (
+    "Новая запись создана, но старую не удалось отменить автоматически 🙏\n\n"
+    "Администратор уже получит информацию для проверки."
+)
 MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT = "Перенос уже выполняется, подождите немного ⏳"
 MY_BOOKING_RESCHEDULE_DATES_TEXT = "🔁 Перенос записи\n\nВыберите новую дату:"
 MY_BOOKING_RESCHEDULE_SLOTS_TEXT = "🔁 Перенос записи\n\nВыберите новое время:"
 MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT = "На эту дату свободного времени нет 🙏\n\nВыберите другой день."
+RESCHEDULE_CREATE_MARKER = "Клиент перенёс запись из MAX бота"
+RESCHEDULE_CANCEL_MARKER_PREFIX = "Запись перенесена из MAX бота"
 
 _STATUS_LABELS = {
     "active": "Подтверждена",
@@ -440,8 +446,8 @@ class MyBookingsService:
         reschedule_context: dict[str, Any],
         new_datetime_iso: str,
         platform_user_id: str | None = None,
-    ) -> None:
-        """Directly update one YClients record to the selected new datetime."""
+    ) -> dict[str, Any]:
+        """Reschedule via Telegram-compatible safe rebooking: create new, then cancel old."""
 
         yclients_client_id = _clean_text(user.yclients_client_id if user else None)
         phone = _clean_text(user.phone if user else None)
@@ -452,76 +458,78 @@ class MyBookingsService:
         staff_id = _clean_text(reschedule_context.get("staff_id"))
         services = [sid for sid in reschedule_context.get("service_ids", []) if _clean_text(sid)] if isinstance(reschedule_context.get("service_ids"), list) else []
         client_data = reschedule_context.get("client_data") if isinstance(reschedule_context.get("client_data"), dict) else {}
+        client_phone = _clean_text(client_data.get("phone") or (user.phone if user else None))
+        client_name = _clean_text(client_data.get("name") or (user.display_name if user else None) or (user.first_name if user else None)) or "Гость"
         seance_length = _to_int(reschedule_context.get("seance_length"))
         datetime_iso = _clean_text(new_datetime_iso)
-        if not record_id or not staff_id or not services or not client_data or not seance_length or not datetime_iso:
+        if not record_id or not staff_id or not services or not client_data or not client_phone or not seance_length or not datetime_iso:
             raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT)
 
         settings = self._active_settings_for_reschedule(platform_user_id=platform_user_id, record_id=record_id)
+        created_record_id = ""
+        cancel_success = False
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
-                await yclients.reschedule_booking(
+                created = await yclients.create_booking(
+                    company_id=settings.company_id,
+                    service_id=services[0],
+                    datetime_iso=datetime_iso,
+                    phone=client_phone,
+                    fullname=client_name,
+                    staff_id=staff_id,
+                    marker=RESCHEDULE_CREATE_MARKER,
+                )
+                created_record_id = _clean_text(getattr(created, "record_id", None))
+                cancel_marker = _build_reschedule_cancel_marker(datetime_iso, _timezone_name(settings.branch_timezone))
+                await yclients.cancel_booking(
                     company_id=settings.company_id,
                     yclients_record_id=record_id,
-                    services=services,
-                    client_data=client_data,
-                    seance_length=seance_length,
-                    datetime_iso=datetime_iso,
-                    staff_id=staff_id,
+                    cancellation_marker=cancel_marker,
                 )
-        except YClientsValidationError as exc:
-            logger.info(
-                "Booking reschedule rejected: operation=reschedule_booking platform_user_id=%s "
-                "yclients_record_id=%s new_datetime=%s error_class=%s status_code=%s",
-                platform_user_id,
-                record_id,
-                datetime_iso,
-                type(exc).__name__,
-                exc.status_code,
-            )
+                cancel_success = True
+        except (YClientsValidationError, YClientsNotFoundError) as exc:
+            self._log_reschedule_diagnostic(platform_user_id, record_id, created_record_id, datetime_iso, cancel_success, exc)
+            if created_record_id and not cancel_success:
+                raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_CANCEL_OLD_FAILED_TEXT) from exc
             raise MyBookingRescheduleNotAllowedError(MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT) from exc
-        except YClientsNotFoundError as exc:
-            logger.info(
-                "Booking reschedule not found: operation=reschedule_booking platform_user_id=%s "
-                "yclients_record_id=%s new_datetime=%s error_class=%s status_code=%s",
-                platform_user_id,
-                record_id,
-                datetime_iso,
-                type(exc).__name__,
-                exc.status_code,
-            )
-            raise MyBookingRescheduleNotAllowedError(MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT) from exc
-        except (YClientsAuthError, YClientsRateLimitError, YClientsServerError, YClientsTransportError) as exc:
-            logger.warning(
-                "Booking reschedule YClients error: operation=reschedule_booking platform_user_id=%s "
-                "yclients_record_id=%s new_datetime=%s error_class=%s status_code=%s",
-                platform_user_id,
-                record_id,
-                datetime_iso,
-                type(exc).__name__,
-                exc.status_code,
-            )
-            raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT) from exc
-        except YClientsError as exc:
-            logger.warning(
-                "Booking reschedule integration error: operation=reschedule_booking platform_user_id=%s "
-                "yclients_record_id=%s new_datetime=%s error_class=%s status_code=%s",
-                platform_user_id,
-                record_id,
-                datetime_iso,
-                type(exc).__name__,
-                exc.status_code,
-            )
+        except (YClientsAuthError, YClientsRateLimitError, YClientsServerError, YClientsTransportError, YClientsError) as exc:
+            self._log_reschedule_diagnostic(platform_user_id, record_id, created_record_id, datetime_iso, cancel_success, exc)
+            if created_record_id and not cancel_success:
+                raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_CANCEL_OLD_FAILED_TEXT) from exc
             raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT) from exc
 
-        logger.info(
-            "Booking rescheduled in YClients: operation=reschedule_booking platform_user_id=%s "
-            "yclients_record_id=%s old_datetime=%s new_datetime=%s",
-            platform_user_id,
-            record_id,
-            _clean_text(reschedule_context.get("old_datetime")),
-            datetime_iso,
+        self._log_reschedule_diagnostic(platform_user_id, record_id, created_record_id, datetime_iso, cancel_success, None)
+        return {"old_record_id": record_id, "new_record_id": created_record_id, "new_datetime": datetime_iso}
+
+    def _log_reschedule_diagnostic(
+        self,
+        platform_user_id: str | None,
+        record_id: str,
+        created_record_id: str,
+        datetime_iso: str,
+        cancel_success: bool,
+        exc: Exception | None,
+    ) -> None:
+        log = logger.warning if exc else logger.info
+        log(
+            "MAX booking reschedule diagnostic: platform_user_id_present=%s old_record_id_present=%s "
+            "new_record_id_present=%s native_reschedule_supported=%s fallback_cancel_create_used=%s "
+            "selected_date_present=%s selected_time_present=%s old_cancel_started=%s old_cancel_success=%s "
+            "new_create_started=%s new_create_success=%s error_class=%s http_status=%s",
+            bool(platform_user_id),
+            bool(record_id),
+            bool(created_record_id),
+            True,
+            True,
+            bool(datetime_iso[:10]),
+            bool(datetime_iso[11:16]),
+            bool(created_record_id),
+            cancel_success,
+            True,
+            bool(created_record_id),
+            type(exc).__name__ if exc else "none",
+            getattr(exc, "status_code", None) if exc else None,
         )
 
     def _active_settings_for_reschedule(self, *, platform_user_id: str | None, record_id: str):
@@ -549,6 +557,20 @@ class MyBookingsService:
             )
             raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT)
         return settings
+
+
+def _build_reschedule_cancel_marker(datetime_iso: str, timezone_name: str) -> str:
+    value = _clean_text(datetime_iso).replace("T", " ")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_zoneinfo(timezone_name))
+        local = parsed.astimezone(_zoneinfo(timezone_name))
+        return f"{RESCHEDULE_CANCEL_MARKER_PREFIX} {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}"
+    return RESCHEDULE_CANCEL_MARKER_PREFIX
 
 def format_booking_status(status: Any) -> str:
     """Return a friendly Russian booking status label."""
