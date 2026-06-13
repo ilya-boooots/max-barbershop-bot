@@ -19,7 +19,9 @@ from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.flows.notification_history import handle_notification_history
 from max_barbershop_bot.flows.staff import handle_staff_menu
 from max_barbershop_bot.flows.yclients_settings import handle_connection_check, handle_yclients_menu
+from max_barbershop_bot.flows.support import render_support_message
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
+from max_barbershop_bot.repositories.support_settings import SupportSettingsRepository, build_support_url, display_support_username, effective_support_settings
 from max_barbershop_bot.repositories.users import PLATFORM_MAX
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactInfo, ContactsService
@@ -37,6 +39,10 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD,
     SETTINGS_DIAGNOSTICS_PAYLOAD,
     SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD,
+    SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD,
+    SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD,
+    SETTINGS_SUPPORT_PAYLOAD,
+    SETTINGS_SUPPORT_PREVIEW_PAYLOAD,
     SETTINGS_HOME_PAYLOAD,
     SETTINGS_NOTIFICATIONS_PAYLOAD,
     SETTINGS_ROLES_PAYLOAD,
@@ -47,6 +53,8 @@ from max_barbershop_bot.ui.buttons import (
     settings_menu_keyboard,
     settings_notifications_keyboard,
     settings_status_keyboard,
+    settings_support_input_keyboard,
+    settings_support_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
     SETTINGS_MENU_TEXT,
@@ -66,6 +74,10 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD, handle_settings_contacts_edit_schedule)
     router.on_callback(SETTINGS_CONTACTS_PREVIEW_PAYLOAD, handle_settings_contacts_preview)
     router.on_callback(SETTINGS_CONTACTS_RESET_PAYLOAD, handle_settings_contacts_reset)
+    router.on_callback(SETTINGS_SUPPORT_PAYLOAD, handle_settings_support)
+    router.on_callback(SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD, handle_settings_support_edit_username)
+    router.on_callback(SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD, handle_settings_support_edit_description)
+    router.on_callback(SETTINGS_SUPPORT_PREVIEW_PAYLOAD, handle_settings_support_preview)
     router.on_callback(SETTINGS_NOTIFICATIONS_PAYLOAD, handle_settings_notifications)
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
@@ -76,6 +88,8 @@ def register_settings_routes(router: Router) -> None:
     router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, handle_settings_contacts_address_input)
     router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, handle_settings_contacts_phone_input)
     router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN, handle_settings_contacts_schedule_input)
+    router.on_screen_text(state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, handle_settings_support_username_input)
+    router.on_screen_text(state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN, handle_settings_support_description_input)
 
 
 async def handle_settings_menu(context: RouterContext) -> None:
@@ -183,6 +197,55 @@ async def handle_settings_contacts_schedule_input(context: RouterContext) -> Non
     await _save_contact_field(context, field="schedule", value=context.event.text or "")
 
 
+async def handle_settings_support(context: RouterContext) -> None:
+    """Show support settings editor."""
+
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context, "Открываем поддержку 🆘")
+    _audit(context, actor_role, action="settings_section_opened", section="support")
+    await _show_support_editor(context)
+
+
+async def handle_settings_support_edit_username(context: RouterContext) -> None:
+    """Ask for support username."""
+
+    await _start_support_edit(context, state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, "👤 Введите username поддержки в Telegram, например @flowbots1sup:")
+
+
+async def handle_settings_support_edit_description(context: RouterContext) -> None:
+    """Ask for support description."""
+
+    await _start_support_edit(context, state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN, "📝 Введите текст поддержки:")
+
+
+async def handle_settings_support_preview(context: RouterContext) -> None:
+    """Show public support screen preview."""
+
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context, "Показываем предпросмотр 👁️")
+    settings = _support_settings()
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_SUPPORT_SCREEN)
+    await context.send_text(render_support_message(settings), keyboard=settings_support_keyboard())
+
+
+async def handle_settings_support_username_input(context: RouterContext) -> None:
+    """Save support username text input."""
+
+    await _save_support_settings(context, support_username=context.event.text or "", support_description=None)
+
+
+async def handle_settings_support_description_input(context: RouterContext) -> None:
+    """Save support description text input."""
+
+    await _save_support_settings(context, support_username=None, support_description=context.event.text or "")
+
+
 async def handle_settings_notifications(context: RouterContext) -> None:
     """Show notification settings status and link existing history."""
 
@@ -281,7 +344,10 @@ async def handle_settings_back(context: RouterContext) -> None:
     if current in {state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN}:
         await _show_contacts_editor(context)
         return
-    if current in {state.SETTINGS_CONTACTS_SCREEN, state.SETTINGS_NOTIFICATIONS_SCREEN, state.SETTINGS_DIAGNOSTICS_SCREEN}:
+    if current in {state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN}:
+        await _show_support_editor(context)
+        return
+    if current in {state.SETTINGS_CONTACTS_SCREEN, state.SETTINGS_SUPPORT_SCREEN, state.SETTINGS_NOTIFICATIONS_SCREEN, state.SETTINGS_DIAGNOSTICS_SCREEN}:
         await _show_settings_menu(context, actor_role)
         return
     await go_back(context)
@@ -309,6 +375,65 @@ async def _show_contacts_editor(context: RouterContext) -> None:
     )
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_CONTACTS_SCREEN)
     await context.send_text(text, keyboard=settings_contacts_keyboard())
+
+
+async def _show_support_editor(context: RouterContext) -> None:
+    settings = _support_settings()
+    username = display_support_username(settings.support_username) or "—"
+    support_url = build_support_url(settings.support_username) or "—"
+    text = (
+        "🆘 Редактирование поддержки\n\n"
+        f"👤 Username: {username}\n"
+        f"🔗 Ссылка: {support_url}\n"
+        f"📝 Текст: {settings.support_description or '—'}"
+    )
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_SUPPORT_SCREEN)
+    await context.send_text(text, keyboard=settings_support_keyboard())
+
+
+async def _start_support_edit(context: RouterContext, screen_id: str, prompt: str) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context, "Введите значение ✏️")
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, screen_id)
+    await context.send_text(prompt, keyboard=settings_support_input_keyboard())
+
+
+async def _save_support_settings(
+    context: RouterContext,
+    *,
+    support_username: str | None,
+    support_description: str | None,
+) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+
+    repository = SupportSettingsRepository(_database_path())
+    current = _support_settings()
+    username = support_username if support_username is not None else current.support_username
+    description = support_description if support_description is not None else current.support_description
+    try:
+        repository.upsert_active(username, description)
+    except ValueError:
+        await context.send_text("⛔️ Username поддержки выглядит неверно. Введите @username или ссылку t.me/username.", keyboard=settings_support_input_keyboard())
+        return
+    _audit(
+        context,
+        actor_role,
+        action="support_settings_updated",
+        section="support",
+        metadata={"field": "username" if support_username is not None else "description"},
+    )
+    await context.send_text("✅ Настройки поддержки обновлены")
+    await _show_support_editor(context)
+
+
+def _support_settings():
+    return effective_support_settings(SupportSettingsRepository(_database_path()).get_active())
 
 
 def _render_contacts_preview(contacts: ContactInfo) -> str:

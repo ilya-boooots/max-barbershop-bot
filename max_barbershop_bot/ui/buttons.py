@@ -49,6 +49,10 @@ SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD = "settings:contacts:phone"
 SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD = "settings:contacts:schedule"
 SETTINGS_CONTACTS_RESET_PAYLOAD = "settings:contacts:reset"
 SETTINGS_CONTACTS_PREVIEW_PAYLOAD = "settings:contacts:preview"
+SETTINGS_SUPPORT_PAYLOAD = "settings:support"
+SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD = "settings:support:username"
+SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD = "settings:support:description"
+SETTINGS_SUPPORT_PREVIEW_PAYLOAD = "settings:support:preview"
 MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX = "settings:mp:select:"
 MASTER_PHOTOS_UPLOAD_PAYLOAD = "settings:mp:upload"
 MASTER_PHOTOS_DELETE_PAYLOAD = "settings:mp:delete"
@@ -200,6 +204,7 @@ def settings_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     if can_view_contacts_settings(normalized_role):
         rows.append([MaxButton(text="🖼️ Редактировать фото мастеров", payload=SETTINGS_MASTER_PHOTOS_PAYLOAD)])
         rows.append([MaxButton(text="✏️ Редактировать контакты", payload=SETTINGS_CONTACTS_PAYLOAD)])
+        rows.append([MaxButton(text="🆘 Редактировать поддержку", payload=SETTINGS_SUPPORT_PAYLOAD)])
     if can_view_notification_settings(normalized_role):
         rows.append([MaxButton(text="🔔 Уведомления", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)])
     if can_manage_roles(normalized_role):
@@ -296,6 +301,42 @@ def settings_contacts_keyboard() -> MaxInlineKeyboard:
             [MaxButton(text="⏰ Изменить режим работы", payload=SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD)],
             [MaxButton(text="♻️ Сбросить к данным YClients", payload=SETTINGS_CONTACTS_RESET_PAYLOAD)],
             [MaxButton(text="👁️ Предпросмотр", payload=SETTINGS_CONTACTS_PREVIEW_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def support_screen_keyboard(*, support_url: str | None) -> MaxInlineKeyboard:
+    """Build public support keyboard with Telegram-style action and navigation."""
+
+    rows: list[list[MaxButton]] = []
+    if support_url:
+        rows.append([MaxButton(text="🆘 Написать в поддержку", type="link", url=support_url)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def settings_support_keyboard() -> MaxInlineKeyboard:
+    """Build support settings editor buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="👤 Изменить username", payload=SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD)],
+            [MaxButton(text="📝 Изменить текст", payload=SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD)],
+            [MaxButton(text="👁️ Предпросмотр", payload=SETTINGS_SUPPORT_PREVIEW_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def settings_support_input_keyboard() -> MaxInlineKeyboard:
+    """Build Back/Home navigation while waiting for support settings text input."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
             [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
         ]
