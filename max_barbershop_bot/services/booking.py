@@ -87,6 +87,7 @@ class BookingServiceItem:
     price_min: int | float | None = None
     price_max: int | float | None = None
     duration: str | None = None
+    raw: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,17 @@ class CreatedBooking:
     yclients_client_id: str | None = None
     datetime_iso: str | None = None
     raw_payload: dict[str, Any] | list[Any] | None = None
+
+
+@dataclass(frozen=True)
+class StaffResolutionResult:
+    """Safe staff resolution details ported from Telegram reference."""
+
+    masters: list[BookingMasterItem]
+    supports_any_master: bool
+    source: str
+    service_payload_count: int | None
+    endpoint_count: int
 
 
 @dataclass(frozen=True)
@@ -885,8 +897,13 @@ class BookingService:
         )
         return masters
 
-    async def get_available_masters_for_service(self, yclients_service_id: str) -> list[BookingMasterItem]:
-        """Return masters from YClients filtered by the selected service id."""
+    async def get_available_masters_for_service(
+        self,
+        yclients_service_id: str,
+        *,
+        service: BookingServiceItem | dict[str, Any] | None = None,
+    ) -> list[BookingMasterItem]:
+        """Return masters safely filtered by the selected service id."""
 
         service_id = _clean_text(yclients_service_id)
         if not service_id:
@@ -941,15 +958,24 @@ class BookingService:
             )
             raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
 
-        masters = [_normalize_master(item) for item in masters_payload]
-        masters = sorted(
-            [item for item in masters if item.yclients_master_id and item.title],
-            key=lambda item: item.title.lower(),
-        )
+        service_raw = _service_raw_payload(service)
+        resolution = resolve_safe_staff_for_service(service_raw, masters_payload, service_id=service_id)
+        masters = resolution.masters
         logger.info(
-            "Booking masters loaded: operation=get_booking_masters service_id=%s masters_count=%s",
-            service_id,
+            "MAX booking staff resolution diagnostic: entry_mode=%s selected_service_id_present=%s "
+            "selected_date_present=%s selected_time_present=%s staff_from_service_count=%s "
+            "staff_endpoint_count=%s intersection_count=%s availability_filtered_count=%s "
+            "any_staff_selected=%s resolved_staff_id_present=%s",
+            "service_first",
+            bool(service_id),
+            False,
+            False,
+            resolution.service_payload_count,
+            resolution.endpoint_count,
             len(masters),
+            0,
+            False,
+            False,
         )
         return masters
 
@@ -1440,6 +1466,154 @@ def _find_first_key(value: Any, keys: tuple[str, ...]) -> str | None:
 
 
 
+def resolve_safe_staff_for_service(
+    service_payload: dict[str, Any] | None,
+    endpoint_payload: list[BookingMasterItem] | list[YClientsStaff] | list[dict[str, Any]],
+    *,
+    service_id: str,
+) -> StaffResolutionResult:
+    """Build Telegram-style safe staff intersection without all-staff fallback."""
+
+    service_assigned_ids = _extract_assigned_staff_ids_from_service(service_payload or {})
+    endpoint_masters = [_normalize_master(item) for item in endpoint_payload]
+    endpoint_masters = [item for item in endpoint_masters if item.yclients_master_id and item.title]
+    endpoint_by_id = {item.yclients_master_id: item for item in endpoint_masters}
+    resolved: dict[str, BookingMasterItem] = {}
+    source = "staff_endpoint"
+    if service_assigned_ids is not None:
+        for staff_id in sorted(service_assigned_ids):
+            endpoint_item = endpoint_by_id.get(staff_id)
+            if endpoint_item is not None:
+                resolved[staff_id] = endpoint_item
+            else:
+                service_row = _find_service_staff_row(service_payload or {}, staff_id)
+                if service_row is not None:
+                    item = _normalize_master(service_row | {"id": staff_id})
+                    if item.yclients_master_id and item.title:
+                        resolved[item.yclients_master_id] = item
+        source = "intersection" if resolved and any(staff_id in endpoint_by_id for staff_id in resolved) else "service_payload"
+    else:
+        for item in endpoint_masters:
+            staff_service_ids = _extract_staff_service_ids(item.raw or {})
+            if staff_service_ids and service_id not in staff_service_ids:
+                continue
+            resolved[item.yclients_master_id] = item
+    masters = sorted(resolved.values(), key=lambda item: item.title.lower())
+    return StaffResolutionResult(
+        masters=masters,
+        supports_any_master=bool(masters) and _supports_any_master(service_payload or {}),
+        source=source,
+        service_payload_count=None if service_assigned_ids is None else len(service_assigned_ids),
+        endpoint_count=len(endpoint_masters),
+    )
+
+
+def _service_raw_payload(service: BookingServiceItem | dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(service, BookingServiceItem):
+        return service.raw or {}
+    if isinstance(service, dict):
+        return service
+    return {}
+
+
+def _extract_staff_id_from_payload(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("id", "staff_id", "employee_id", "master_id", "specialist_id", "user_id"):
+            normalized = _clean_text(value.get(key))
+            if normalized:
+                return normalized
+        for key in ("staff", "employee", "master", "specialist", "user"):
+            nested = value.get(key)
+            if isinstance(nested, dict):
+                normalized = _extract_staff_id_from_payload(nested)
+                if normalized:
+                    return normalized
+    return _clean_text(value)
+
+
+def _iter_list_or_scalar(raw: Any) -> list[Any]:
+    if raw is None:
+        return []
+    return raw if isinstance(raw, list) else [raw]
+
+
+def _extract_assigned_staff_ids_from_service(service: dict[str, Any]) -> set[str] | None:
+    for key in ("staff_count", "employees_count", "specialists_count", "master_count"):
+        value = service.get(key)
+        if value is None:
+            continue
+        try:
+            if int(value) == 0:
+                return set()
+        except (TypeError, ValueError):
+            pass
+    assigned: set[str] = set()
+    found = False
+    for key in ("staff", "staffs", "employees", "masters", "staff_members", "personnel", "specialists", "staff_ids", "staff_ids[]", "employee_ids", "master_ids", "specialist_ids"):
+        if key not in service:
+            continue
+        found = True
+        for item in _iter_list_or_scalar(service.get(key)):
+            staff_id = _extract_staff_id_from_payload(item)
+            if staff_id:
+                assigned.add(staff_id)
+    return assigned if found else None
+
+
+def _find_service_staff_row(service: dict[str, Any], staff_id: str) -> dict[str, Any] | None:
+    for key in ("staff", "staffs", "employees", "masters", "staff_members", "personnel", "specialists"):
+        for item in _iter_list_or_scalar(service.get(key)):
+            if not isinstance(item, dict):
+                continue
+            nested = next((item[n] for n in ("staff", "employee", "master", "specialist", "user") if isinstance(item.get(n), dict)), None)
+            row = {**item, **nested} if isinstance(nested, dict) else item
+            if _extract_staff_id_from_payload(row) == staff_id:
+                return row
+    return None
+
+
+def _extract_staff_service_ids(staff: dict[str, Any]) -> set[str]:
+    service_ids: set[str] = set()
+    for key in ("service_id", "service_ids", "services", "service", "assigned_services"):
+        for item in _iter_list_or_scalar(staff.get(key)):
+            service_id = _extract_service_id_from_payload(item)
+            if service_id:
+                service_ids.add(service_id)
+    return service_ids
+
+
+def _extract_service_id_from_payload(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("id", "service_id"):
+            normalized = _clean_text(value.get(key))
+            if normalized:
+                return normalized
+        if isinstance(value.get("service"), dict):
+            return _extract_service_id_from_payload(value["service"])
+    return _clean_text(value)
+
+
+def _supports_any_master(payload: dict[str, Any] | list[Any]) -> bool:
+    if isinstance(payload, list):
+        return any(_supports_any_master(item) for item in payload if isinstance(item, dict))
+    for key in ("any_master", "allow_any_master", "can_choose_any_master"):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+        if str(value).lower() in {"1", "true"}:
+            return True
+    return False
+
+
+def is_service_compatible_with_master(service: BookingServiceItem | dict[str, Any], master_id: str) -> bool:
+    """Return False only when YClients service payload explicitly excludes master."""
+
+    assigned_ids = _extract_assigned_staff_ids_from_service(_service_raw_payload(service))
+    if assigned_ids is None:
+        return True
+    return _clean_text(master_id) in assigned_ids
+
+
 def _normalize_master(item: BookingMasterItem | YClientsStaff | dict[str, Any]) -> BookingMasterItem:
     if isinstance(item, BookingMasterItem):
         return item
@@ -1487,6 +1661,7 @@ def _normalize_service(item: BookingServiceItem | YClientsService | dict[str, An
             price_min=item.price_min,
             price_max=item.price_max,
             duration=_extract_duration(item.raw),
+            raw=item.raw,
         )
     return BookingServiceItem(
         yclients_service_id=_clean_text(item.get("yclients_service_id") or item.get("id") or item.get("service_id")),
@@ -1496,6 +1671,7 @@ def _normalize_service(item: BookingServiceItem | YClientsService | dict[str, An
         price_min=item.get("price_min") or item.get("price") or item.get("cost"),
         price_max=item.get("price_max") or item.get("price") or item.get("cost"),
         duration=_extract_duration(item),
+        raw=item,
     )
 
 

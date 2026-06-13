@@ -30,6 +30,7 @@ from max_barbershop_bot.services.booking import (
     format_slot_button,
     has_available_masters,
     has_available_services,
+    is_service_compatible_with_master,
 )
 from max_barbershop_bot.services.contacts import ContactsService
 from max_barbershop_bot.services.master_photos import MasterPhotosService
@@ -252,7 +253,12 @@ async def handle_booking_service(context: RouterContext) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_PRICE_STATE_KEY, _service_price_text(service))
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_DURATION_STATE_KEY, service.duration)
 
-    if _entry_mode(context) == _ENTRY_MODE_STAFF_FIRST and _state_value(context, _SELECTED_MASTER_STATE_KEY):
+    selected_master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
+    if _entry_mode(context) == _ENTRY_MODE_STAFF_FIRST and isinstance(selected_master_id, str) and selected_master_id:
+        if not is_service_compatible_with_master(service, selected_master_id):
+            await context.answer_callback("😔 Эта услуга недоступна у выбранного мастера. Пожалуйста, выберите другую услугу.")
+            await _show_selected_category_services(context)
+            return
         await _show_booking_dates(context)
         return
     if _entry_mode(context) == _ENTRY_MODE_DATETIME_FIRST and _state_value(context, _SELECTED_DATE_STATE_KEY) and _state_value(context, _SELECTED_SLOT_TIME_STATE_KEY):
@@ -959,7 +965,7 @@ async def _open_booking_all_masters(context: RouterContext, *, push_current: boo
 async def _open_booking_masters(context: RouterContext, yclients_service_id: str, *, push_current: bool = True) -> None:
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     try:
-        masters = await booking_service.get_available_masters_for_service(yclients_service_id)
+        masters = await booking_service.get_available_masters_for_service(yclients_service_id, service=_selected_service(context))
     except BookingServiceError as exc:
         logger.warning(
             "Booking masters screen failed: operation=show_booking_masters service_id=%s error_class=%s",
@@ -1288,6 +1294,9 @@ async def _show_selected_category_services(context: RouterContext) -> None:
     else:
         category = None
         services = catalog.services
+    selected_master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
+    if _entry_mode(context) == _ENTRY_MODE_STAFF_FIRST and isinstance(selected_master_id, str) and selected_master_id:
+        services = [item for item in services if is_service_compatible_with_master(item, selected_master_id)]
     await _show_services(context, services, category_title=category.title if category else None, push_current=False)
 
 
@@ -1525,6 +1534,14 @@ def _booking_service_text(context: RouterContext) -> str:
 def _catalog(context: RouterContext) -> BookingCatalog | None:
     value = _state_value(context, _CATALOG_STATE_KEY)
     return value if isinstance(value, BookingCatalog) else None
+
+
+def _selected_service(context: RouterContext) -> BookingServiceItem | None:
+    service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
+    catalog = _catalog(context)
+    if not isinstance(service_id, str) or catalog is None:
+        return None
+    return next((item for item in catalog.services if item.yclients_service_id == service_id), None)
 
 
 def _masters(context: RouterContext) -> list[BookingMasterItem] | None:
