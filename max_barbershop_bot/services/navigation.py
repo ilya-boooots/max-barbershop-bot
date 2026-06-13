@@ -53,6 +53,13 @@ async def open_screen(context: RouterContext, screen_id: str) -> None:
     await render_screen(context, screen_id)
 
 
+async def show_booking_stale_callback(context: RouterContext) -> None:
+    """Show Telegram-style restart options for stale booking callbacks."""
+
+    await context.answer_callback("Экран устарел 🙏")
+    await context.send_text(BOOKING_STALE_CALLBACK_TEXT, keyboard=booking_stale_keyboard())
+
+
 async def render_screen(context: RouterContext, screen_id: str) -> None:
     """Render a known screen id."""
 
