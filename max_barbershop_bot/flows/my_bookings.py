@@ -6,7 +6,6 @@ import logging
 from datetime import datetime
 from os import getenv
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
@@ -14,6 +13,7 @@ from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.booking import (
     BookingService,
     BookingServiceError,
@@ -617,10 +617,7 @@ def _mark_cancel_completed(context: RouterContext, record_id: str) -> None:
 
 
 def _build_cancellation_marker(timezone_name: str) -> str:
-    try:
-        tz = ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
-        tz = ZoneInfo("Europe/Moscow")
+    tz = zoneinfo_or_default(timezone_name, flow="my_bookings", operation="cancellation_marker")
     return f"{_CANCELLATION_MARKER_PREFIX} {datetime.now(tz).strftime('%d.%m.%Y в %H:%M')}"
 
 
@@ -680,7 +677,7 @@ def _bookings_from_state(context: RouterContext) -> list[dict[str, Any]]:
 
 def _timezone_from_state(context: RouterContext) -> str:
     value = state.get_state_data_value(_user_id(context), _chat_id(context), _BOOKINGS_TIMEZONE_STATE_KEY)
-    return value if isinstance(value, str) and value.strip() else "Europe/Moscow"
+    return normalize_branch_timezone(value if isinstance(value, str) else DEFAULT_BRANCH_TIMEZONE, flow="my_bookings", operation="timezone_from_state")
 
 
 def _booking_record_id(booking: dict[str, Any]) -> str | None:

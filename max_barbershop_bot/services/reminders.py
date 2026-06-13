@@ -8,14 +8,15 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
-from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -238,7 +239,7 @@ async def get_due_reminders(
         logger.info("booking_reminders_skipped_yclients_not_configured")
         return []
 
-    branch_timezone_name = timezone_name or settings.branch_timezone or DEFAULT_BRANCH_TIMEZONE
+    branch_timezone_name = normalize_branch_timezone(timezone_name or settings.branch_timezone, flow="reminders", operation="get_due_reminders")
     branch_timezone = _zoneinfo(branch_timezone_name)
     now_local = _ensure_timezone(now or datetime.now(UTC), branch_timezone)
     due: list[DueReminder] = []
@@ -321,7 +322,7 @@ async def send_due_reminders(
         YClientsSettingsRepository(database_path),
         operation="send_due_reminders_timezone",
     )
-    branch_timezone_name = timezone_name or (settings.branch_timezone if settings else DEFAULT_BRANCH_TIMEZONE)
+    branch_timezone_name = normalize_branch_timezone(timezone_name or (settings.branch_timezone if settings else None), flow="reminders", operation="send_due_reminders")
     sent_or_recorded = 0
     for reminder in await get_due_reminders(database_path=database_path, now=now, timezone_name=branch_timezone_name):
         await send_booking_notification(
@@ -444,11 +445,7 @@ def _ensure_timezone(value: datetime, timezone_value: ZoneInfo) -> datetime:
 
 
 def _zoneinfo(timezone_name: str | None) -> ZoneInfo:
-    try:
-        return ZoneInfo(timezone_name or DEFAULT_BRANCH_TIMEZONE)
-    except ZoneInfoNotFoundError:
-        logger.warning("booking_reminders_invalid_timezone timezone=%s", timezone_name)
-        return ZoneInfo(DEFAULT_BRANCH_TIMEZONE)
+    return zoneinfo_or_default(timezone_name, flow="reminders", operation="_zoneinfo")
 
 
 def _iso(value: datetime | None) -> str | None:

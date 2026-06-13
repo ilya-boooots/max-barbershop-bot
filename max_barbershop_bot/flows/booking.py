@@ -15,6 +15,7 @@ from max_barbershop_bot.repositories.platform_attribution import PlatformAttribu
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, localize_datetime, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.booking import (
     BookingCatalog,
     BookingService,
@@ -795,7 +796,7 @@ async def handle_booking_back(context: RouterContext) -> None:
 
                 state.set_current_screen(_user_id(context), _chat_id(context), state.MY_BOOKING_DETAILS_SCREEN)
                 await context.send_text(
-                    format_booking_details_text(source_booking, timezone_name=str(timezone_name or "Europe/Moscow")),
+                    format_booking_details_text(source_booking, timezone_name=normalize_branch_timezone(str(timezone_name or DEFAULT_BRANCH_TIMEZONE), flow="booking", operation="repeat_back")),
                     keyboard=my_booking_details_keyboard(),
                 )
                 return
@@ -1405,20 +1406,11 @@ async def _send_immediate_confirmation_safely(context: RouterContext, *, created
 
 
 def _parse_booking_datetime(value: object | None, timezone_name: str) -> datetime:
-    raw = str(value or "").strip()
-    if raw:
-        try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                from zoneinfo import ZoneInfo
-
-                parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
-            return parsed
-        except Exception:
-            logger.warning("Booking datetime parse failed safely: value_present=%s", bool(raw))
-    from zoneinfo import ZoneInfo
-
-    return datetime.now(ZoneInfo(timezone_name))
+    parsed = localize_datetime(value, timezone_name)
+    if parsed is not None:
+        return parsed
+    logger.warning("Booking datetime parse failed safely: value_present=%s", bool(str(value or "").strip()))
+    return datetime.now(zoneinfo_or_default(timezone_name, flow="booking", operation="parse_datetime_fallback"))
 
 
 def _booking_state_snapshot(context: RouterContext) -> dict[str, object | None]:

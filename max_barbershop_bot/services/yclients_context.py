@@ -6,7 +6,8 @@ import logging
 from os import getenv
 
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
-from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettings, YClientsSettingsRepository
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE
 
 logger = logging.getLogger(__name__)
 

@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from os import getenv
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.repositories.platform_attribution import PLATFORM_MAX, PlatformAttributionRepository
-from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -284,10 +285,7 @@ def _build_period(*, days: int | None, period_name: str, timezone: ZoneInfo) -> 
 
 
 def _safe_zoneinfo(value: str | None) -> ZoneInfo:
-    try:
-        return ZoneInfo((value or DEFAULT_BRANCH_TIMEZONE).strip() or DEFAULT_BRANCH_TIMEZONE)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo(DEFAULT_BRANCH_TIMEZONE)
+    return zoneinfo_or_default(value, flow="statistics", operation="_safe_zoneinfo")
 
 
 def _is_valid_business_record(item: dict[str, Any]) -> bool:
