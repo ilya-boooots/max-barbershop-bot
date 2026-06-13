@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from os import getenv
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
@@ -103,7 +104,7 @@ async def handle_masters_home(context: RouterContext) -> None:
 
 
 async def _open_masters_list(context: RouterContext) -> None:
-    service = BookingService(YClientsSettingsRepository(DEFAULT_DATABASE_PATH))
+    service = BookingService(YClientsSettingsRepository(_database_path()))
     try:
         masters = await service.get_available_masters()
     except BookingServiceError as exc:
@@ -162,8 +163,8 @@ def _master_detail_text(master: BookingMasterItem) -> str:
 def _master_photo_attachment(yclients_staff_id: str | None) -> dict[str, object] | None:
     try:
         service = MasterPhotosService(
-            MasterPhotosRepository(DEFAULT_DATABASE_PATH),
-            YClientsSettingsRepository(DEFAULT_DATABASE_PATH),
+            MasterPhotosRepository(_database_path()),
+            YClientsSettingsRepository(_database_path()),
         )
         return service.photo_attachment(yclients_staff_id)
     except Exception as exc:  # noqa: BLE001 - photo is optional UX.
@@ -215,6 +216,10 @@ def _push_current_screen(context: RouterContext, next_screen: str) -> None:
     if current != next_screen:
         state.push_screen(_user_id(context), _chat_id(context), current)
     state.set_current_screen(_user_id(context), _chat_id(context), next_screen)
+
+
+def _database_path() -> str:
+    return getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH
 
 
 def _user_id(context: RouterContext) -> str | None:
