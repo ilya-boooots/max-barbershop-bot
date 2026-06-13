@@ -181,6 +181,23 @@ def register_booking_routes(router: Router) -> None:
         router.on_callback(f"{BOOKING_SLOT_PAYLOAD_PREFIX}{index}", handle_booking_slot)
 
 
+
+async def start_staff_first_booking_with_master(context: RouterContext, master: BookingMasterItem) -> None:
+    """Start staff-first booking from an already selected master."""
+
+    _clear_booking_state(context)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_STAFF_FIRST)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, master.yclients_master_id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_NAME_STATE_KEY, master.title)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_SPECIALIZATION_STATE_KEY, master.specialization)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_RATING_STATE_KEY, master.rating)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_DATE_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, None)
+    await _open_booking_catalog(context)
+
+
 async def handle_booking_start(context: RouterContext) -> None:
     """Open the first real booking step from the main menu."""
 

@@ -12,6 +12,7 @@ from max_barbershop_bot.flows.contacts import register_contacts_routes
 from max_barbershop_bot.flows.lost_clients import register_lost_clients_routes
 from max_barbershop_bot.flows.master_photos import register_master_photos_routes
 from max_barbershop_bot.flows.menu import register_menu_routes
+from max_barbershop_bot.flows.masters import register_masters_routes
 from max_barbershop_bot.flows.settings import register_settings_routes
 from max_barbershop_bot.flows.my_bookings import register_my_bookings_routes
 from max_barbershop_bot.flows.notification_history import register_notification_history_routes
@@ -30,6 +31,7 @@ def create_router(config: Config | None = None) -> Router:
     router.on_update("bot_started", handle_bot_started)
     router.on_text("/start", handle_start)
     register_menu_routes(router)
+    register_masters_routes(router)
     register_broadcast_routes(router)
     register_client_segment_routes(router)
     register_lost_clients_routes(router)
