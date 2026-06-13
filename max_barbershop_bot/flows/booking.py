@@ -10,7 +10,7 @@ from os import getenv
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
-from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER
+from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, MAX_REPEAT_BOOKING_COMMENT_MARKER
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
@@ -68,6 +68,7 @@ from max_barbershop_bot.ui.buttons import (
     booking_confirmation_keyboard,
     booking_phone_keyboard,
     booking_success_keyboard,
+    my_booking_details_keyboard,
     navigation_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
@@ -139,6 +140,8 @@ _ENTRY_MODE_STATE_KEY = "booking_entry_mode"
 _ENTRY_MODE_SERVICE_FIRST = "service_first"
 _ENTRY_MODE_STAFF_FIRST = "staff_first"
 _ENTRY_MODE_DATETIME_FIRST = "datetime_first"
+_ENTRY_MODE_REPEAT = "repeat_booking"
+_REPEAT_SOURCE_SCREEN_STATE_KEY = "repeat_source_screen"
 _CONFIRM_LOCKS: dict[str, asyncio.Lock] = {}
 
 
@@ -180,6 +183,88 @@ def register_booking_routes(router: Router) -> None:
         router.on_callback(f"{BOOKING_DATE_PAYLOAD_PREFIX}{index}", handle_booking_date)
         router.on_callback(f"{BOOKING_SLOT_PAYLOAD_PREFIX}{index}", handle_booking_slot)
 
+
+
+async def start_repeat_booking_with_prefill(
+    context: RouterContext,
+    *,
+    service_id: str,
+    service_name: str,
+    master_id: str,
+    master_name: str | None,
+    service_price: str | None = None,
+    service_duration: str | None = None,
+) -> None:
+    """Start repeat booking with service/master prefilled and validated against YClients."""
+
+    platform_user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    try:
+        catalog = await booking_service.get_service_categories_and_services()
+    except BookingServiceError as exc:
+        logger.warning(
+            "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s "
+            "selected_service_id_present=%s selected_master_id_present=%s service_available=%s "
+            "master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s http_status=%s trace_id=%s",
+            bool(platform_user_id),
+            True,
+            bool(service_id),
+            bool(master_id),
+            False,
+            False,
+            0,
+            False,
+            False,
+            type(exc).__name__,
+            getattr(exc, "status_code", None),
+            getattr(exc, "trace_id", None),
+        )
+        await context.send_text("Эта услуга сейчас недоступна 🙏\n\nВыберите другую услугу для записи.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+
+    service = next((item for item in catalog.services if item.yclients_service_id == str(service_id)), None)
+    if service is None:
+        logger.info(
+            "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s selected_service_id_present=%s selected_master_id_present=%s service_available=%s master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s",
+            bool(platform_user_id), True, bool(service_id), bool(master_id), False, False, 0, False, False, "none",
+        )
+        await context.send_text("Эта услуга сейчас недоступна 🙏\n\nВыберите другую услугу для записи.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+    try:
+        masters = await booking_service.get_available_masters_for_service(service.yclients_service_id, service=service)
+    except BookingServiceError as exc:
+        logger.warning(
+            "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s selected_service_id_present=%s selected_master_id_present=%s service_available=%s master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s http_status=%s trace_id=%s",
+            bool(platform_user_id), True, bool(service_id), bool(master_id), True, False, 0, False, False, type(exc).__name__, getattr(exc, "status_code", None), getattr(exc, "trace_id", None),
+        )
+        await context.send_text("Этот мастер сейчас недоступен для повторной записи 🙏\n\nВыберите другого мастера или услугу.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+    master = next((item for item in masters if item.yclients_master_id == str(master_id)), None)
+    if master is None:
+        logger.info(
+            "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s selected_service_id_present=%s selected_master_id_present=%s service_available=%s master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s",
+            bool(platform_user_id), True, bool(service_id), bool(master_id), True, False, 0, False, False, "none",
+        )
+        await context.send_text("Этот мастер сейчас недоступен для повторной записи 🙏\n\nВыберите другого мастера или услугу.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
+
+    state.set_state_data_value(platform_user_id, chat_id, _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_REPEAT)
+    state.set_state_data_value(platform_user_id, chat_id, _REPEAT_SOURCE_SCREEN_STATE_KEY, state.MY_BOOKING_DETAILS_SCREEN)
+    state.set_state_data_value(platform_user_id, chat_id, _CATALOG_STATE_KEY, catalog)
+    state.set_state_data_value(platform_user_id, chat_id, _MASTERS_STATE_KEY, masters)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_STATE_KEY, service.yclients_service_id)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_NAME_STATE_KEY, service.title or service_name)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_PRICE_STATE_KEY, service_price or _format_price(service))
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_DURATION_STATE_KEY, service_duration or service.duration)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_STATE_KEY, master.yclients_master_id)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_NAME_STATE_KEY, master.title or master_name or "Любой мастер")
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_SPECIALIZATION_STATE_KEY, master.specialization)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_RATING_STATE_KEY, master.rating)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_DATE_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_TIME_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_DATETIME_STATE_KEY, None)
+    await _show_booking_dates(context)
 
 
 async def start_staff_first_booking_with_master(context: RouterContext, master: BookingMasterItem) -> None:
@@ -622,7 +707,7 @@ async def _create_booking_after_lock(context: RouterContext) -> None:
             selected_datetime=_optional_state_text(booking_data.get("selected_datetime")),
             client_name=_user_full_name(user),
             client_phone=booking_phone,
-            comment=MAX_BOOKING_COMMENT_MARKER,
+            comment=MAX_REPEAT_BOOKING_COMMENT_MARKER if booking_data.get("entry_mode") == _ENTRY_MODE_REPEAT else MAX_BOOKING_COMMENT_MARKER,
         )
     except BookingServiceError as exc:
         logger.warning(
@@ -646,6 +731,7 @@ async def _create_booking_after_lock(context: RouterContext) -> None:
         platform_user_id=user.platform_user_id,
         yclients_record_id=created.yclients_record_id,
         yclients_client_id=created.yclients_client_id or user.yclients_client_id,
+        marker=MAX_REPEAT_BOOKING_COMMENT_MARKER if booking_data.get("entry_mode") == _ENTRY_MODE_REPEAT else MAX_BOOKING_COMMENT_MARKER,
     )
     if created.datetime_iso:
         state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, created.datetime_iso)
@@ -701,6 +787,20 @@ async def handle_booking_back(context: RouterContext) -> None:
         await _show_selected_category_services(context)
         return
     if current_screen == state.BOOKING_DATES_SCREEN:
+        if entry_mode == _ENTRY_MODE_REPEAT:
+            source_booking = state.get_state_data_value(_user_id(context), _chat_id(context), "my_bookings_selected_booking")
+            timezone_name = state.get_state_data_value(_user_id(context), _chat_id(context), "my_bookings_branch_timezone")
+            if isinstance(source_booking, dict):
+                from max_barbershop_bot.services.my_bookings import format_booking_details_text
+
+                state.set_current_screen(_user_id(context), _chat_id(context), state.MY_BOOKING_DETAILS_SCREEN)
+                await context.send_text(
+                    format_booking_details_text(source_booking, timezone_name=str(timezone_name or "Europe/Moscow")),
+                    keyboard=my_booking_details_keyboard(),
+                )
+                return
+            await show_home(context)
+            return
         if entry_mode == _ENTRY_MODE_DATETIME_FIRST and not _state_value(context, _SELECTED_SERVICE_STATE_KEY):
             await _show_booking_hub(context, push_current=False)
             return
@@ -1362,6 +1462,7 @@ def _save_attribution_safely(
     platform_user_id: str,
     yclients_record_id: str,
     yclients_client_id: str | None,
+    marker: str = MAX_BOOKING_COMMENT_MARKER,
 ) -> None:
     try:
         PlatformAttributionRepository(_database_path()).create_if_missing(
@@ -1369,7 +1470,7 @@ def _save_attribution_safely(
             platform_user_id=platform_user_id,
             yclients_record_id=yclients_record_id,
             yclients_client_id=yclients_client_id,
-            marker=MAX_BOOKING_COMMENT_MARKER,
+            marker=marker,
         )
     except Exception as exc:  # noqa: BLE001 - booking already exists in YClients, only local attribution failed.
         logger.exception(

@@ -21,12 +21,16 @@ from max_barbershop_bot.services.booking import (
     format_date_button,
     format_slot_button,
 )
+from max_barbershop_bot.flows.booking import start_repeat_booking_with_prefill
 from max_barbershop_bot.services.my_bookings import (
     MY_BOOKING_CANCEL_IN_PROGRESS_TEXT,
     MY_BOOKING_NOT_FOUND_TEXT,
     MY_BOOKING_RESCHEDULE_DATES_TEXT,
     MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT,
     MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT,
+    MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT,
+    MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT,
+    MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT,
     MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT,
     MY_BOOKING_RESCHEDULE_SLOTS_TEXT,
     MY_BOOKINGS_LOAD_ERROR_TEXT,
@@ -57,6 +61,7 @@ from max_barbershop_bot.ui.buttons import (
     MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD,
     MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX,
     MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX,
+    MY_BOOKINGS_REPEAT_START_PAYLOAD,
     MY_BOOKINGS_RESCHEDULE_START_PAYLOAD,
     my_booking_cancel_confirmation_keyboard,
     my_booking_cancel_result_keyboard,
@@ -97,6 +102,7 @@ def register_my_bookings_routes(router: Router) -> None:
     router.on_callback(MY_BOOKINGS_BACK_PAYLOAD, handle_my_bookings_back)
     router.on_callback(MY_BOOKINGS_CANCEL_START_PAYLOAD, handle_my_booking_cancel_start)
     router.on_callback(MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD, handle_my_booking_cancel_confirm)
+    router.on_callback(MY_BOOKINGS_REPEAT_START_PAYLOAD, handle_my_booking_repeat_start)
     router.on_callback(MY_BOOKINGS_RESCHEDULE_START_PAYLOAD, handle_my_booking_reschedule_start)
     router.on_callback(MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD, handle_my_booking_reschedule_confirm)
     for index in range(_MAX_RESCHEDULE_DATES):
@@ -217,6 +223,69 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
     timezone_name = _timezone_from_state(context)
     await context.send_text(format_cancel_success_text(booking, timezone_name=timezone_name), keyboard=my_booking_cancel_result_keyboard())
     await _show_my_bookings(context, push_current=False)
+
+
+async def handle_my_booking_repeat_start(context: RouterContext) -> None:
+    """Start repeat booking for the selected YClients record."""
+
+    await context.answer_callback("Готовим повтор записи 🔁")
+    booking = _selected_booking(context)
+    if booking is None:
+        await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
+        return
+    record_id = _booking_record_id(booking)
+    if not record_id:
+        await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
+        return
+
+    platform_user_id = _user_id(context)
+    service = MyBookingsService(YClientsSettingsRepository(_database_path()))
+    try:
+        repeat_context = await service.prepare_repeat_context(
+            _current_user(context),
+            yclients_record_id=record_id,
+            platform_user_id=platform_user_id,
+        )
+    except (MyBookingsProfileMissingError, MyBookingReschedulePrepareError, MyBookingRescheduleError) as exc:
+        logger.warning(
+            "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s "
+            "selected_service_id_present=%s selected_master_id_present=%s service_available=%s "
+            "master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s http_status=%s trace_id=%s",
+            bool(platform_user_id),
+            bool(record_id),
+            False,
+            False,
+            False,
+            False,
+            0,
+            False,
+            False,
+            type(exc).__name__,
+            getattr(exc, "status_code", None),
+            getattr(exc, "trace_id", None),
+        )
+        await context.send_text(MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
+        return
+
+    service_id = _clean_state_text(repeat_context.get("service_id"))
+    staff_id = _clean_state_text(repeat_context.get("staff_id"))
+    if not service_id:
+        await context.send_text(MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT, keyboard=my_booking_reschedule_result_keyboard())
+        return
+    if not staff_id:
+        await context.send_text(MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT, keyboard=my_booking_reschedule_result_keyboard())
+        return
+
+    state.set_current_screen(platform_user_id, _chat_id(context), state.MY_BOOKING_DETAILS_SCREEN)
+    await start_repeat_booking_with_prefill(
+        context,
+        service_id=service_id,
+        service_name=_clean_state_text(repeat_context.get("service_name")) or _clean_state_text(booking.get("service_name")) or "Услуга",
+        master_id=staff_id,
+        master_name=_clean_state_text(repeat_context.get("staff_name")) or _clean_state_text(booking.get("master_name")) or None,
+        service_price=_clean_state_text(booking.get("price")) or None,
+        service_duration=f"{_clean_state_text(booking.get('duration_minutes'))} мин" if _clean_state_text(booking.get("duration_minutes")) else None,
+    )
 
 
 async def handle_my_booking_reschedule_start(context: RouterContext) -> None:
