@@ -111,7 +111,7 @@ class Router:
             if raw_attachments:
                 event = replace(event, attachments=raw_attachments)
 
-        event = self._recover_booking_phone_contact_chat(event)
+        event = self._recover_phone_contact_chat(event)
 
         self._log_contact_diagnostic(event)
         handler = self._resolve_handler(event)
@@ -155,7 +155,7 @@ class Router:
         self._log_yclients_setup_text_diagnostic(event, current_screen, handler is not None)
         return handler or self._unknown_text_handler
 
-    def _recover_booking_phone_contact_chat(self, event: NormalizedEvent) -> NormalizedEvent:
+    def _recover_phone_contact_chat(self, event: NormalizedEvent) -> NormalizedEvent:
         if event.update_type != "message_created" or not _looks_like_contact_event(event):
             return event
 
@@ -163,19 +163,22 @@ class Router:
         current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
         recovered_chat_id = None
         route_recovered = False
-        if current_screen != state.BOOKING_PHONE_SCREEN:
-            recovered_chat_id = state.find_chat_id_for_current_screen(
-                event.platform_user_id,
-                state.BOOKING_PHONE_SCREEN,
-            )
-            if recovered_chat_id is not None:
-                event = replace(event, chat_id=recovered_chat_id)
-                route_recovered = True
+        phone_screens = (state.REGISTRATION_PHONE_SCREEN, state.BOOKING_PHONE_SCREEN)
+        if current_screen not in phone_screens:
+            for phone_screen in phone_screens:
+                recovered_chat_id = state.find_chat_id_for_current_screen(
+                    event.platform_user_id,
+                    phone_screen,
+                )
+                if recovered_chat_id is not None:
+                    event = replace(event, chat_id=recovered_chat_id)
+                    route_recovered = True
+                    break
 
         screen_after = state.get_current_screen(event.platform_user_id, event.chat_id)
         diagnostic_attachments = event.attachments or _raw_attachments(event.raw_update)
         logger.info(
-            "MAX booking phone contact route recovery: "
+            "MAX phone contact route recovery: "
             "original_chat_id_present=%s recovered_chat_id_present=%s "
             "platform_user_id_present=%s screen_before=%s screen_after=%s "
             "attachment_count=%s attachment_types=%s route_recovered=%s",
@@ -204,7 +207,7 @@ class Router:
         vcf_has_tel = _vcf_info_has_tel(diagnostic_attachments)
         extracted_phone = extract_contact_phone(diagnostic_attachments)
         logger.info(
-            "MAX booking phone contact diagnostic: update_type=%s screen_id=%s "
+            "MAX phone contact diagnostic: update_type=%s screen_id=%s "
             "platform_user_id_present=%s chat_id_present=%s attachment_count=%s "
             "attachment_types=%s vcf_info_exists=%s vcf_info_has_tel=%s "
             "phone_extraction_succeeded=%s masked_phone=%s",

@@ -114,20 +114,18 @@ REGISTRATION_PERSONAL_DATA_POLICY_TEXT = """Политика обработки 
 По всем вопросам, связанным с обработкой персональных данных, вы можете обратиться по
 адресу электронной почты: voyazhkorchma@yandex.ru
 """
-REGISTRATION_PHONE_TEXT = "📱 Поделитесь номером телефона, чтобы мы могли вас записать 😊"
+REGISTRATION_PHONE_TEXT = '📞 Для продолжения работы необходим ваш контакт. Нажмите на кнопку "📞 Поделиться контактом".'
 REGISTRATION_PHONE_INVALID_TEXT = "⚠️ Не удалось распознать номер телефона. Отправьте контакт ещё раз или введите номер вручную."
 REGISTRATION_CONTACT_PHONE_MISSING_TEXT = REGISTRATION_PHONE_INVALID_TEXT
-REGISTRATION_NAME_TEXT = "✍️ Как вас зовут?"
-REGISTRATION_NAME_INVALID_TEXT = "🙂 Пожалуйста, укажите имя (минимум 2 символа)."
-REGISTRATION_BIRTHDATE_TEXT = "🎂 Укажите дату рождения (в формате ДД.ММ.ГГГГ)"
-REGISTRATION_BIRTHDATE_INVALID_TEXT = "😌 Дата не распознана. Введите в формате ДД.ММ.ГГГГ, например 31.01.1999."
-REGISTRATION_COMPLETE_TEXT = """✅ Регистрация завершена!
-
-Теперь вы можете записываться на услуги, смотреть свои записи, переносить или отменять визиты прямо в боте.
-
-Нажмите "✂️ Записаться", чтобы выбрать услугу, мастера и удобное время 😊"""
+REGISTRATION_NAME_TEXT = "✍️ Введите ваше имя:"
+REGISTRATION_NAME_INVALID_TEXT = "⛔️ Имя не прошло проверку. Введите корректное имя."
+REGISTRATION_BIRTHDATE_TEXT = "📅 Введите дату рождения в формате дд.мм.гггг (Например: 31.01.1999)."
+REGISTRATION_BIRTHDATE_INVALID_TEXT = "⛔️ Дата не прошла проверку. Проверьте корректность введенных данных."
+REGISTRATION_STARTED_TEXT = "Регистрация начата... ⏳"
+REGISTRATION_COMPLETE_TEXT = "Регистрация завершилась успешно! 👍"
 REGISTRATION_REQUIRED_TEXT = "📝 Сначала завершите регистрацию, пожалуйста 🙂"
 REGISTRATION_DECLINED_TEXT = "📝 Регистрация уже идет. Давайте закончим 🙂"
+REGISTRATION_NAME_CONFIRM_TEXT = "👉 Хотите использовать имя {name} для регистрации в системе?"
 
 BOOKING_HUB_TEXT = "✂️ Как начнём запись?"
 BOOKING_CATEGORY_TEXT = "✂️ Выберите категорию услуг 😊"
