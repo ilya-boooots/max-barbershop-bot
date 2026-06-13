@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from math import ceil
 from time import perf_counter
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from max_barbershop_bot.integrations.yclients.dto import (
     YClientsBookingRecord,
@@ -32,7 +32,8 @@ from max_barbershop_bot.integrations.yclients.exceptions import (
 )
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, normalize_phone
-from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettings, YClientsSettingsRepository
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -241,7 +242,7 @@ class BookingService:
                 type(exc).__name__,
             )
             return DEFAULT_BRANCH_TIMEZONE
-        return _timezone_name(settings.branch_timezone if settings else None)
+        return normalize_branch_timezone(settings.branch_timezone if settings else None, flow="booking", operation="get_booking_timezone")
 
     def get_available_dates(self, *, days: int = DATE_LOOKAHEAD_DAYS) -> list[date]:
         """Return branch-timezone candidate dates without claiming availability."""
@@ -279,7 +280,7 @@ class BookingService:
             )
             raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots", exc=exc) from exc
 
-        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        timezone_name = normalize_branch_timezone(settings.branch_timezone if settings else None, flow="booking", operation="settings_timezone")
         candidate_dates = build_booking_dates(days=days, timezone_name=timezone_name)
         if not has_required_yclients_credentials(settings):
             logger.info(
@@ -580,7 +581,7 @@ class BookingService:
 
         service_id = _clean_text(yclients_service_id)
         settings = self.load_active_settings_for_booking(operation="get_datetime_first_masters")
-        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        timezone_name = normalize_branch_timezone(settings.branch_timezone if settings else None, flow="booking", operation="settings_timezone")
         if not has_required_yclients_credentials(settings) or not service_id:
             raise _settings_missing_error(BOOKING_MASTERS_NOT_CONFIGURED_TEXT, operation="load masters")
         masters = await self.get_available_masters_for_service(service_id)
@@ -636,7 +637,7 @@ class BookingService:
                 settings is not None,
             )
             raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots")
-        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        timezone_name = normalize_branch_timezone(settings.branch_timezone if settings else None, flow="booking", operation="settings_timezone")
         try:
             resolved_catalog = catalog if catalog is not None else await self.get_service_categories_and_services()
         except BookingServiceError as exc:
@@ -798,7 +799,7 @@ class BookingService:
             )
             raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots", exc=exc) from exc
 
-        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        timezone_name = normalize_branch_timezone(settings.branch_timezone if settings else None, flow="booking", operation="settings_timezone")
         if is_past_date(booking_date_value, timezone_name=timezone_name):
             logger.info(
                 "Booking slots skipped for past date: operation=get_booking_slots service_id=%s master_id=%s date=%s",
@@ -1079,7 +1080,7 @@ def filter_available_slots(
 ) -> list[BookingSlotItem]:
     """Normalize and keep only future displayable YClients slots."""
 
-    now = datetime.now(_zoneinfo(timezone_name))
+    now = datetime.now(zoneinfo_or_default(timezone_name, flow="booking"))
     normalized = [_normalize_slot(item, timezone_name=timezone_name) for item in slots_payload]
     return [
         item
@@ -1233,7 +1234,7 @@ def build_booking_dates(*, days: int = DATE_LOOKAHEAD_DAYS, timezone_name: str =
     """Build today and future booking dates in the branch timezone."""
 
     total_days = max(1, days)
-    today = datetime.now(_zoneinfo(timezone_name)).date()
+    today = datetime.now(zoneinfo_or_default(timezone_name, flow="booking")).date()
     return [today + timedelta(days=offset) for offset in range(total_days)]
 
 
@@ -1254,7 +1255,7 @@ def format_slot_button(slot: BookingSlotItem | YClientsSlot | dict[str, Any]) ->
 def is_past_date(value: date | str, *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> bool:
     """Return True when value is before today in branch timezone."""
 
-    return _date_value(value) < datetime.now(_zoneinfo(timezone_name)).date()
+    return _date_value(value) < datetime.now(zoneinfo_or_default(timezone_name, flow="booking")).date()
 
 
 def _normalize_slot(slot: BookingSlotItem | YClientsSlot | dict[str, Any], *, timezone_name: str) -> BookingSlotItem:
@@ -1321,20 +1322,11 @@ def _date_value(value: date | str) -> date:
 
 
 def _timezone_name(value: str | None) -> str:
-    candidate = _clean_text(value) or DEFAULT_BRANCH_TIMEZONE
-    try:
-        ZoneInfo(candidate)
-    except ZoneInfoNotFoundError:
-        logger.warning("Booking invalid branch timezone: timezone=%s", candidate)
-        return DEFAULT_BRANCH_TIMEZONE
-    return candidate
+    return normalize_branch_timezone(value, flow="booking", operation="_timezone_name")
 
 
 def _zoneinfo(timezone_name: str) -> ZoneInfo:
-    try:
-        return ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo(DEFAULT_BRANCH_TIMEZONE)
+    return zoneinfo_or_default(timezone_name, flow="booking", operation="_zoneinfo")
 
 
 def _safe_raw_slot(raw: dict[str, Any] | None) -> dict[str, Any] | None:

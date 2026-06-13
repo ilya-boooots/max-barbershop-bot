@@ -9,7 +9,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_BRANCH_TIMEZONE = "Europe/Moscow"
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE
 
 logger = logging.getLogger(__name__)
 _UNSET = object()

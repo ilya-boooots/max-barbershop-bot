@@ -13,7 +13,8 @@ from max_barbershop_bot.integrations.yclients.exceptions import (
 )
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials
-from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettings
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE
 
 logger = logging.getLogger(__name__)
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE
+
 
 def init_database(database_path: str) -> None:
     """Create the SQLite database and apply idempotent baseline migrations."""
@@ -33,7 +35,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     """Apply simple idempotent migrations for the initial database schema."""
 
     connection.executescript(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -49,7 +51,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             role TEXT NOT NULL DEFAULT 'user',
             yclients_client_id TEXT,
             notifications_enabled INTEGER NOT NULL DEFAULT 1,
-            notification_settings_json TEXT NOT NULL DEFAULT '{}',
+            notification_settings_json TEXT NOT NULL DEFAULT '{{}}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(platform, platform_user_id)
@@ -71,7 +73,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             company_id TEXT,
             partner_token TEXT,
             user_token TEXT,
-            branch_timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
+            branch_timezone TEXT NOT NULL DEFAULT '{DEFAULT_BRANCH_TIMEZONE}',
             branch_title TEXT,
             contacts_override_json TEXT,
             is_active INTEGER NOT NULL DEFAULT 1,
@@ -270,7 +272,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         connection,
         "yclients_settings",
         "branch_timezone",
-        "TEXT NOT NULL DEFAULT 'Europe/Moscow'",
+        f"TEXT NOT NULL DEFAULT '{DEFAULT_BRANCH_TIMEZONE}'",
     )
     _ensure_column(connection, "yclients_settings", "branch_title", "TEXT")
     _ensure_column(connection, "yclients_settings", "contacts_override_json", "TEXT")

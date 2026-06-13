@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from max_barbershop_bot.integrations.yclients.exceptions import (
     YClientsAuthError,
@@ -20,8 +20,9 @@ from max_barbershop_bot.integrations.yclients.exceptions import (
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import normalize_phone, safe_str
 from max_barbershop_bot.repositories.users import User
-from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactsService
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -1056,19 +1057,11 @@ def _is_safe_status(status: str) -> bool:
 
 
 def _timezone_name(value: str | None) -> str:
-    raw = _clean_text(value) or DEFAULT_BRANCH_TIMEZONE
-    try:
-        ZoneInfo(raw)
-    except ZoneInfoNotFoundError:
-        return DEFAULT_BRANCH_TIMEZONE
-    return raw
+    return normalize_branch_timezone(value, flow="my_bookings", operation="_timezone_name")
 
 
 def _zoneinfo(timezone_name: str) -> ZoneInfo:
-    try:
-        return ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo(DEFAULT_BRANCH_TIMEZONE)
+    return zoneinfo_or_default(timezone_name, flow="my_bookings", operation="_zoneinfo")
 
 
 def _clean_text(value: Any) -> str:

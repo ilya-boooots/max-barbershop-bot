@@ -12,8 +12,9 @@ from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.endpoints import list_bookings_by_date_range
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
-from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettings, YClientsSettingsRepository
 from max_barbershop_bot.services.broadcasts import BroadcastRecipient
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
