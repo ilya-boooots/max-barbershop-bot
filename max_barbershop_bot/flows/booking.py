@@ -77,7 +77,6 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_CREATE_ERROR_TEXT,
     BOOKING_CREATE_IN_PROGRESS_TEXT,
     BOOKING_EMPTY_TEXT,
-    BOOKING_HUB_TEXT,
     BOOKING_MASTER_TEXT,
     BOOKING_CONTACT_PHONE_MISSING_TEXT,
     BOOKING_MASTERS_EMPTY_TEXT,
@@ -93,7 +92,11 @@ from max_barbershop_bot.ui.texts import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_CALLBACK_ITEMS = 20
+BOOKING_PAGE_SIZE = 8
+DATE_PAGE_SIZE = 10
+TIME_PAGE_SIZE = 15
+_CALLBACK_PAYLOAD_SLOTS = 20
+
 _CATALOG_STATE_KEY = "booking_catalog"
 _CATEGORY_MAP_STATE_KEY = "booking_category_payloads"
 _SERVICE_MAP_STATE_KEY = "booking_service_payloads"
@@ -153,7 +156,7 @@ def register_booking_routes(router: Router) -> None:
     router.on_callback(BOOKING_SERVICE_NEXT_PAYLOAD, handle_booking_service_page)
     router.on_callback(BOOKING_MASTER_PREV_PAYLOAD, handle_booking_master_page)
     router.on_callback(BOOKING_MASTER_NEXT_PAYLOAD, handle_booking_master_page)
-    for index in range(_MAX_CALLBACK_ITEMS):
+    for index in range(_CALLBACK_PAYLOAD_SLOTS):
         router.on_callback(f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}{index}", handle_booking_category)
         router.on_callback(f"{BOOKING_SERVICE_PAYLOAD_PREFIX}{index}", handle_booking_service)
         router.on_callback(f"{BOOKING_MASTER_PAYLOAD_PREFIX}{index}", handle_booking_master)
@@ -699,7 +702,28 @@ async def _show_booking_hub(context: RouterContext, *, push_current: bool = True
         _push_current_screen(context, state.BOOKING_HUB_SCREEN)
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_HUB_SCREEN)
-    await context.send_text(BOOKING_HUB_TEXT, keyboard=booking_hub_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+    await context.send_text(await _booking_hub_text(), keyboard=booking_hub_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+
+
+async def _booking_hub_text() -> str:
+    """Build the Telegram-reference booking hub text with safe MAX fallbacks."""
+
+    branch_title = "барбершоп"
+    address: str | None = None
+    try:
+        contacts = await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
+    except Exception as exc:  # noqa: BLE001 - contacts must not block booking entry.
+        logger.warning("Booking hub contacts lookup failed safely: error_class=%s", type(exc).__name__)
+    else:
+        branch_title = contacts.title or branch_title
+        if contacts.address and contacts.address != "—":
+            address = contacts.address
+
+    lines = [f"✂️ Запись в {branch_title}"]
+    if address:
+        lines.append(f"📍 {address}")
+    lines.append("\nВыберите, с чего начать:")
+    return "\n".join(lines)
 
 
 def _clear_booking_state(context: RouterContext) -> None:
@@ -1269,8 +1293,8 @@ async def _show_selected_category_services(context: RouterContext) -> None:
 
 async def _show_categories(context: RouterContext, categories: list, *, page: int = 0, push_current: bool = True) -> None:
     page = _clamp_page(page, len(categories))
-    start = page * _MAX_CALLBACK_ITEMS
-    display_categories = categories[start : start + _MAX_CALLBACK_ITEMS]
+    start = page * BOOKING_PAGE_SIZE
+    display_categories = categories[start : start + BOOKING_PAGE_SIZE]
     category_payloads = {
         f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}{index}": category.yclients_category_id
         for index, category in enumerate(display_categories)
@@ -1291,7 +1315,7 @@ async def _show_categories(context: RouterContext, categories: list, *, page: in
             display_categories,
             page=page,
             has_previous=page > 0,
-            has_next=(page + 1) * _MAX_CALLBACK_ITEMS < len(categories),
+            has_next=(page + 1) * BOOKING_PAGE_SIZE < len(categories),
             back_payload=BOOKING_BACK_PAYLOAD,
         ),
     )
@@ -1306,8 +1330,8 @@ async def _show_services(
     push_current: bool = True,
 ) -> None:
     page = _clamp_page(page, len(services))
-    start = page * _MAX_CALLBACK_ITEMS
-    display_services = services[start : start + _MAX_CALLBACK_ITEMS]
+    start = page * BOOKING_PAGE_SIZE
+    display_services = services[start : start + BOOKING_PAGE_SIZE]
     service_payloads = {
         f"{BOOKING_SERVICE_PAYLOAD_PREFIX}{index}": service.yclients_service_id
         for index, service in enumerate(display_services)
@@ -1334,7 +1358,7 @@ async def _show_services(
             format_service_title,
             page=page,
             has_previous=page > 0,
-            has_next=(page + 1) * _MAX_CALLBACK_ITEMS < len(services),
+            has_next=(page + 1) * BOOKING_PAGE_SIZE < len(services),
             back_payload=BOOKING_BACK_PAYLOAD,
         ),
     )
@@ -1348,8 +1372,8 @@ async def _show_masters(
     push_current: bool = True,
 ) -> None:
     page = _clamp_page(page, len(masters))
-    start = page * _MAX_CALLBACK_ITEMS
-    display_masters = masters[start : start + _MAX_CALLBACK_ITEMS]
+    start = page * BOOKING_PAGE_SIZE
+    display_masters = masters[start : start + BOOKING_PAGE_SIZE]
     master_payloads = {
         f"{BOOKING_MASTER_PAYLOAD_PREFIX}{index}": master.yclients_master_id
         for index, master in enumerate(display_masters)
@@ -1375,7 +1399,7 @@ async def _show_masters(
             format_master_title,
             page=page,
             has_previous=page > 0,
-            has_next=(page + 1) * _MAX_CALLBACK_ITEMS < len(masters),
+            has_next=(page + 1) * BOOKING_PAGE_SIZE < len(masters),
             back_payload=BOOKING_BACK_PAYLOAD,
         ),
     )
@@ -1392,7 +1416,7 @@ async def _show_dates(
 ) -> None:
     date_payloads = {
         f"{BOOKING_DATE_PAYLOAD_PREFIX}{index}": item.isoformat()
-        for index, item in enumerate(dates[:_MAX_CALLBACK_ITEMS])
+        for index, item in enumerate(dates[:DATE_PAGE_SIZE])
     }
     state.set_state_data_value(_user_id(context), _chat_id(context), _DATE_MAP_STATE_KEY, date_payloads)
     if push_current:
@@ -1403,7 +1427,7 @@ async def _show_dates(
     await context.send_text(
         _booking_step_text(context, tail=tail, include_selected_date=include_selected_date),
         keyboard=booking_dates_keyboard(
-            dates[:_MAX_CALLBACK_ITEMS],
+            dates[:DATE_PAGE_SIZE],
             lambda value: format_date_button(value, timezone_name=timezone_name),
             back_payload=BOOKING_BACK_PAYLOAD,
         ),
@@ -1418,7 +1442,7 @@ async def _show_slots(
     push_current: bool = True,
     tail: str = "🕐 Выберите удобное время:",
 ) -> None:
-    display_slots = slots[:_MAX_CALLBACK_ITEMS]
+    display_slots = slots[:TIME_PAGE_SIZE]
     slot_payloads = {
         f"{BOOKING_SLOT_PAYLOAD_PREFIX}{index}": item.time
         for index, item in enumerate(display_slots)
@@ -1440,7 +1464,7 @@ async def _show_slots(
 
 
 def _clamp_page(page: int, item_count: int) -> int:
-    max_page = max((item_count - 1) // _MAX_CALLBACK_ITEMS, 0)
+    max_page = max((item_count - 1) // BOOKING_PAGE_SIZE, 0)
     return max(0, min(page, max_page))
 
 
