@@ -128,6 +128,7 @@ BOOKING_PHONE_USE_REGISTERED_PAYLOAD = "booking:phone:use_registered"
 MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX = "my_bookings:details:"
 MY_BOOKINGS_CANCEL_START_PAYLOAD = "my_bookings:cancel:start"
 MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD = "my_bookings:cancel:confirm"
+MY_BOOKINGS_REPEAT_START_PAYLOAD = "my_bookings:repeat:start"
 MY_BOOKINGS_RESCHEDULE_START_PAYLOAD = "my_bookings:reschedule:start"
 MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD = "my_bookings:reschedule:confirm"
 MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX = "my_bookings:reschedule:date:"
@@ -877,6 +878,7 @@ def my_booking_details_keyboard() -> MaxInlineKeyboard:
         [
             [MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)],
             [MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)],
+            [MaxButton(text="🔁 Повторить запись", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]

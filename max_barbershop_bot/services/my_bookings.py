@@ -51,6 +51,9 @@ MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT = "Перенос уже выполняе
 MY_BOOKING_RESCHEDULE_DATES_TEXT = "🔁 Перенос записи\n\nВыберите новую дату:"
 MY_BOOKING_RESCHEDULE_SLOTS_TEXT = "🔁 Перенос записи\n\nВыберите новое время:"
 MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT = "На эту дату свободного времени нет 🙏\n\nВыберите другой день."
+MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT = "Не получилось подготовить повтор записи 🙏\n\nПожалуйста, попробуйте позже."
+MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT = "Эта услуга сейчас недоступна 🙏\n\nВыберите другую услугу для записи."
+MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT = "Этот мастер сейчас недоступен для повторной записи 🙏\n\nВыберите другого мастера или услугу."
 RESCHEDULE_CREATE_MARKER = "Клиент перенёс запись из MAX бота"
 RESCHEDULE_CANCEL_MARKER_PREFIX = "Запись перенесена из MAX бота"
 
@@ -437,6 +440,30 @@ class MyBookingsService:
             "old_time": old_local.strftime("%H:%M"),
             "old_datetime": old_local.isoformat(),
             "branch_timezone": timezone_name,
+        }
+
+    async def prepare_repeat_context(
+        self,
+        user: User | None,
+        *,
+        yclients_record_id: str,
+        platform_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Load selected YClients record and return service/master for repeat booking."""
+
+        context = await self.prepare_reschedule_context(
+            user,
+            yclients_record_id=yclients_record_id,
+            platform_user_id=platform_user_id,
+        )
+        return {
+            "yclients_record_id": context.get("yclients_record_id"),
+            "service_id": context.get("service_id"),
+            "service_ids": context.get("service_ids"),
+            "staff_id": context.get("staff_id"),
+            "service_name": None,
+            "staff_name": None,
+            "branch_timezone": context.get("branch_timezone"),
         }
 
     async def reschedule_booking_for_user(

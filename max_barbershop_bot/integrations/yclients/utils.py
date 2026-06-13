@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 MAX_BOOKING_COMMENT_MARKER = "Клиент записался из MAX бота"
+MAX_REPEAT_BOOKING_COMMENT_MARKER = "Клиент повторил запись из MAX бота"
 
 
 def safe_str(value: Any) -> str:
