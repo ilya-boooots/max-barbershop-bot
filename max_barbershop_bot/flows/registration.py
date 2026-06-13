@@ -69,21 +69,21 @@ async def start_registration(context: RouterContext) -> None:
 
     user = _find_current_user(platform_user_id)
     if user is not None:
-        if user.first_name:
-            state.set_state_data_value(platform_user_id, chat_id, _NAME_KEY, user.first_name)
         if user.phone:
             state.set_state_data_value(platform_user_id, chat_id, _PHONE_KEY, user.phone)
         if user.birthdate:
             state.set_state_data_value(platform_user_id, chat_id, _BIRTHDATE_KEY, user.birthdate)
+        if user.first_name and (user.phone or user.birthdate):
+            state.set_state_data_value(platform_user_id, chat_id, _NAME_KEY, user.first_name)
 
     if user is not None and is_registered(user):
         await _complete_registration(context, show_final_messages=False)
         return
-    if user is not None and user.first_name and not user.phone:
-        await _show_phone(context)
-        return
     if user is not None and user.first_name and user.phone and not user.birthdate:
         await _show_birthdate(context)
+        return
+    if user is not None and user.first_name and user.birthdate and not user.phone:
+        await _show_phone(context)
         return
     await _show_name_confirm(context)
 
