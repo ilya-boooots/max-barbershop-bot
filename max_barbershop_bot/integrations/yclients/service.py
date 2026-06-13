@@ -40,12 +40,18 @@ from .endpoints import (
     update_client as endpoint_update_client,
 )
 from .exceptions import (
+    YCLIENTS_ERROR_AUTH,
+    YCLIENTS_ERROR_CREDENTIALS,
+    YCLIENTS_ERROR_RATE_LIMIT,
+    YCLIENTS_ERROR_SERVER,
+    YCLIENTS_ERROR_TRANSPORT,
     YClientsAuthError,
     YClientsConfigError,
     YClientsError,
     YClientsRateLimitError,
     YClientsServerError,
     YClientsTransportError,
+    sanitize_yclients_diagnostic,
 )
 from .utils import extract_data_rows, safe_str, truthy_bool
 
@@ -449,7 +455,7 @@ class YClientsServiceLayer:
             return health_result_from_error(exc)
 
     async def _notify_or_log(self, action: str, exc: Exception) -> None:
-        message = f"YClients error during {action}: {type(exc).__name__}: {str(exc)[:200]}"
+        message = sanitize_yclients_diagnostic(f"YClients error during {action}: {type(exc).__name__}: {str(exc)[:200]}")
         logger.warning(message)
         if self._notifier is not None:
             await self._notifier.notify_error(message)
@@ -526,15 +532,15 @@ def health_result_from_error(exc: YClientsError) -> YClientsHealthCheckResult:
     """Map custom YClients exceptions to simple health-check results."""
 
     if isinstance(exc, YClientsAuthError):
-        return YClientsHealthCheckResult(ok=False, status_code=401, short_message="Ошибка токенов доступа")
+        return YClientsHealthCheckResult(ok=False, status_code=401, short_message="Ошибка токенов доступа", error_category=YCLIENTS_ERROR_AUTH)
     if isinstance(exc, YClientsRateLimitError):
-        return YClientsHealthCheckResult(ok=False, status_code=429, short_message="Слишком много запросов к API")
+        return YClientsHealthCheckResult(ok=False, status_code=429, short_message="Слишком много запросов к API", error_category=YCLIENTS_ERROR_RATE_LIMIT)
     if isinstance(exc, YClientsServerError):
-        return YClientsHealthCheckResult(ok=False, status_code=503, short_message="Сервис YClients временно недоступен")
+        return YClientsHealthCheckResult(ok=False, status_code=503, short_message="Сервис YClients временно недоступен", error_category=YCLIENTS_ERROR_SERVER)
     if isinstance(exc, YClientsTransportError):
-        return YClientsHealthCheckResult(ok=False, status_code=None, short_message="Нет соединения с API YClients")
+        return YClientsHealthCheckResult(ok=False, status_code=None, short_message="Нет соединения с API YClients", error_category=YCLIENTS_ERROR_TRANSPORT)
     if isinstance(exc, YClientsConfigError):
-        return YClientsHealthCheckResult(ok=False, status_code=None, short_message="Не заполнены ключи YClients")
+        return YClientsHealthCheckResult(ok=False, status_code=None, short_message="Не заполнены ключи YClients", error_category=YCLIENTS_ERROR_CREDENTIALS)
     return YClientsHealthCheckResult(ok=False, status_code=None, short_message="Ошибка проверки YClients")
 
 

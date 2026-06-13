@@ -90,3 +90,4 @@ class YClientsHealthCheckResult:
     ok: bool
     status_code: int | None
     short_message: str
+    error_category: str | None = None

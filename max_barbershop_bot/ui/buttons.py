@@ -454,8 +454,8 @@ def yclients_settings_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="⚙️ Настроить подключение", payload=YCLIENTS_SETUP_PAYLOAD)],
-            [MaxButton(text="🔍 Проверить подключение", payload=YCLIENTS_CHECK_PAYLOAD)],
+            [MaxButton(text="🧩 Настроить / Изменить", payload=YCLIENTS_SETUP_PAYLOAD)],
+            [MaxButton(text="🔌 Проверить подключение", payload=YCLIENTS_CHECK_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=YCLIENTS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=YCLIENTS_HOME_PAYLOAD)],
         ]

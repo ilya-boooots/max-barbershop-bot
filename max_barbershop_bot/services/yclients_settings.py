@@ -6,7 +6,11 @@ import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.integrations.yclients.dto import YClientsHealthCheckResult
-from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
+from max_barbershop_bot.integrations.yclients.exceptions import (
+    YCLIENTS_ERROR_CREDENTIALS,
+    YCLIENTS_ERROR_TRANSPORT,
+    YClientsError,
+)
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings
@@ -62,7 +66,8 @@ async def check_yclients_connection(settings: YClientsSettings) -> YClientsHealt
         return YClientsHealthCheckResult(
             ok=False,
             status_code=None,
-            short_message="YClients settings are incomplete",
+            short_message="Не заполнены ключи YClients",
+            error_category=YCLIENTS_ERROR_CREDENTIALS,
         )
 
     try:
@@ -80,6 +85,7 @@ async def check_yclients_connection(settings: YClientsSettings) -> YClientsHealt
             ok=False,
             status_code=exc.status_code,
             short_message="YClients connection failed",
+            error_category=exc.error_category,
         )
     except Exception as exc:  # noqa: BLE001 - keep raw technical details away from users.
         logger.warning(
@@ -91,4 +97,5 @@ async def check_yclients_connection(settings: YClientsSettings) -> YClientsHealt
             ok=False,
             status_code=None,
             short_message="YClients connection failed",
+            error_category=YCLIENTS_ERROR_TRANSPORT,
         )

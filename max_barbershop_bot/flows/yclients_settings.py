@@ -11,6 +11,13 @@ from max_barbershop_bot.core.permissions import ROLE_USER, can_view_yclients
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX
+from max_barbershop_bot.integrations.yclients.exceptions import (
+    YCLIENTS_ERROR_AUTH,
+    YCLIENTS_ERROR_CREDENTIALS,
+    YCLIENTS_ERROR_RATE_LIMIT,
+    YCLIENTS_ERROR_SERVER,
+    YCLIENTS_ERROR_TRANSPORT,
+)
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
 from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.services.settings_audit import log_settings_action
@@ -18,6 +25,7 @@ from max_barbershop_bot.services.yclients_context import load_active_yclients_se
 from max_barbershop_bot.services.yclients_settings import (
     check_yclients_connection,
     is_configured,
+    mask_secret,
     normalize_optional_text,
     normalize_required_text,
     normalize_support_timezone,
@@ -36,8 +44,14 @@ from max_barbershop_bot.ui.buttons import (
 )
 from max_barbershop_bot.ui.texts import (
     YCLIENTS_BRANCH_TITLE_TEXT,
+    YCLIENTS_CHECK_AUTH_TEXT,
+    YCLIENTS_CHECK_CREDENTIALS_TEXT,
     YCLIENTS_CHECK_FAILURE_TEXT,
+    YCLIENTS_CHECK_RATE_LIMIT_TEXT,
+    YCLIENTS_CHECK_SERVER_TEXT,
     YCLIENTS_CHECK_SUCCESS_TEXT,
+    YCLIENTS_CHECK_TRANSPORT_TEXT,
+    YCLIENTS_CHECK_UNAVAILABLE_TEXT,
     YCLIENTS_COMPANY_ID_TEXT,
     YCLIENTS_CONFIRM_TEXT,
     YCLIENTS_INVALID_REQUIRED_TEXT,
@@ -104,6 +118,7 @@ async def handle_setup_start(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context, "Настраиваем подключение ⚙️")
+    _log_audit(context, "yclients_settings_started", {"source": "settings_menu"})
     chat_id = _state_chat_id(context)
     state.clear_state_data(context.event.platform_user_id, chat_id)
     _set_screen(context, state.YCLIENTS_SETUP_COMPANY_ID_SCREEN)
@@ -252,6 +267,7 @@ async def handle_save_settings(context: RouterContext) -> None:
         await context.send_text("Не хватает данных подключения 🙏\n\nНачните настройку заново.", keyboard=yclients_settings_keyboard())
         return
 
+    existed_before = _settings_repository().get_active() is not None
     _settings_repository().upsert_active_settings(
         company_id=draft["company_id"],
         partner_token=draft["partner_token"],
@@ -269,14 +285,14 @@ async def handle_save_settings(context: RouterContext) -> None:
     log_settings_action(
         actor_platform_user_id=context.event.platform_user_id,
         actor_role=_actor_role(context),
-        action="yclients_settings_updated",
+        action="yclients_settings_updated" if existed_before else "yclients_settings_saved",
         section="yclients",
         metadata={
-            "company_id_present": bool(draft["company_id"]),
+            "company_id": draft["company_id"],
             "partner_token_present": bool(draft["partner_token"]),
             "user_token_present": bool(draft["user_token"]),
             "branch_timezone": draft["branch_timezone"],
-            "branch_title_present": bool(draft["branch_title"]),
+            "branch_title": draft["branch_title"],
         },
     )
     state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
@@ -295,11 +311,13 @@ async def handle_connection_check(context: RouterContext) -> None:
     await _answer_callback_if_needed(context, "Проверяем подключение 🔍")
     settings = load_active_yclients_settings(_settings_repository(), operation="check_yclients_connection")
     if not is_configured(settings):
-        await context.send_text(YCLIENTS_NOT_CONFIGURED_TEXT, keyboard=yclients_settings_keyboard())
+        _log_health_audit(context, success=False, settings=settings, category=YCLIENTS_ERROR_CREDENTIALS)
+        await context.send_text(YCLIENTS_CHECK_FAILURE_TEXT.format(reason=YCLIENTS_CHECK_CREDENTIALS_TEXT), keyboard=yclients_settings_keyboard())
         return
 
     result = await check_yclients_connection(settings)
     if result.ok:
+        _log_health_audit(context, success=True, settings=settings, category=None)
         await context.send_text(
             YCLIENTS_CHECK_SUCCESS_TEXT.format(branch_title_or_company_id=_branch_title_or_company_id(settings)),
             keyboard=yclients_settings_keyboard(),
@@ -312,7 +330,12 @@ async def handle_connection_check(context: RouterContext) -> None:
         result.short_message,
         result.status_code,
     )
-    await context.send_text(YCLIENTS_CHECK_FAILURE_TEXT, keyboard=yclients_settings_keyboard())
+    category = result.error_category or _category_from_status(result.status_code)
+    _log_health_audit(context, success=False, settings=settings, category=category, status_code=result.status_code)
+    await context.send_text(
+        YCLIENTS_CHECK_FAILURE_TEXT.format(reason=_friendly_check_reason(category)),
+        keyboard=yclients_settings_keyboard(),
+    )
 
 
 async def handle_yclients_back(context: RouterContext) -> None:
@@ -383,7 +406,9 @@ async def _show_confirm(context: RouterContext) -> None:
     _set_screen(context, state.YCLIENTS_SETUP_CONFIRM_SCREEN)
     await context.send_text(
         YCLIENTS_CONFIRM_TEXT.format(
-            company_id=draft["company_id"],
+            company_id=mask_secret(draft["company_id"]),
+            partner_token=mask_secret(draft["partner_token"]),
+            user_token=mask_secret(draft["user_token"]),
             branch_title=draft["branch_title"] or "—",
             branch_timezone=draft["branch_timezone"],
         ),
@@ -426,9 +451,68 @@ def _settings_status_text(settings: YClientsSettings | None) -> str:
         "🧩 YClients\n\n"
         "Статус подключения: настроено ✅\n"
         f"Филиал: {_branch_title_or_company_id(settings)}\n"
-        f"Company ID: {settings.company_id}\n"
-        f"Часовой пояс: {settings.branch_timezone or DEFAULT_BRANCH_TIMEZONE}\n\n"
+        f"🏢 Company ID: {mask_secret(settings.company_id)}\n"
+        f"🔐 Partner token: {mask_secret(settings.partner_token)}\n"
+        f"👤 User token: {mask_secret(settings.user_token)}\n"
+        f"🕒 Часовой пояс: {settings.branch_timezone or DEFAULT_BRANCH_TIMEZONE}\n\n"
         "Токены сохранены и скрыты 🔐"
+    )
+
+
+def _category_from_status(status_code: int | None) -> str:
+    if status_code in {401, 403}:
+        return YCLIENTS_ERROR_AUTH
+    if status_code == 429:
+        return YCLIENTS_ERROR_RATE_LIMIT
+    if status_code and status_code >= 500:
+        return YCLIENTS_ERROR_SERVER
+    return YCLIENTS_ERROR_TRANSPORT
+
+
+def _friendly_check_reason(category: str | None) -> str:
+    if category == YCLIENTS_ERROR_CREDENTIALS:
+        return YCLIENTS_CHECK_CREDENTIALS_TEXT
+    if category == YCLIENTS_ERROR_AUTH:
+        return YCLIENTS_CHECK_AUTH_TEXT
+    if category == YCLIENTS_ERROR_RATE_LIMIT:
+        return YCLIENTS_CHECK_RATE_LIMIT_TEXT
+    if category == YCLIENTS_ERROR_SERVER:
+        return YCLIENTS_CHECK_SERVER_TEXT
+    if category == YCLIENTS_ERROR_TRANSPORT:
+        return YCLIENTS_CHECK_TRANSPORT_TEXT
+    return YCLIENTS_CHECK_UNAVAILABLE_TEXT
+
+
+def _log_audit(context: RouterContext, action: str, metadata: dict[str, object] | None = None) -> None:
+    log_settings_action(
+        actor_platform_user_id=context.event.platform_user_id,
+        actor_role=_actor_role(context),
+        action=action,
+        section="yclients",
+        metadata=metadata,
+    )
+
+
+def _log_health_audit(
+    context: RouterContext,
+    *,
+    success: bool,
+    settings: YClientsSettings | None,
+    category: str | None,
+    status_code: int | None = None,
+) -> None:
+    _log_audit(
+        context,
+        "yclients_settings_health_check_success" if success else "yclients_settings_health_check_failed",
+        {
+            "company_id": settings.company_id if settings else None,
+            "branch_title": settings.branch_title if settings else None,
+            "branch_timezone": settings.branch_timezone if settings else None,
+            "partner_token_present": bool(settings and settings.partner_token),
+            "user_token_present": bool(settings and settings.user_token),
+            "error_category": category,
+            "status_code": status_code,
+        },
     )
 
 
