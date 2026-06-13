@@ -30,8 +30,8 @@ from max_barbershop_bot.services.yclients_context import (
 
 logger = logging.getLogger(__name__)
 
-BOOKING_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
-BOOKING_YCLIENTS_ERROR_TEXT = "Не удалось загрузить услуги 🙏\n\nПожалуйста, попробуйте позже."
+BOOKING_NOT_CONFIGURED_TEXT = "❌ Интеграция YClients не настроена. Откройте главное меню и проверьте настройки ⚙️"
+BOOKING_YCLIENTS_ERROR_TEXT = "⚠️ Техническая ошибка. Попробуйте ещё раз через минуту."
 BOOKING_MASTERS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить мастеров 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_SLOTS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
