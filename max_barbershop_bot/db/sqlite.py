@@ -79,6 +79,15 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS support_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            support_username TEXT,
+            support_description TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS platform_attribution (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -199,6 +208,8 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON staff_roles(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_platform_attribution_platform_user_id
             ON platform_attribution(platform, platform_user_id);
+        CREATE INDEX IF NOT EXISTS idx_support_settings_active
+            ON support_settings(is_active, id);
         CREATE INDEX IF NOT EXISTS idx_platform_attribution_yclients_record_id
             ON platform_attribution(yclients_record_id);
         CREATE INDEX IF NOT EXISTS idx_state_storage_state_key
@@ -266,6 +277,11 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "yclients_settings", "is_active", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(connection, "yclients_settings", "created_at", "TEXT")
     _ensure_column(connection, "yclients_settings", "updated_at", "TEXT")
+    _ensure_column(connection, "support_settings", "support_username", "TEXT")
+    _ensure_column(connection, "support_settings", "support_description", "TEXT")
+    _ensure_column(connection, "support_settings", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(connection, "support_settings", "created_at", "TEXT")
+    _ensure_column(connection, "support_settings", "updated_at", "TEXT")
     _ensure_column(connection, "settings_audit_log", "platform", "TEXT NOT NULL DEFAULT 'max'")
     _ensure_column(connection, "settings_audit_log", "actor_platform_user_id", "TEXT")
     _ensure_column(connection, "settings_audit_log", "actor_role", "TEXT")
