@@ -18,9 +18,10 @@ from max_barbershop_bot.integrations.yclients.exceptions import (
     YClientsValidationError,
 )
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
-from max_barbershop_bot.integrations.yclients.utils import safe_str
+from max_barbershop_bot.integrations.yclients.utils import normalize_phone, safe_str
 from max_barbershop_bot.repositories.users import User
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettingsRepository
+from max_barbershop_bot.services.contacts import ContactsService
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -33,7 +34,7 @@ MY_BOOKINGS_NO_PROFILE_TEXT = "Не получилось найти ваши д�
 MY_BOOKINGS_LOAD_ERROR_TEXT = "Не удалось загрузить ваши записи 🙏\n\nПожалуйста, попробуйте позже."
 MY_BOOKINGS_EMPTY_TEXT = "📭 У вас пока нет активных записей."
 MY_BOOKINGS_TITLE_TEXT = "📅 Ваши записи"
-MY_BOOKING_NOT_FOUND_TEXT = "Запись не найдена"
+MY_BOOKING_NOT_FOUND_TEXT = "Эта запись уже неактуальна 🙏\n\nОткройте список записей заново."
 MY_BOOKING_CANCEL_IN_PROGRESS_TEXT = "Отмена уже выполняется, подождите немного ⏳"
 MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT = "Эту запись нельзя отменить через бота 🙏\n\nПожалуйста, напишите администратору."
 MY_BOOKING_CANCEL_ALREADY_TEXT = "Эта запись уже отменена."
@@ -114,6 +115,10 @@ class MyBookingItem:
     master_name: str | None
     status: str | None
     raw_status: str | None = None
+    duration_minutes: int | None = None
+    price: str | None = None
+    address: str | None = None
+    phone: str | None = None
     raw: dict[str, Any] | None = None
 
 
@@ -185,6 +190,8 @@ class MyBookingsService:
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                if not yclients_client_id and phone:
+                    yclients_client_id = await _resolve_client_id_by_phone(yclients, settings.company_id, phone)
                 payload = await yclients.get_future_records(
                     company_id=settings.company_id,
                     yclients_client_id=yclients_client_id,
@@ -216,7 +223,11 @@ class MyBookingsService:
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
 
-        bookings = [_booking_from_payload(item, timezone_name=timezone_name) for item in _extract_record_rows(payload)]
+        contacts = await ContactsService(self._settings_repository).get_contacts()
+        bookings = [
+            _booking_from_payload(item, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone)
+            for item in _extract_record_rows(payload)
+        ]
         future = [item for item in bookings if item is not None and is_future_booking(item, timezone_name=timezone_name, now=now)]
         future = sort_bookings_by_datetime(future, timezone_name=timezone_name)
         logger.info(
@@ -611,7 +622,11 @@ def sort_bookings_by_datetime(
 ) -> list[dict[str, Any]] | list[MyBookingItem]:
     """Sort records by booking datetime in the branch timezone."""
 
-    return sorted(items, key=lambda item: parse_booking_datetime(item, timezone_name=timezone_name) or datetime.max.replace(tzinfo=_zoneinfo(timezone_name)))
+    return sorted(
+        items,
+        key=lambda item: parse_booking_datetime(item, timezone_name=timezone_name)
+        or datetime.max.replace(tzinfo=_zoneinfo(timezone_name)),
+    )
 
 
 def format_booking_item(item: MyBookingItem, *, index: int, timezone_name: str) -> str:
@@ -624,6 +639,10 @@ def format_booking_item(item: MyBookingItem, *, index: int, timezone_name: str) 
             f"   👤 Мастер: {item.master_name or 'Любой мастер'}",
             f"   📅 Дата: {booking_datetime.strftime('%d.%m.%Y')}",
             f"   🕒 Время: {booking_datetime.strftime('%H:%M')}",
+            f"   ⏳ Длительность: {str(item.duration_minutes) + ' мин' if item.duration_minutes else '—'}",
+            f"   💰 Цена: {item.price or '—'}",
+            f"   📍 Адрес: {item.address or '—'}",
+            f"   📞 Контакты: {item.phone or '—'}",
             f"   🧾 Статус: {format_booking_status(item.raw_status or item.status)}",
         ]
     )
@@ -650,6 +669,10 @@ def format_booking_details_text(booking: MyBookingItem | dict[str, Any], *, time
             f"👤 Мастер: {display['master_name'] or 'Любой мастер'}",
             f"📅 Дата: {display['date']}",
             f"🕒 Время: {display['time']}",
+            f"⏳ Длительность: {display['duration_minutes'] + ' мин' if display['duration_minutes'] else '—'}",
+            f"💰 Цена: {display['price'] or '—'}",
+            f"📍 Адрес: {display['address'] or '—'}",
+            f"📞 Контакты: {display['phone'] or '—'}",
             f"🧾 Статус: {display['status']}",
         ]
     )
@@ -697,6 +720,10 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
             "date": booking_datetime.strftime("%d.%m.%Y"),
             "time": booking_datetime.strftime("%H:%M"),
             "status": format_booking_status(booking.raw_status or booking.status),
+            "duration_minutes": str(booking.duration_minutes) if booking.duration_minutes else None,
+            "price": booking.price,
+            "address": booking.address,
+            "phone": booking.phone,
         }
 
     booking_date = _clean_text(booking.get("date"))
@@ -713,6 +740,10 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
         "date": booking_date or "—",
         "time": booking_time or "—",
         "status": format_booking_status(booking.get("status") or booking.get("raw_status")),
+        "duration_minutes": _clean_text(booking.get("duration_minutes")) or None,
+        "price": _clean_text(booking.get("price")) or None,
+        "address": _clean_text(booking.get("address")) or None,
+        "phone": _clean_text(booking.get("phone")) or None,
     }
 
 
@@ -770,7 +801,75 @@ def format_display_date(value: str | date, *, timezone_name: str = DEFAULT_BRANC
         return _clean_text(value) or "—"
     return parsed.strftime("%d.%m.%Y")
 
-def _booking_from_payload(item: dict[str, Any], *, timezone_name: str) -> MyBookingItem | None:
+
+async def _resolve_client_id_by_phone(yclients: YClientsServiceLayer, company_id: str, phone: str) -> str | None:
+    """Resolve one YClients client id by normalized phone, following Telegram's safe single-match rule."""
+
+    normalized = normalize_phone(phone)
+    keys = {normalized, normalized.lstrip("+")}
+    if normalized.startswith("+7") and len(normalized) == 12:
+        keys.add("8" + normalized[2:])
+    candidates: dict[str, Any] = {}
+    for key in sorted(item for item in keys if item):
+        for card in await yclients.find_client(company_id=company_id, query=key, by_phone=True, page=1, count=50):
+            if card.id:
+                candidates[card.id] = card
+    matches = []
+    expected = {normalize_phone(key).lstrip("+") for key in keys if key}
+    for client_id, card in candidates.items():
+        candidate_phone = normalize_phone(card.phone or "").lstrip("+")
+        if candidate_phone and candidate_phone in expected:
+            matches.append(client_id)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _format_price(value: Any) -> str | None:
+    raw = _clean_text(value)
+    if not raw:
+        return None
+    cleaned = raw.replace("₽", "").replace(" ", "").replace(",", ".")
+    try:
+        number = float(cleaned)
+    except ValueError:
+        return raw if "₽" in raw else f"{raw} ₽"
+    return f"{int(number)} ₽" if number.is_integer() else f"{number:.2f} ₽".replace(".", ",")
+
+
+def _extract_price(item: dict[str, Any]) -> str | None:
+    for key in ("final_price", "total_price", "amount", "sum", "price", "cost", "price_min"):
+        price = _format_price(item.get(key))
+        if price:
+            return price
+    services = item.get("services")
+    if isinstance(services, list):
+        total = 0.0
+        first_text = None
+        for service in services:
+            if not isinstance(service, dict):
+                continue
+            for key in ("discount_price", "price", "cost", "price_min"):
+                text = _format_price(service.get(key))
+                if text and first_text is None:
+                    first_text = text
+                raw = _clean_text(service.get(key)).replace(",", ".")
+                try:
+                    if raw:
+                        total += float(raw)
+                        break
+                except ValueError:
+                    continue
+        if total:
+            return _format_price(total)
+        return first_text
+    return None
+
+def _booking_from_payload(
+    item: dict[str, Any],
+    *,
+    timezone_name: str,
+    address: str | None = None,
+    phone: str | None = None,
+) -> MyBookingItem | None:
     record_id = _clean_text(item.get("record_id") or item.get("id") or item.get("booking_id") or item.get("visit_id"))
     booking_datetime = parse_booking_datetime(item, timezone_name=timezone_name)
     if not record_id or booking_datetime is None:
@@ -783,6 +882,10 @@ def _booking_from_payload(item: dict[str, Any], *, timezone_name: str) -> MyBook
         master_name=_extract_master_name(item),
         status=format_booking_status(raw_status),
         raw_status=raw_status,
+        duration_minutes=_extract_seance_length(item),
+        price=_extract_price(item),
+        address=address,
+        phone=phone,
         raw=item,
     )
 

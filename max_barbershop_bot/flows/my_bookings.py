@@ -115,7 +115,7 @@ async def handle_my_booking_details(context: RouterContext) -> None:
     await context.answer_callback("Открываем запись 📋")
     booking = _booking_by_payload(context)
     if booking is None:
-        await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
+        await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_booking_cancel_result_keyboard())
         return
 
     platform_user_id = _user_id(context)
@@ -587,9 +587,15 @@ def _log_local_cancellation(*, platform_user_id: str | None, yclients_record_id:
 
 def _current_user(context: RouterContext):
     platform_user_id = _user_id(context)
-    if not platform_user_id:
-        return None
-    return UsersRepository(_database_path()).find_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+    repository = UsersRepository(_database_path())
+    if platform_user_id:
+        user = repository.find_by_identifier(platform_user_id, platform=PLATFORM_MAX)
+        if user is not None:
+            return user
+    chat_id = _chat_id(context)
+    if chat_id:
+        return repository.find_by_chat_id(chat_id)
+    return None
 
 
 def _user_id(context: RouterContext) -> str | None:
