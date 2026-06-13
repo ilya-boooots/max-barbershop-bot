@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from urllib.parse import quote
 from typing import Any
 
 from max_barbershop_bot.integrations.yclients.endpoints import get_company
@@ -18,7 +19,7 @@ from max_barbershop_bot.services.yclients_context import (
 
 logger = logging.getLogger(__name__)
 
-CONTACTS_FALLBACK_TEXT = "Контакты пока не настроены 🙏\n\nПожалуйста, напишите администратору."
+PLACEHOLDER = "—"
 
 _USEFUL_OVERRIDE_FIELDS = frozenset(
     {
@@ -195,50 +196,40 @@ def fallback_contact_info() -> ContactInfo:
 
 
 def format_contacts_text(contact_info: ContactInfo) -> str:
-    """Format contacts in the friendly Russian MAX/Telegram-reference style."""
+    """Format contacts exactly like the Telegram contacts screen where possible."""
 
-    if contact_info.source == "fallback" or not _has_display_fields(contact_info):
-        return CONTACTS_FALLBACK_TEXT
+    return (
+        "📍 Контакты Барбершоп\n\n"
+        f"🏠 Адрес: {_display_value(contact_info.address)}\n"
+        f"📞 Телефон: {_display_value(contact_info.phone)}\n"
+        f"⏰ Режим работы: {_display_value(contact_info.schedule)}"
+    )
 
-    lines = ["📍 Контакты"]
-    if contact_info.title:
-        lines.extend(["", f"💈 {contact_info.title}"])
-    else:
-        lines.append("")
 
-    field_lines = []
-    if contact_info.address:
-        field_lines.append(f"🏠 Адрес: {contact_info.address}")
-    if contact_info.phone:
-        field_lines.append(f"☎️ Телефон: {contact_info.phone}")
-    if contact_info.schedule:
-        field_lines.append(f"🕒 График: {contact_info.schedule}")
-    if contact_info.website:
-        field_lines.append(f"🌐 Сайт: {contact_info.website}")
-    if contact_info.map_url:
-        field_lines.append(f"🗺 Как добраться: {contact_info.map_url}")
-    if contact_info.telegram:
-        field_lines.append(f"💬 Telegram: {contact_info.telegram}")
-    if contact_info.instagram:
-        field_lines.append(f"📸 Instagram: {contact_info.instagram}")
+def build_route_links(contact_info: ContactInfo) -> dict[str, str]:
+    """Build Telegram-reference map links from the resolved address only."""
 
-    lines.extend(field_lines)
-    return "\n".join(lines)
+    address = _clean_value(contact_info.address)
+    if not address or address == PLACEHOLDER:
+        return {}
+
+    encoded_address = quote(address)
+    return {
+        "Яндекс Карты": f"https://yandex.ru/maps/?rtext=~{encoded_address}&rtt=auto",
+        "2GIS": f"https://2gis.ru/search/{encoded_address}",
+        "Google Maps": (
+            "https://www.google.com/maps/dir/?api=1"
+            f"&destination={encoded_address}&travelmode=driving"
+        ),
+    }
 
 
 def _has_display_fields(contact_info: ContactInfo) -> bool:
-    return any(
-        (
-            contact_info.title,
-            contact_info.address,
-            contact_info.phone,
-            contact_info.schedule,
-            contact_info.website,
-            contact_info.map_url,
-            contact_info.telegram,
-            contact_info.instagram,
-        )
-    )
+    return any((contact_info.address, contact_info.phone, contact_info.schedule))
+
+
+def _display_value(value: str | None) -> str:
+    return _clean_value(value) or PLACEHOLDER
 
 
 def _extract_company_payload(payload: dict[str, Any] | list[Any]) -> dict[str, Any]:
