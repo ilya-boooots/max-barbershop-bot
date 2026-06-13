@@ -145,6 +145,8 @@ REGISTRATION_OPEN_PERSONAL_PAYLOAD = "registration:policy:open:personal"
 REGISTRATION_TOGGLE_PRIVACY_PAYLOAD = "registration:policy:toggle:privacy"
 REGISTRATION_TOGGLE_PERSONAL_PAYLOAD = "registration:policy:toggle:personal"
 REGISTRATION_CONTINUE_PAYLOAD = "registration:policy:continue"
+REGISTRATION_NAME_YES_PAYLOAD = "registration:name:yes"
+REGISTRATION_NAME_NO_PAYLOAD = "registration:name:no"
 REGISTRATION_BACK_PAYLOAD = "registration:nav:back"
 REGISTRATION_HOME_PAYLOAD = "registration:nav:home"
 
@@ -989,16 +991,25 @@ def registration_consent_keyboard(*, privacy_accepted: bool = False, personal_ac
     return MaxInlineKeyboard.from_rows(rows)
 
 
+def registration_name_confirmation_keyboard() -> MaxInlineKeyboard:
+    """Build Telegram-style name confirmation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Да", payload=REGISTRATION_NAME_YES_PAYLOAD)],
+            [MaxButton(text="❌ Нет", payload=REGISTRATION_NAME_NO_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=REGISTRATION_BACK_PAYLOAD)],
+        ]
+    )
+
+
 def registration_phone_keyboard() -> MaxInlineKeyboard:
     """Build phone step buttons with contact request and safe navigation."""
 
     return MaxInlineKeyboard.from_rows(
         [
             [MaxButton(text="📞 Поделиться контактом", type="request_contact")],
-            [
-                MaxButton(text="⬅️ Назад", payload=REGISTRATION_BACK_PAYLOAD),
-                MaxButton(text="🏠 Главное меню", payload=REGISTRATION_HOME_PAYLOAD),
-            ],
+            [MaxButton(text="⬅️ Назад", payload=REGISTRATION_BACK_PAYLOAD)],
         ]
     )
 

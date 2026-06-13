@@ -11,12 +11,14 @@ from max_barbershop_bot.ui.buttons import (
     staff_menu_keyboard,
     navigation_keyboard,
     registration_consent_keyboard,
+    registration_name_confirmation_keyboard,
     registration_navigation_keyboard,
     registration_phone_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
     MAIN_MENU_TEXT,
     REGISTRATION_BIRTHDATE_TEXT,
+    REGISTRATION_NAME_CONFIRM_TEXT,
     REGISTRATION_NAME_TEXT,
     REGISTRATION_PERSONAL_DATA_POLICY_TEXT,
     REGISTRATION_PHONE_TEXT,
@@ -86,6 +88,15 @@ def registration_personal_data_policy_screen() -> Screen:
     """Build the personal data policy screen."""
 
     return Screen(text=REGISTRATION_PERSONAL_DATA_POLICY_TEXT, keyboard=registration_navigation_keyboard())
+
+
+def registration_name_confirm_screen(name: str | None = None) -> Screen:
+    """Build Telegram-style suggested name confirmation screen."""
+
+    return Screen(
+        text=REGISTRATION_NAME_CONFIRM_TEXT.format(name=name or "Пользователь"),
+        keyboard=registration_name_confirmation_keyboard(),
+    )
 
 
 def registration_phone_screen() -> Screen:
