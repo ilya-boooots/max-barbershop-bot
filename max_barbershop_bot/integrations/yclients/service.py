@@ -36,6 +36,7 @@ from .endpoints import (
     list_user_bookings as endpoint_list_user_bookings,
     reschedule_booking as endpoint_reschedule_booking,
     search_clients as endpoint_search_clients,
+    update_booking_comment as endpoint_update_booking_comment,
     update_client as endpoint_update_client,
 )
 from .exceptions import (
@@ -386,18 +387,54 @@ class YClientsServiceLayer:
         *,
         yclients_record_id: str,
         company_id: str | int | None = None,
+        cancellation_marker: str | None = None,
     ) -> YClientsCancelBookingResult:
         """Cancel a YClients record by id."""
 
         try:
+            resolved_company_id = self.require_company_id(company_id)
+            if cancellation_marker:
+                await self._append_cancellation_marker(
+                    company_id=resolved_company_id,
+                    yclients_record_id=yclients_record_id,
+                    cancellation_marker=cancellation_marker,
+                )
             return await endpoint_cancel_booking(
                 self._client,
-                company_id=self.require_company_id(company_id),
+                company_id=resolved_company_id,
                 record_id=yclients_record_id,
             )
         except YClientsError as exc:
             await self._notify_or_log("cancel_booking", exc)
             raise
+
+    async def _append_cancellation_marker(
+        self,
+        *,
+        company_id: str,
+        yclients_record_id: str,
+        cancellation_marker: str,
+    ) -> None:
+        record_payload = await endpoint_get_booking_details(
+            self._client,
+            company_id=company_id,
+            record_id=yclients_record_id,
+        )
+        record = record_payload.get("data") if isinstance(record_payload, dict) else None
+        if isinstance(record, list):
+            record = record[0] if record else {}
+        if not isinstance(record, dict):
+            record = {}
+        existing_comment = str(record.get("comment") or "").strip()
+        if cancellation_marker in existing_comment:
+            return
+        comment = f"{existing_comment}\n{cancellation_marker}" if existing_comment else cancellation_marker
+        await endpoint_update_booking_comment(
+            self._client,
+            company_id=company_id,
+            record_id=yclients_record_id,
+            comment=comment,
+        )
 
     async def health_check(self, *, company_id: str | int | None = None) -> YClientsHealthCheckResult:
         """Run a safe read-only YClients health check."""

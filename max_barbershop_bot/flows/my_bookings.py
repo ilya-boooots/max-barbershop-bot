@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from os import getenv
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
@@ -72,7 +74,8 @@ logger = logging.getLogger(__name__)
 _BOOKINGS_STATE_KEY = "my_bookings_items"
 _BOOKINGS_TIMEZONE_STATE_KEY = "my_bookings_branch_timezone"
 _SELECTED_BOOKING_STATE_KEY = "my_bookings_selected_booking"
-_CANCEL_IN_PROGRESS_STATE_KEY = "booking_cancel_in_progress"
+_CANCEL_IN_PROGRESS_STATE_KEY = "my_bookings_cancel_in_progress"
+_CANCEL_COMPLETED_STATE_KEY = "my_bookings_cancel_completed_record_ids"
 _RESCHEDULE_CONTEXT_STATE_KEY = "my_booking_reschedule_context"
 _RESCHEDULE_DATES_STATE_KEY = "my_booking_reschedule_dates"
 _RESCHEDULE_SLOTS_STATE_KEY = "my_booking_reschedule_slots"
@@ -82,7 +85,7 @@ _RESCHEDULE_IN_PROGRESS_STATE_KEY = "booking_reschedule_in_progress"
 _MAX_BOOKING_BUTTONS = 20
 _MAX_RESCHEDULE_DATES = 14
 _MAX_RESCHEDULE_SLOTS = 30
-_CANCELLATION_MARKER = "Запись отменена из MAX бота"
+_CANCELLATION_MARKER_PREFIX = "Запись отменена из MAX бота"
 
 
 def register_my_bookings_routes(router: Router) -> None:
@@ -153,22 +156,45 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
         return
 
-    if state.get_state_data_value(platform_user_id, chat_id, _CANCEL_IN_PROGRESS_STATE_KEY) is True:
-        await context.answer_callback(MY_BOOKING_CANCEL_IN_PROGRESS_TEXT)
-        return
-
     record_id = _booking_record_id(booking)
     if not record_id:
         await context.answer_callback(MY_BOOKING_NOT_FOUND_TEXT)
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
         return
 
-    state.set_state_data_value(platform_user_id, chat_id, _CANCEL_IN_PROGRESS_STATE_KEY, True)
+    if _cancel_completed(context, record_id):
+        logger.info(
+            "MAX booking cancel diagnostic: platform_user_id_present=%s yclients_record_id_present=%s cancel_already_completed=%s",
+            bool(platform_user_id),
+            True,
+            True,
+        )
+        await context.answer_callback(MY_BOOKING_NOT_FOUND_TEXT)
+        await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_booking_cancel_result_keyboard())
+        return
+
+    if _cancel_in_progress(context, record_id):
+        logger.info(
+            "MAX booking cancel diagnostic: platform_user_id_present=%s yclients_record_id_present=%s cancel_in_progress=%s",
+            bool(platform_user_id),
+            True,
+            True,
+        )
+        await context.answer_callback(MY_BOOKING_CANCEL_IN_PROGRESS_TEXT)
+        return
+
+    _set_cancel_in_progress(context, record_id)
     await context.answer_callback("Отменяем запись ⏳")
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
     user = _current_user(context)
+    marker = _build_cancellation_marker(_timezone_from_state(context))
     try:
-        await service.cancel_booking_for_user(user, yclients_record_id=record_id, platform_user_id=platform_user_id)
+        await service.cancel_booking_for_user(
+            user,
+            yclients_record_id=record_id,
+            platform_user_id=platform_user_id,
+            cancellation_marker=marker,
+        )
     except (MyBookingsProfileMissingError, MyBookingCancellationError) as exc:
         logger.warning(
             "Booking cancellation failed: operation=cancel_booking platform_user_id=%s yclients_record_id=%s error_class=%s",
@@ -176,17 +202,19 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
             record_id,
             type(exc).__name__,
         )
-        state.set_state_data_value(platform_user_id, chat_id, _CANCEL_IN_PROGRESS_STATE_KEY, False)
+        _clear_cancel_in_progress(context)
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_CANCEL_ERROR_SCREEN)
         await context.send_text(exc.user_message, keyboard=my_booking_cancel_result_keyboard())
         return
 
-    _log_local_cancellation(platform_user_id=platform_user_id, yclients_record_id=record_id, user=user)
-    state.set_state_data_value(platform_user_id, chat_id, _CANCEL_IN_PROGRESS_STATE_KEY, False)
+    _log_local_cancellation(platform_user_id=platform_user_id, yclients_record_id=record_id, user=user, marker=marker)
+    _mark_cancel_completed(context, record_id)
+    _clear_cancel_in_progress(context)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, None)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_CANCEL_SUCCESS_SCREEN)
     timezone_name = _timezone_from_state(context)
     await context.send_text(format_cancel_success_text(booking, timezone_name=timezone_name), keyboard=my_booking_cancel_result_keyboard())
+    await _show_my_bookings(context, push_current=False)
 
 
 async def handle_my_booking_reschedule_start(context: RouterContext) -> None:
@@ -438,7 +466,7 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
     state.set_state_data_value(platform_user_id, chat_id, _BOOKINGS_STATE_KEY, [booking_display_data(item, timezone_name=result.branch_timezone) for item in result.bookings])
     state.set_state_data_value(platform_user_id, chat_id, _BOOKINGS_TIMEZONE_STATE_KEY, result.branch_timezone)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, None)
-    state.set_state_data_value(platform_user_id, chat_id, _CANCEL_IN_PROGRESS_STATE_KEY, False)
+    _clear_cancel_in_progress(context)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
 
     if result.is_empty:
@@ -469,6 +497,40 @@ async def _show_reschedule_slots_from_state(context: RouterContext) -> None:
     state.set_current_screen(_user_id(context), _chat_id(context), state.MY_BOOKING_RESCHEDULE_SLOTS_SCREEN)
     text = MY_BOOKING_RESCHEDULE_SLOTS_TEXT if slots else MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT
     await context.send_text(text, keyboard=my_booking_reschedule_slots_keyboard(slots, format_slot_button))
+
+
+def _cancel_in_progress(context: RouterContext, record_id: str) -> bool:
+    value = state.get_state_data_value(_user_id(context), _chat_id(context), _CANCEL_IN_PROGRESS_STATE_KEY)
+    return value == record_id or value is True
+
+
+def _set_cancel_in_progress(context: RouterContext, record_id: str) -> None:
+    state.set_state_data_value(_user_id(context), _chat_id(context), _CANCEL_IN_PROGRESS_STATE_KEY, record_id)
+
+
+def _clear_cancel_in_progress(context: RouterContext) -> None:
+    state.set_state_data_value(_user_id(context), _chat_id(context), _CANCEL_IN_PROGRESS_STATE_KEY, None)
+
+
+def _cancel_completed(context: RouterContext, record_id: str) -> bool:
+    value = state.get_state_data_value(_user_id(context), _chat_id(context), _CANCEL_COMPLETED_STATE_KEY)
+    return isinstance(value, list) and record_id in {str(item) for item in value}
+
+
+def _mark_cancel_completed(context: RouterContext, record_id: str) -> None:
+    value = state.get_state_data_value(_user_id(context), _chat_id(context), _CANCEL_COMPLETED_STATE_KEY)
+    completed = [str(item) for item in value] if isinstance(value, list) else []
+    if record_id not in completed:
+        completed.append(record_id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _CANCEL_COMPLETED_STATE_KEY, completed)
+
+
+def _build_cancellation_marker(timezone_name: str) -> str:
+    try:
+        tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("Europe/Moscow")
+    return f"{_CANCELLATION_MARKER_PREFIX} {datetime.now(tz).strftime('%d.%m.%Y в %H:%M')}"
 
 
 def _payload_index(context: RouterContext, prefix: str) -> int | None:
@@ -560,7 +622,7 @@ def _log_local_reschedule(*, platform_user_id: str | None, yclients_record_id: s
         )
 
 
-def _log_local_cancellation(*, platform_user_id: str | None, yclients_record_id: str, user: Any) -> None:
+def _log_local_cancellation(*, platform_user_id: str | None, yclients_record_id: str, user: Any, marker: str) -> None:
     if not platform_user_id:
         return
     try:
@@ -568,7 +630,7 @@ def _log_local_cancellation(*, platform_user_id: str | None, yclients_record_id:
             platform_user_id=platform_user_id,
             yclients_record_id=yclients_record_id,
             yclients_client_id=user.yclients_client_id if user else None,
-            marker=_CANCELLATION_MARKER,
+            marker=marker,
             platform=PLATFORM_MAX,
         )
         logger.info(

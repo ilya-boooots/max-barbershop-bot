@@ -252,6 +252,7 @@ class MyBookingsService:
         *,
         yclients_record_id: str,
         platform_user_id: str | None = None,
+        cancellation_marker: str | None = None,
     ) -> str | None:
         """Cancel one future YClients record and return the resulting status when present."""
 
@@ -295,6 +296,7 @@ class MyBookingsService:
                 result = await yclients.cancel_booking(
                     company_id=settings.company_id,
                     yclients_record_id=record_id,
+                    cancellation_marker=cancellation_marker,
                 )
         except YClientsNotFoundError as exc:
             logger.info(
@@ -679,33 +681,15 @@ def format_booking_details_text(booking: MyBookingItem | dict[str, Any], *, time
 
 
 def format_cancel_confirmation_text(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
-    """Format cancellation confirmation text."""
+    """Format cancellation confirmation text using Telegram reference wording."""
 
-    display = booking_display_data(booking, timezone_name=timezone_name)
-    return "\n".join(
-        [
-            "Вы точно хотите отменить запись? ❌",
-            "",
-            f"Услуга: {display['service_name']}",
-            f"Мастер: {display['master_name'] or 'Любой мастер'}",
-            f"Дата: {display['date']}",
-            f"Время: {display['time']}",
-        ]
-    )
+    return "❗️Вы уверены, что хотите отменить запись?"
 
 
 def format_cancel_success_text(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
-    """Format successful cancellation message."""
+    """Format successful cancellation message using Telegram reference wording."""
 
-    display = booking_display_data(booking, timezone_name=timezone_name)
-    return "\n".join(
-        [
-            "Запись отменена ✅",
-            "",
-            f"✂️ {display['service_name']}",
-            f"📅 {display['date']} в {display['time']}",
-        ]
-    )
+    return "✅ Запись отменена."
 
 
 def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> dict[str, str | None]:
