@@ -22,6 +22,7 @@ from max_barbershop_bot.services.booking import (
     BookingServiceItem,
     BookingSlotItem,
     BOOKING_DATES_EMPTY_TEXT,
+    DATE_LOOKAHEAD_DAYS,
     format_booking_success,
     format_booking_summary,
     format_date_button,
@@ -850,6 +851,10 @@ async def _open_datetime_first_slots(
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, slots)
     if not slots:
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_SLOT_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, None)
         await _refresh_datetime_first_dates_after_stale_slot(
             context,
             stale_text=BOOKING_STALE_SLOT_TEXT if stale_if_empty else None,
@@ -1002,7 +1007,7 @@ async def _show_booking_dates(context: RouterContext, *, push_current: bool = Tr
         dates = await booking_service.get_available_dates_for_selection(
             yclients_service_id=service_id,
             yclients_master_id=master_id,
-            days=14,
+            days=DATE_LOOKAHEAD_DAYS,
         )
     except BookingServiceError as exc:
         logger.warning(
@@ -1061,6 +1066,10 @@ async def _open_booking_slots(context: RouterContext, booking_date: str, *, push
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, slots)
     if not slots:
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_SLOT_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, None)
         await _refresh_dates_after_stale_slot(context, stale_text=BOOKING_STALE_DATE_TEXT if stale_if_empty else None, push_current=push_current)
         return
     await _show_slots(context, slots, push_current=push_current)

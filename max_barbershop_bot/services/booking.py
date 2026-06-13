@@ -37,11 +37,13 @@ BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить м
 BOOKING_SLOTS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_SLOTS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить свободное время 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT = "Не удалось загрузить доступные даты и время 🙏\n\nПожалуйста, попробуйте позже."
-BOOKING_DATES_EMPTY_TEXT = "Пока нет свободных окон для выбранных параметров 🙏\n\nПопробуйте выбрать другую услугу или мастера."
+BOOKING_DATES_EMPTY_TEXT = "😔 У этого мастера пока нет свободных окон для записи.\nПопробуйте выбрать другого мастера или услугу."
 BOOKING_CREATE_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_CREATE_YCLIENTS_ERROR_TEXT = "Не удалось создать запись 🙏\n\nВозможно, это время уже заняли. Попробуйте выбрать другой слот."
 DATE_LOOKAHEAD_DAYS = 28
-DATETIME_FIRST_DATE_LIMIT = 7
+YCLIENTS_SLOT_CALL_TIMEOUT_S = 9.0
+YCLIENTS_SLOT_TOTAL_TIMEOUT_S = 15.0
+DATETIME_FIRST_DATE_LIMIT = 10
 DATETIME_FIRST_SERVICE_CANDIDATE_LIMIT = 12
 YCLIENTS_SLOT_CONCURRENCY = 4
 
@@ -162,7 +164,7 @@ class BookingService:
             return DEFAULT_BRANCH_TIMEZONE
         return _timezone_name(settings.branch_timezone if settings else None)
 
-    def get_available_dates(self, *, days: int = 14) -> list[date]:
+    def get_available_dates(self, *, days: int = DATE_LOOKAHEAD_DAYS) -> list[date]:
         """Return branch-timezone candidate dates without claiming availability."""
 
         return build_booking_dates(days=days, timezone_name=self.get_branch_timezone())
@@ -172,7 +174,7 @@ class BookingService:
         *,
         yclients_service_id: str,
         yclients_master_id: str,
-        days: int = 14,
+        days: int = DATE_LOOKAHEAD_DAYS,
     ) -> list[date]:
         """Return only dates that YClients confirms have future slots."""
 
@@ -317,7 +319,13 @@ class BookingService:
                     if len(date_candidates) >= DATETIME_FIRST_DATE_LIMIT:
                         break
 
-            filtered = [_date_value(iso_date) for iso_date in sorted(date_candidates)[:DATETIME_FIRST_DATE_LIMIT]]
+            filtered: list[date] = []
+            for iso_date in sorted(date_candidates):
+                slots = await self.get_datetime_first_slots_for_date(iso_date, catalog=catalog)
+                if slots:
+                    filtered.append(_date_value(iso_date))
+                if len(filtered) >= DATETIME_FIRST_DATE_LIMIT:
+                    break
             available_dates_count = len(filtered)
             logger.info(
                 "MAX datetime-first load diagnostic: entry_mode=%s step=%s service_catalog_loaded=%s "
@@ -406,7 +414,10 @@ class BookingService:
                     return []
                 return filter_available_slots(payload, booking_date=booking_date_value, timezone_name=timezone_name)
 
-        results = await asyncio.gather(*(load_for_service(service) for service in resolved_catalog.services))
+        results = await asyncio.wait_for(
+            asyncio.gather(*(load_for_service(service) for service in resolved_catalog.services)),
+            timeout=YCLIENTS_SLOT_TOTAL_TIMEOUT_S,
+        )
         by_time: dict[str, BookingSlotItem] = {}
         for slots in results:
             for slot in slots:
@@ -1139,7 +1150,7 @@ def extract_yclients_client_id(created: YClientsBookingRecord | CreatedBooking |
 
 
 
-def build_booking_dates(*, days: int = 14, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> list[date]:
+def build_booking_dates(*, days: int = DATE_LOOKAHEAD_DAYS, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> list[date]:
     """Build today and future booking dates in the branch timezone."""
 
     total_days = max(1, days)
@@ -1151,11 +1162,6 @@ def format_date_button(value: date | str, *, timezone_name: str = DEFAULT_BRANCH
     """Format a date button in the Telegram reference style."""
 
     current = _date_value(value)
-    today = datetime.now(_zoneinfo(timezone_name)).date()
-    if current == today:
-        return f"📅 Сегодня, {current.strftime('%d.%m')}"
-    if current == today + timedelta(days=1):
-        return f"📅 Завтра, {current.strftime('%d.%m')}"
     return f"📅 {_RU_WEEKDAYS[current.weekday()]} {current.strftime('%d.%m')}"
 
 
