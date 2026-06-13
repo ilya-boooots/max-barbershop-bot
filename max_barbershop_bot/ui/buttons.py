@@ -590,6 +590,18 @@ def booking_stale_keyboard() -> MaxInlineKeyboard:
     )
 
 
+def contacts_keyboard(route_links: dict[str, str]) -> MaxInlineKeyboard:
+    """Build contacts route buttons plus Back/Home navigation."""
+
+    rows: list[list[MaxButton]] = []
+    for label in ("Яндекс Карты", "2GIS", "Google Maps"):
+        url = str(route_links.get(label) or "").strip()
+        if url.startswith(("https://", "http://")):
+            rows.append([MaxButton(text=label, type="link", url=url)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
 def navigation_keyboard(*, back_payload: str = NAV_BACK_PAYLOAD) -> MaxInlineKeyboard:
     """Build Back/Home navigation buttons for section screens."""
 
