@@ -82,6 +82,8 @@ _RESCHEDULE_SLOTS_STATE_KEY = "my_booking_reschedule_slots"
 _RESCHEDULE_NEW_DATE_STATE_KEY = "my_booking_reschedule_new_date"
 _RESCHEDULE_NEW_SLOT_STATE_KEY = "my_booking_reschedule_new_slot"
 _RESCHEDULE_IN_PROGRESS_STATE_KEY = "booking_reschedule_in_progress"
+_RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY = "reschedule_completed_old_record_id"
+_RESCHEDULE_NEW_RECORD_STATE_KEY = "reschedule_new_record_id"
 _MAX_BOOKING_BUTTONS = 20
 _MAX_RESCHEDULE_DATES = 14
 _MAX_RESCHEDULE_SLOTS = 30
@@ -357,18 +359,24 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
         return
     reschedule_context = _reschedule_context(context)
     slot_data = _reschedule_new_slot_data(context)
+    selected_booking = _selected_booking(context)
     record_id = _clean_state_text(reschedule_context.get("yclients_record_id"))
     new_datetime = _clean_state_text(slot_data.get("new_datetime"))
     if not record_id or not new_datetime:
         await context.answer_callback("Не удалось подготовить перенос 🙏")
         await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
+    completed_old_id = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY))
+    if completed_old_id == record_id:
+        await context.answer_callback("Запись уже перенесена ✅")
+        await context.send_text(_format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)), keyboard=my_booking_reschedule_result_keyboard())
+        return
 
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, True)
     await context.answer_callback("Переносим запись ⏳")
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
     try:
-        await service.reschedule_booking_for_user(
+        result = await service.reschedule_booking_for_user(
             _current_user(context),
             reschedule_context=reschedule_context,
             new_datetime_iso=new_datetime,
@@ -388,13 +396,16 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
         await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
         return
 
-    _log_local_reschedule(platform_user_id=platform_user_id, yclients_record_id=record_id, user=_current_user(context))
+    new_record_id = _clean_state_text(result.get("new_record_id")) if isinstance(result, dict) else ""
+    _log_local_reschedule(platform_user_id=platform_user_id, old_record_id=record_id, new_record_id=new_record_id, user=_current_user(context))
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY, record_id)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_RECORD_STATE_KEY, new_record_id)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_CONTEXT_STATE_KEY, None)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, None)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, None)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_SUCCESS_SCREEN)
-    await context.send_text(format_reschedule_success_text(slot_data), keyboard=my_booking_reschedule_result_keyboard())
+    await context.send_text(_format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)), keyboard=my_booking_reschedule_result_keyboard())
 
 
 async def handle_my_bookings_back(context: RouterContext) -> None:
@@ -499,6 +510,17 @@ async def _show_reschedule_slots_from_state(context: RouterContext) -> None:
     await context.send_text(text, keyboard=my_booking_reschedule_slots_keyboard(slots, format_slot_button))
 
 
+
+def _format_reschedule_success_card(booking: dict[str, Any] | None, slot_data: dict[str, Any], *, timezone_name: str) -> str:
+    if not booking:
+        return format_reschedule_success_text(slot_data)
+    updated = dict(booking)
+    if slot_data.get("new_datetime"):
+        updated["datetime"] = slot_data.get("new_datetime")
+    updated["date"] = slot_data.get("new_date") or updated.get("date")
+    updated["time"] = slot_data.get("new_time") or updated.get("time")
+    return "Запись перенесена ✅\n\n" + format_booking_details_text(updated, timezone_name=timezone_name)
+
 def _cancel_in_progress(context: RouterContext, record_id: str) -> bool:
     value = state.get_state_data_value(_user_id(context), _chat_id(context), _CANCEL_IN_PROGRESS_STATE_KEY)
     return value == record_id or value is True
@@ -597,27 +619,38 @@ def _booking_record_id(booking: dict[str, Any]) -> str | None:
     return str(value).strip() if value is not None and str(value).strip() else None
 
 
-def _log_local_reschedule(*, platform_user_id: str | None, yclients_record_id: str, user: Any) -> None:
+def _log_local_reschedule(*, platform_user_id: str | None, old_record_id: str, new_record_id: str, user: Any) -> None:
     if not platform_user_id:
         return
     try:
-        PlatformAttributionRepository(_database_path()).create_record(
+        repo = PlatformAttributionRepository(_database_path())
+        if new_record_id:
+            repo.create_record(
+                platform_user_id=platform_user_id,
+                yclients_record_id=new_record_id,
+                yclients_client_id=user.yclients_client_id if user else None,
+                marker="Клиент перенёс запись из MAX бота",
+                platform=PLATFORM_MAX,
+            )
+        repo.create_record(
             platform_user_id=platform_user_id,
-            yclients_record_id=yclients_record_id,
+            yclients_record_id=old_record_id,
             yclients_client_id=user.yclients_client_id if user else None,
             marker="Запись перенесена из MAX бота",
             platform=PLATFORM_MAX,
         )
         logger.info(
-            "Local reschedule attribution logged: operation=reschedule_booking platform_user_id=%s yclients_record_id=%s",
+            "Local reschedule attribution logged: operation=reschedule_booking platform_user_id=%s old_record_id=%s new_record_id=%s",
             platform_user_id,
-            yclients_record_id,
+            old_record_id,
+            new_record_id,
         )
     except Exception as exc:  # noqa: BLE001 - local log must not change successful YClients update.
         logger.warning(
-            "Local reschedule attribution failed: operation=reschedule_booking platform_user_id=%s yclients_record_id=%s error_class=%s",
+            "Local reschedule attribution failed: operation=reschedule_booking platform_user_id=%s old_record_id=%s new_record_id=%s error_class=%s",
             platform_user_id,
-            yclients_record_id,
+            old_record_id,
+            new_record_id,
             type(exc).__name__,
         )
 

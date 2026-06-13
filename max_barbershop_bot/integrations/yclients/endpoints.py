@@ -226,6 +226,7 @@ async def create_booking(
     staff_id: str | None = None,
     email: str = "",
     comment: str = "",
+    marker: str = MAX_BOOKING_COMMENT_MARKER,
 ) -> YClientsBookingRecord:
     """Alias for creating a YClients record with the MAX origin marker."""
 
@@ -239,6 +240,7 @@ async def create_booking(
         staff_id=staff_id,
         email=email,
         comment=comment,
+        marker=marker,
     )
 
 
