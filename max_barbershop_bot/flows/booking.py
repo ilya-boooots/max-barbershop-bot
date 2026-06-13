@@ -587,7 +587,7 @@ async def _create_booking_after_lock(context: RouterContext) -> None:
             booking_data.get("selected_slot_time"),
             type(exc).__name__,
         )
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load slots")
         state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
         return
     selected_slot_time = str(booking_data.get("selected_slot_time") or "")
@@ -616,7 +616,7 @@ async def _create_booking_after_lock(context: RouterContext) -> None:
             booking_data.get("selected_slot_time"),
             type(exc).__name__,
         )
-        await context.send_text(exc.user_message or BOOKING_CREATE_ERROR_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="create booking", fallback_text=BOOKING_CREATE_ERROR_TEXT)
     finally:
         state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
 
@@ -746,6 +746,45 @@ def _is_active_booking_screen(context: RouterContext) -> bool:
     }
 
 
+
+async def _send_booking_service_error(context: RouterContext, exc: BookingServiceError, *, operation: str, fallback_text: str | None = None) -> None:
+    diagnostic = dict(getattr(exc, "diagnostic", {}) or {})
+    selected_service = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
+    selected_master = _state_value(context, _SELECTED_MASTER_STATE_KEY)
+    selected_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
+    selected_time = _state_value(context, _SELECTED_SLOT_TIME_STATE_KEY)
+    diagnostic.update(
+        {
+            "operation": diagnostic.get("operation") or operation,
+            "platform_user_id": context.event.platform_user_id,
+            "chat_id": context.event.chat_id,
+            "entry_mode": _entry_mode(context),
+            "selected_service_id_present": bool(selected_service),
+            "selected_master_id_present": bool(selected_master),
+            "selected_date_present": bool(selected_date),
+            "selected_time_present": bool(selected_time),
+        }
+    )
+    logger.warning(
+        "MAX booking yclients error diagnostic: trace_id=%s error_category=%s error_class=%s http_status=%s "
+        "operation=%s endpoint_path=%s method=%s safe_response_snippet=%s entry_mode=%s "
+        "selected_service_id_present=%s selected_master_id_present=%s selected_date_present=%s selected_time_present=%s",
+        diagnostic.get("trace_id"),
+        diagnostic.get("error_category"),
+        diagnostic.get("error_class") or type(exc).__name__,
+        diagnostic.get("http_status"),
+        diagnostic.get("operation"),
+        diagnostic.get("endpoint_path"),
+        diagnostic.get("method"),
+        diagnostic.get("safe_response_snippet"),
+        diagnostic.get("entry_mode"),
+        diagnostic.get("selected_service_id_present"),
+        diagnostic.get("selected_master_id_present"),
+        diagnostic.get("selected_date_present"),
+        diagnostic.get("selected_time_present"),
+    )
+    await context.send_text(exc.user_message or fallback_text or BOOKING_CREATE_ERROR_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+
 async def _show_booking_hub(context: RouterContext, *, push_current: bool = True) -> None:
     if push_current:
         _push_current_screen(context, state.BOOKING_HUB_SCREEN)
@@ -786,7 +825,7 @@ async def _open_booking_catalog(context: RouterContext, *, push_current: bool = 
     except BookingServiceError as exc:
         if push_current:
             _push_current_screen(context, state.BOOKING_CATEGORIES_SCREEN)
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load categories")
         return
 
     entry_mode = _entry_mode(context)
@@ -842,7 +881,7 @@ async def _open_datetime_first_dates(context: RouterContext, *, push_current: bo
             _push_current_screen(context, state.BOOKING_DATES_SCREEN)
         else:
             state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_DATES_SCREEN)
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load dates")
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _DATES_STATE_KEY, dates)
@@ -888,7 +927,7 @@ async def _open_datetime_first_slots(
             _push_current_screen(context, state.BOOKING_SLOTS_SCREEN)
         else:
             state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SLOTS_SCREEN)
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load slots")
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, slots)
@@ -919,7 +958,7 @@ async def _open_datetime_first_catalog(context: RouterContext, *, push_current: 
             booking_time=booking_time,
         )
     except BookingServiceError as exc:
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load services")
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _CATALOG_STATE_KEY, catalog)
@@ -956,7 +995,7 @@ async def _open_datetime_first_masters(context: RouterContext, yclients_service_
             booking_time=booking_time,
         )
     except BookingServiceError as exc:
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load masters")
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _MASTERS_STATE_KEY, masters)
@@ -994,7 +1033,7 @@ async def _open_booking_all_masters(context: RouterContext, *, push_current: boo
         )
         if push_current:
             _push_current_screen(context, state.BOOKING_MASTERS_SCREEN)
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load masters")
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _MASTERS_STATE_KEY, masters)
@@ -1021,7 +1060,7 @@ async def _open_booking_masters(context: RouterContext, yclients_service_id: str
         )
         if push_current:
             _push_current_screen(context, state.BOOKING_MASTERS_SCREEN)
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load masters")
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _MASTERS_STATE_KEY, masters)
@@ -1063,7 +1102,7 @@ async def _show_booking_dates(context: RouterContext, *, push_current: bool = Tr
             _push_current_screen(context, state.BOOKING_DATES_SCREEN)
         else:
             state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_DATES_SCREEN)
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load dates")
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _DATES_STATE_KEY, dates)
@@ -1103,7 +1142,7 @@ async def _open_booking_slots(context: RouterContext, booking_date: str, *, push
             _push_current_screen(context, state.BOOKING_SLOTS_SCREEN)
         else:
             state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SLOTS_SCREEN)
-        await context.send_text(exc.user_message, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _send_booking_service_error(context, exc, operation="load slots")
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SLOTS_STATE_KEY, slots)
