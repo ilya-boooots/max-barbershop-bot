@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime
 from os import getenv
@@ -137,6 +138,20 @@ _ENTRY_MODE_STATE_KEY = "booking_entry_mode"
 _ENTRY_MODE_SERVICE_FIRST = "service_first"
 _ENTRY_MODE_STAFF_FIRST = "staff_first"
 _ENTRY_MODE_DATETIME_FIRST = "datetime_first"
+_CONFIRM_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _confirm_lock_key(context: RouterContext) -> str:
+    return str(_user_id(context) or _chat_id(context) or "unknown")
+
+
+def _confirm_lock_for(context: RouterContext) -> asyncio.Lock:
+    key = _confirm_lock_key(context)
+    lock = _CONFIRM_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CONFIRM_LOCKS[key] = lock
+    return lock
 
 
 def register_booking_routes(router: Router) -> None:
@@ -503,31 +518,58 @@ async def handle_booking_cancel_draft(context: RouterContext) -> None:
 async def handle_booking_confirm(context: RouterContext) -> None:
     """Create a real YClients booking after the final confirmation tap."""
 
-    if not _is_active_booking_screen(context):
+    if not _is_active_booking_screen(context) or state.get_current_screen(_user_id(context), _chat_id(context)) != state.BOOKING_CONFIRMATION_SCREEN:
         await show_booking_stale_callback(context)
         return
 
-    if _state_value(context, _BOOKING_CREATION_IN_PROGRESS_STATE_KEY) is True:
+    lock = _confirm_lock_for(context)
+    if lock.locked() or _state_value(context, _BOOKING_CREATION_IN_PROGRESS_STATE_KEY) is True:
         await context.answer_callback(BOOKING_CREATE_IN_PROGRESS_TEXT)
         return
     if _state_value(context, _BOOKING_COMPLETED_RECORD_ID_STATE_KEY):
         await context.answer_callback("Запись уже создана ✅")
         return
 
+    async with lock:
+        if _state_value(context, _BOOKING_CREATION_IN_PROGRESS_STATE_KEY) is True:
+            await context.answer_callback(BOOKING_CREATE_IN_PROGRESS_TEXT)
+            return
+        if _state_value(context, _BOOKING_COMPLETED_RECORD_ID_STATE_KEY):
+            await context.answer_callback("Запись уже создана ✅")
+            return
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, True)
+        await _create_booking_after_lock(context)
+
+
+async def _create_booking_after_lock(context: RouterContext) -> None:
     booking_data = _booking_state_snapshot(context)
     user = _current_user(context)
     booking_phone = normalize_phone(str(booking_data.get("booking_phone") or ""))
     if booking_phone is None:
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
         await context.answer_callback("Не хватает телефона 🙏")
         await _show_booking_phone(context, push_current=False)
         return
     if user is None or not booking_data.get("selected_service_id") or not booking_data.get("selected_master_id") or not booking_data.get("selected_date") or not booking_data.get("selected_slot_time"):
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
         await context.answer_callback("Не хватает данных 🙏")
         await context.send_text(BOOKING_CONFIRMATION_MISSING_DATA_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
         return
 
+    logger.info(
+        "MAX booking confirm diagnostic: platform_user_id_present=%s entry_mode=%s selected_service_id_present=%s selected_master_id_present=%s selected_date_present=%s selected_time_present=%s booking_phone_present=%s lock_active=%s completed_record_id_present=%s create_started=%s",
+        bool(_user_id(context)),
+        booking_data.get("entry_mode"),
+        bool(booking_data.get("selected_service_id")),
+        bool(booking_data.get("selected_master_id")),
+        bool(booking_data.get("selected_date")),
+        bool(booking_data.get("selected_slot_time")),
+        bool(booking_phone),
+        True,
+        bool(_state_value(context, _BOOKING_COMPLETED_RECORD_ID_STATE_KEY)),
+        True,
+    )
     await context.answer_callback("Создаём запись ✂️")
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, True)
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     try:
         fresh_slots = await booking_service.get_available_slots(
@@ -589,7 +631,7 @@ async def handle_booking_confirm(context: RouterContext) -> None:
     )
     if created.datetime_iso:
         state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, created.datetime_iso)
-    await _show_booking_success(context)
+    await _send_immediate_confirmation_safely(context, created=created, user=user, booking_data=booking_data)
 
 
 async def handle_booking_back(context: RouterContext) -> None:
@@ -1230,6 +1272,7 @@ def _booking_state_snapshot(context: RouterContext) -> dict[str, object | None]:
         "selected_slot_raw": _state_value(context, _SELECTED_SLOT_RAW_STATE_KEY),
         "booking_phone": _state_value(context, _BOOKING_PHONE_STATE_KEY),
         "booking_phone_source": _state_value(context, _BOOKING_PHONE_SOURCE_STATE_KEY),
+        "entry_mode": _state_value(context, _ENTRY_MODE_STATE_KEY),
     }
 
 
