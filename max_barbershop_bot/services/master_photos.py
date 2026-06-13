@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -88,8 +89,8 @@ class MasterPhotosService:
             if normalized is None:
                 continue
             payload = normalized.get("payload") if isinstance(normalized.get("payload"), dict) else {}
-            token = _clean_text(payload.get("token") or payload.get("file_id") or normalized.get("token")) or None
-            url = _clean_text(payload.get("url") or normalized.get("url")) or None
+            token = _clean_text(payload.get("token") or payload.get("file_id") or payload.get("id")) or None
+            url = _clean_text(payload.get("url") or payload.get("download_url")) or None
             return token, url, json.dumps(normalized, ensure_ascii=False, sort_keys=True)
         return None, None, None
 
@@ -138,13 +139,14 @@ def _normalize_image_attachment(attachment: Any) -> dict[str, Any] | None:
     if not isinstance(attachment, Mapping):
         return None
     attachment_type = _clean_text(attachment.get("type")).lower()
-    payload = attachment.get("payload") if isinstance(attachment.get("payload"), Mapping) else {}
     if attachment_type not in {"image", "photo"}:
         return None
 
+    payload = attachment.get("payload") if isinstance(attachment.get("payload"), Mapping) else {}
+    token = _first_text_value((payload, attachment), keys=("token", "file_id", "id"))
+    url = _first_text_value((payload, attachment), keys=("url", "download_url"))
+
     normalized_payload: dict[str, Any] = {}
-    token = _clean_text(payload.get("token") or payload.get("file_id") or attachment.get("token"))
-    url = _clean_text(payload.get("url") or attachment.get("url"))
     if token:
         normalized_payload["token"] = token
     if url:
@@ -152,6 +154,37 @@ def _normalize_image_attachment(attachment: Any) -> dict[str, Any] | None:
     if not normalized_payload:
         return None
     return {"type": "image", "payload": normalized_payload}
+
+
+def _first_text_value(roots: Iterable[Mapping[str, Any]], *, keys: tuple[str, ...]) -> str:
+    for root in roots:
+        direct = _clean_text(next((root.get(key) for key in keys if root.get(key) is not None), None))
+        if direct:
+            return direct
+        nested = _first_nested_text_value(root, keys=keys)
+        if nested:
+            return nested
+    return ""
+
+
+def _first_nested_text_value(value: Any, *, keys: tuple[str, ...]) -> str:
+    if isinstance(value, Mapping):
+        for key in keys:
+            found = _clean_text(value.get(key))
+            if found:
+                return found
+        for child_key, child in value.items():
+            if child_key in {"bytes", "data", "content", "file", "raw", "thumbnail"}:
+                continue
+            found = _first_nested_text_value(child, keys=keys)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _first_nested_text_value(child, keys=keys)
+            if found:
+                return found
+    return ""
 
 
 def _clean_text(value: object | None) -> str:
