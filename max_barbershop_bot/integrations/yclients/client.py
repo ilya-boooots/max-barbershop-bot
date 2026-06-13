@@ -19,12 +19,15 @@ from .auth import build_auth_headers
 from .dto import YClientsCredentials
 from .exceptions import (
     YClientsAuthError,
+    YClientsConfigError,
     YClientsError,
     YClientsNotFoundError,
     YClientsRateLimitError,
     YClientsServerError,
     YClientsTransportError,
     YClientsValidationError,
+    make_safe_response_snippet,
+    sanitize_yclients_endpoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,17 +134,26 @@ class YClientsClient:
         """Perform an HTTP request and return a parsed response wrapper."""
 
         self._ensure_available()
+        method_upper = method.upper()
+        path_with_query = self._build_path_with_query(path, params)
+        partner_token_present = bool(self._credentials.partner_token)
+        user_token_present = bool(self._credentials.user_token)
+        if not self._credentials.company_id or not partner_token_present or not user_token_present:
+            raise YClientsConfigError(
+                "YClients settings are incomplete",
+                trace_id=uuid4().hex[:12],
+                method=method_upper,
+                endpoint=path_with_query,
+                partner_token_present=partner_token_present,
+                user_token_present=user_token_present,
+            )
         await self.start()
         if self._session is None:
             raise YClientsTransportError("YClients HTTP session is not initialized")
 
         trace_id = uuid4().hex[:12]
-        method_upper = method.upper()
         url = f"{self._base_url}/{path.lstrip('/')}"
         headers = build_auth_headers(self._credentials)
-        path_with_query = self._build_path_with_query(path, params)
-        partner_token_present = bool(self._credentials.partner_token)
-        user_token_present = bool(self._credentials.user_token)
         context = self._safe_context(params=params, json_data=json_data, form_data=form_data)
 
         last_exc: Exception | None = None
@@ -163,7 +175,7 @@ class YClientsClient:
                     logger.info(
                         "YClients request method=%s path=%s status_code=%s request_id=%s duration_ms=%s params=%s payload_fields=%s",
                         method_upper,
-                        path_with_query,
+                        sanitize_yclients_endpoint(path_with_query),
                         response.status,
                         self._mask_identifier(request_id),
                         duration_ms,
@@ -196,7 +208,7 @@ class YClientsClient:
                             "YClients non-2xx response trace_id=%s method=%s path=%s status_code=%s snippet=%s",
                             trace_id,
                             method_upper,
-                            path_with_query,
+                            sanitize_yclients_endpoint(path_with_query),
                             response.status,
                             yclients_response.response_snippet or "<empty>",
                         )
@@ -223,7 +235,7 @@ class YClientsClient:
                     trace_id=trace_id,
                     method=method_upper,
                     endpoint=path_with_query,
-                    response_snippet=f"{type(exc).__name__}: {str(exc)[:300]}",
+                    response_snippet=make_safe_response_snippet(f"{type(exc).__name__}: {exc}", max_chars=300),
                     partner_token_present=partner_token_present,
                     user_token_present=user_token_present,
                     context=context,
@@ -234,7 +246,7 @@ class YClientsClient:
             trace_id=trace_id,
             method=method_upper,
             endpoint=path_with_query,
-            response_snippet=(f"{type(last_exc).__name__}: {str(last_exc)[:300]}" if last_exc else None),
+            response_snippet=(make_safe_response_snippet(f"{type(last_exc).__name__}: {last_exc}", max_chars=300) if last_exc else None),
             partner_token_present=partner_token_present,
             user_token_present=user_token_present,
             context=context,
@@ -285,7 +297,7 @@ class YClientsClient:
             "trace_id": response.trace_id,
             "status_code": status_code,
             "method": response.method,
-            "endpoint": response.path_with_query,
+            "endpoint": sanitize_yclients_endpoint(response.path_with_query),
             "response_snippet": response.response_snippet,
             "partner_token_present": response.partner_token_present,
             "user_token_present": response.user_token_present,
@@ -355,7 +367,7 @@ class YClientsClient:
 
     @staticmethod
     def _response_snippet(body_text: str) -> str:
-        return body_text.strip().replace("\n", " ")[:1000]
+        return make_safe_response_snippet(body_text, max_chars=300)
 
     @staticmethod
     def _build_path_with_query(path: str, params: dict[str, Any] | None) -> str:
@@ -363,7 +375,7 @@ class YClientsClient:
         if not params:
             return normalized
         query = urlencode(params, doseq=True)
-        return f"{normalized}?{query}" if query else normalized
+        return sanitize_yclients_endpoint(f"{normalized}?{query}" if query else normalized) or normalized
 
     @staticmethod
     def _extract_message(payload: dict[str, Any] | list[Any] | str) -> str:

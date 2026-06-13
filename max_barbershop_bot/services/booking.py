@@ -18,7 +18,18 @@ from max_barbershop_bot.integrations.yclients.dto import (
     YClientsSlot,
     YClientsStaff,
 )
-from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
+from max_barbershop_bot.integrations.yclients.exceptions import (
+    YCLIENTS_ERROR_AUTH,
+    YCLIENTS_ERROR_CREDENTIALS,
+    YCLIENTS_ERROR_RATE_LIMIT,
+    YCLIENTS_ERROR_SERVER,
+    YCLIENTS_ERROR_TRANSPORT,
+    YClientsError,
+    classify_yclients_error,
+    make_safe_response_snippet,
+    sanitize_yclients_endpoint,
+    yclients_trace_id,
+)
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, normalize_phone
 from max_barbershop_bot.repositories.yclients_settings import DEFAULT_BRANCH_TIMEZONE, YClientsSettings, YClientsSettingsRepository
@@ -30,8 +41,8 @@ from max_barbershop_bot.services.yclients_context import (
 
 logger = logging.getLogger(__name__)
 
-BOOKING_NOT_CONFIGURED_TEXT = "❌ Интеграция YClients не настроена. Откройте главное меню и проверьте настройки ⚙️"
-BOOKING_YCLIENTS_ERROR_TEXT = "⚠️ Техническая ошибка. Попробуйте ещё раз через минуту."
+BOOKING_NOT_CONFIGURED_TEXT = "YClients пока не настроен 🙏\n\nПожалуйста, обратитесь к администратору."
+BOOKING_YCLIENTS_ERROR_TEXT = "Не удалось загрузить данные для записи 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_MASTERS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_MASTERS_YCLIENTS_ERROR_TEXT = "Не удалось загрузить мастеров 🙏\n\nПожалуйста, попробуйте позже."
 BOOKING_SLOTS_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
@@ -40,6 +51,10 @@ BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT = "Не удалось загрузи
 BOOKING_DATES_EMPTY_TEXT = "Пока нет свободных окон для выбранных параметров 🙏\n\nПопробуйте выбрать другую услугу или мастера."
 BOOKING_CREATE_NOT_CONFIGURED_TEXT = "Запись пока не настроена 🙏\n\nПожалуйста, попробуйте позже или обратитесь к администратору."
 BOOKING_CREATE_YCLIENTS_ERROR_TEXT = "Не удалось создать запись 🙏\n\nВозможно, это время уже заняли. Попробуйте выбрать другой слот."
+BOOKING_YCLIENTS_AUTH_TEXT = "Не удалось подключиться к YClients 🙏\n\nПожалуйста, проверьте настройки подключения."
+BOOKING_YCLIENTS_RATE_LIMIT_TEXT = "YClients временно ограничил количество запросов 🙏\n\nПопробуйте ещё раз через пару минут."
+BOOKING_YCLIENTS_SERVER_TEXT = "YClients сейчас временно недоступен 🙏\n\nПожалуйста, попробуйте позже."
+BOOKING_YCLIENTS_TRANSPORT_TEXT = "Не удалось связаться с YClients 🙏\n\nПожалуйста, попробуйте позже."
 DATE_LOOKAHEAD_DAYS = 28
 DATETIME_FIRST_DATE_LIMIT = 7
 DATETIME_FIRST_SERVICE_CANDIDATE_LIMIT = 12
@@ -51,9 +66,10 @@ _RU_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 class BookingServiceError(RuntimeError):
     """Clean booking domain error safe for UI flow handling."""
 
-    def __init__(self, user_message: str) -> None:
+    def __init__(self, user_message: str, *, diagnostic: dict[str, Any] | None = None) -> None:
         super().__init__(user_message)
         self.user_message = user_message
+        self.diagnostic = diagnostic or {}
 
 
 class BookingSettingsMissingError(BookingServiceError):
@@ -66,6 +82,69 @@ class BookingYClientsError(BookingServiceError):
 
 class BookingCreateError(BookingYClientsError):
     """Raised when YClients cannot create the final booking safely."""
+
+
+
+
+def _booking_yclients_user_message(category: str, fallback: str) -> str:
+    if category == YCLIENTS_ERROR_CREDENTIALS:
+        return BOOKING_NOT_CONFIGURED_TEXT
+    if category == YCLIENTS_ERROR_AUTH:
+        return BOOKING_YCLIENTS_AUTH_TEXT
+    if category == YCLIENTS_ERROR_RATE_LIMIT:
+        return BOOKING_YCLIENTS_RATE_LIMIT_TEXT
+    if category == YCLIENTS_ERROR_SERVER:
+        return BOOKING_YCLIENTS_SERVER_TEXT
+    if category == YCLIENTS_ERROR_TRANSPORT:
+        return BOOKING_YCLIENTS_TRANSPORT_TEXT
+    return fallback
+
+
+def _booking_yclients_diagnostic(*, operation: str, exc: BaseException, fallback_category: str | None = None) -> dict[str, Any]:
+    category = fallback_category or classify_yclients_error(exc)
+    return {
+        "trace_id": yclients_trace_id(exc),
+        "error_category": category,
+        "error_class": type(exc).__name__,
+        "http_status": getattr(exc, "status_code", None),
+        "method": getattr(exc, "method", None),
+        "endpoint_path": sanitize_yclients_endpoint(getattr(exc, "endpoint", None)),
+        "safe_response_snippet": make_safe_response_snippet(getattr(exc, "response_snippet", None) or str(exc), max_chars=300),
+        "operation": operation,
+    }
+
+
+def _raise_booking_yclients_error(*, operation: str, exc: BaseException, fallback_text: str, error_type: type[BookingYClientsError] = BookingYClientsError) -> None:
+    if isinstance(exc, BookingServiceError) and exc.diagnostic:
+        diagnostic = dict(exc.diagnostic)
+        diagnostic.setdefault("operation", operation)
+        _log_booking_yclients_diagnostic(diagnostic)
+        raise error_type(exc.user_message or fallback_text, diagnostic=diagnostic) from exc
+    diagnostic = _booking_yclients_diagnostic(operation=operation, exc=exc)
+    _log_booking_yclients_diagnostic(diagnostic)
+    raise error_type(_booking_yclients_user_message(str(diagnostic["error_category"]), fallback_text), diagnostic=diagnostic) from exc
+
+
+def _log_booking_yclients_diagnostic(diagnostic: dict[str, Any]) -> None:
+    logger.warning(
+        "MAX booking yclients error diagnostic: trace_id=%s error_category=%s error_class=%s http_status=%s "
+        "operation=%s endpoint_path=%s method=%s safe_response_snippet=%s",
+        diagnostic.get("trace_id"),
+        diagnostic.get("error_category"),
+        diagnostic.get("error_class"),
+        diagnostic.get("http_status"),
+        diagnostic.get("operation"),
+        diagnostic.get("endpoint_path"),
+        diagnostic.get("method"),
+        diagnostic.get("safe_response_snippet"),
+    )
+
+
+def _settings_missing_error(message: str, *, operation: str, exc: BaseException | None = None) -> BookingSettingsMissingError:
+    source_exc = exc or RuntimeError("YClients credentials are missing")
+    diagnostic = _booking_yclients_diagnostic(operation=operation, exc=source_exc, fallback_category=YCLIENTS_ERROR_CREDENTIALS)
+    _log_booking_yclients_diagnostic(diagnostic)
+    return BookingSettingsMissingError(message, diagnostic=diagnostic)
 
 
 @dataclass(frozen=True)
@@ -196,7 +275,7 @@ class BookingService:
                 bool(master_id),
                 type(exc).__name__,
             )
-            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT) from exc
+            raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots", exc=exc) from exc
 
         timezone_name = _timezone_name(settings.branch_timezone if settings else None)
         candidate_dates = build_booking_dates(days=days, timezone_name=timezone_name)
@@ -210,7 +289,7 @@ class BookingService:
                 len(candidate_dates),
                 timezone_name,
             )
-            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT)
+            raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots")
 
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
@@ -249,7 +328,7 @@ class BookingService:
                 timezone_name,
                 type(exc).__name__,
             )
-            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load dates", exc=exc, fallback_text=BOOKING_SLOTS_YCLIENTS_ERROR_TEXT)
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
             logger.warning(
                 "MAX booking availability diagnostic: selected_service_id_present=%s selected_master_id_present=%s "
@@ -260,7 +339,7 @@ class BookingService:
                 timezone_name,
                 type(exc).__name__,
             )
-            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load dates", exc=exc, fallback_text=BOOKING_SLOTS_YCLIENTS_ERROR_TEXT)
 
         logger.info(
             "MAX booking availability diagnostic: selected_service_id_present=%s selected_master_id_present=%s "
@@ -353,7 +432,7 @@ class BookingService:
                 settings is not None,
                 timezone_name,
             )
-            raise BookingYClientsError(BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load dates", exc=exc, fallback_text=BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT)
         except Exception as exc:  # noqa: BLE001 - keep datetime-first UI error specific and safe.
             logger.warning(
                 "MAX datetime-first load diagnostic: entry_mode=%s step=%s service_catalog_loaded=%s "
@@ -371,7 +450,7 @@ class BookingService:
                 settings is not None,
                 timezone_name,
             )
-            raise BookingYClientsError(BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load dates", exc=exc, fallback_text=BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT)
 
     async def get_datetime_first_slots_for_date(
         self,
@@ -492,7 +571,7 @@ class BookingService:
         settings = self.load_active_settings_for_booking(operation="get_datetime_first_masters")
         timezone_name = _timezone_name(settings.branch_timezone if settings else None)
         if not has_required_yclients_credentials(settings) or not service_id:
-            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT)
+            raise _settings_missing_error(BOOKING_MASTERS_NOT_CONFIGURED_TEXT, operation="load masters")
         masters = await self.get_available_masters_for_service(service_id)
         booking_date_value = _booking_date_iso(booking_date)
         selected_time = _clean_text(booking_time)
@@ -538,14 +617,14 @@ class BookingService:
                 "datetime_first",
                 type(exc).__name__,
             )
-            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT) from exc
+            raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots", exc=exc) from exc
         if not has_required_yclients_credentials(settings):
             logger.info(
                 "MAX booking datetime-first diagnostic: entry_mode=%s yclients_settings_found=%s",
                 "datetime_first",
                 settings is not None,
             )
-            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT)
+            raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots")
         timezone_name = _timezone_name(settings.branch_timezone if settings else None)
         try:
             resolved_catalog = catalog if catalog is not None else await self.get_service_categories_and_services()
@@ -566,7 +645,7 @@ class BookingService:
                 True,
                 timezone_name,
             )
-            raise BookingYClientsError(BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load dates", exc=exc, fallback_text=BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT)
         return settings, timezone_name, resolved_catalog
 
     async def create_booking(
@@ -607,7 +686,7 @@ class BookingService:
                 datetime_iso,
                 type(exc).__name__,
             )
-            raise BookingSettingsMissingError(BOOKING_CREATE_NOT_CONFIGURED_TEXT) from exc
+            raise _settings_missing_error(BOOKING_CREATE_NOT_CONFIGURED_TEXT, operation="create booking", exc=exc) from exc
 
         if not has_required_yclients_credentials(settings):
             logger.info(
@@ -621,7 +700,7 @@ class BookingService:
                 master_id,
                 datetime_iso,
             )
-            raise BookingSettingsMissingError(BOOKING_CREATE_NOT_CONFIGURED_TEXT)
+            raise _settings_missing_error(BOOKING_CREATE_NOT_CONFIGURED_TEXT, operation="create booking")
 
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
@@ -637,7 +716,7 @@ class BookingService:
                 type(exc).__name__,
                 exc.status_code,
             )
-            raise BookingCreateError(BOOKING_CREATE_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="create booking", exc=exc, fallback_text=BOOKING_CREATE_YCLIENTS_ERROR_TEXT, error_type=BookingCreateError)
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
             logger.warning(
                 "Booking unexpected YClients error: operation=create_booking service_id=%s master_id=%s datetime=%s "
@@ -647,7 +726,7 @@ class BookingService:
                 datetime_iso,
                 type(exc).__name__,
             )
-            raise BookingCreateError(BOOKING_CREATE_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="create booking", exc=exc, fallback_text=BOOKING_CREATE_YCLIENTS_ERROR_TEXT, error_type=BookingCreateError)
 
         record_id = extract_yclients_record_id(created)
         if not record_id:
@@ -706,7 +785,7 @@ class BookingService:
                 booking_date_value,
                 type(exc).__name__,
             )
-            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT) from exc
+            raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots", exc=exc) from exc
 
         timezone_name = _timezone_name(settings.branch_timezone if settings else None)
         if is_past_date(booking_date_value, timezone_name=timezone_name):
@@ -730,7 +809,7 @@ class BookingService:
                 master_id,
                 booking_date_value,
             )
-            raise BookingSettingsMissingError(BOOKING_SLOTS_NOT_CONFIGURED_TEXT)
+            raise _settings_missing_error(BOOKING_SLOTS_NOT_CONFIGURED_TEXT, operation="load slots")
 
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
@@ -751,7 +830,7 @@ class BookingService:
                 type(exc).__name__,
                 exc.status_code,
             )
-            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load slots", exc=exc, fallback_text=BOOKING_SLOTS_YCLIENTS_ERROR_TEXT)
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
             logger.warning(
                 "Booking unexpected YClients error: operation=get_booking_slots service_id=%s master_id=%s date=%s "
@@ -761,7 +840,7 @@ class BookingService:
                 booking_date_value,
                 type(exc).__name__,
             )
-            raise BookingYClientsError(BOOKING_SLOTS_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load slots", exc=exc, fallback_text=BOOKING_SLOTS_YCLIENTS_ERROR_TEXT)
 
         slots = filter_available_slots(slots_payload, booking_date=booking_date_value, timezone_name=timezone_name)
         logger.info(
@@ -785,7 +864,7 @@ class BookingService:
                 "Booking settings lookup failed: operation=get_booking_catalog error_class=%s",
                 type(exc).__name__,
             )
-            raise BookingSettingsMissingError(BOOKING_NOT_CONFIGURED_TEXT) from exc
+            raise _settings_missing_error(BOOKING_NOT_CONFIGURED_TEXT, operation="load categories", exc=exc) from exc
 
         if not has_required_yclients_credentials(settings):
             logger.info(
@@ -796,7 +875,7 @@ class BookingService:
                 bool(settings and settings.partner_token),
                 bool(settings and settings.user_token),
             )
-            raise BookingSettingsMissingError(BOOKING_NOT_CONFIGURED_TEXT)
+            raise _settings_missing_error(BOOKING_NOT_CONFIGURED_TEXT, operation="load categories")
 
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
@@ -812,13 +891,13 @@ class BookingService:
                 exc.partner_token_present,
                 exc.user_token_present,
             )
-            raise BookingYClientsError(BOOKING_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load categories", exc=exc, fallback_text=BOOKING_YCLIENTS_ERROR_TEXT)
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
             logger.warning(
                 "Booking unexpected YClients error: operation=get_booking_catalog error_class=%s",
                 type(exc).__name__,
             )
-            raise BookingYClientsError(BOOKING_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load categories", exc=exc, fallback_text=BOOKING_YCLIENTS_ERROR_TEXT)
 
         services = [_normalize_service(item) for item in services_payload]
         services = [item for item in services if item.yclients_service_id and item.title]
@@ -852,7 +931,7 @@ class BookingService:
                 "Booking settings lookup failed: operation=get_booking_all_masters error_class=%s",
                 type(exc).__name__,
             )
-            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT) from exc
+            raise _settings_missing_error(BOOKING_MASTERS_NOT_CONFIGURED_TEXT, operation="load masters", exc=exc) from exc
 
         if not has_required_yclients_credentials(settings):
             logger.info(
@@ -863,7 +942,7 @@ class BookingService:
                 bool(settings and settings.partner_token),
                 bool(settings and settings.user_token),
             )
-            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT)
+            raise _settings_missing_error(BOOKING_MASTERS_NOT_CONFIGURED_TEXT, operation="load masters")
 
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
@@ -878,13 +957,13 @@ class BookingService:
                 exc.partner_token_present,
                 exc.user_token_present,
             )
-            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load masters", exc=exc, fallback_text=BOOKING_MASTERS_YCLIENTS_ERROR_TEXT)
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
             logger.warning(
                 "Booking unexpected YClients error: operation=get_booking_all_masters error_class=%s",
                 type(exc).__name__,
             )
-            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load masters", exc=exc, fallback_text=BOOKING_MASTERS_YCLIENTS_ERROR_TEXT)
 
         masters = [_normalize_master(item) for item in masters_payload]
         masters = sorted(
@@ -918,7 +997,7 @@ class BookingService:
                 type(exc).__name__,
                 service_id,
             )
-            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT) from exc
+            raise _settings_missing_error(BOOKING_MASTERS_NOT_CONFIGURED_TEXT, operation="load masters", exc=exc) from exc
 
         if not has_required_yclients_credentials(settings):
             logger.info(
@@ -930,7 +1009,7 @@ class BookingService:
                 bool(settings and settings.user_token),
                 service_id,
             )
-            raise BookingSettingsMissingError(BOOKING_MASTERS_NOT_CONFIGURED_TEXT)
+            raise _settings_missing_error(BOOKING_MASTERS_NOT_CONFIGURED_TEXT, operation="load masters")
 
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
@@ -949,14 +1028,14 @@ class BookingService:
                 exc.partner_token_present,
                 exc.user_token_present,
             )
-            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load masters", exc=exc, fallback_text=BOOKING_MASTERS_YCLIENTS_ERROR_TEXT)
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
             logger.warning(
                 "Booking unexpected YClients error: operation=get_booking_masters service_id=%s error_class=%s",
                 service_id,
                 type(exc).__name__,
             )
-            raise BookingYClientsError(BOOKING_MASTERS_YCLIENTS_ERROR_TEXT) from exc
+            _raise_booking_yclients_error(operation="load masters", exc=exc, fallback_text=BOOKING_MASTERS_YCLIENTS_ERROR_TEXT)
 
         service_raw = _service_raw_payload(service)
         resolution = resolve_safe_staff_for_service(service_raw, masters_payload, service_id=service_id)
