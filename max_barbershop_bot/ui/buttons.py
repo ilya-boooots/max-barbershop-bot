@@ -970,7 +970,7 @@ def my_booking_reschedule_result_keyboard() -> MaxInlineKeyboard:
 def staff_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     """Build staff management menu buttons."""
 
-    rows = [[MaxButton(text="📋 Список сотрудников", payload=STAFF_LIST_PAYLOAD)]]
+    rows = [[MaxButton(text="👀 Показать весь персонал", payload=STAFF_LIST_PAYLOAD)]]
     if can_manage_roles(normalize_role(role)):
         rows.extend(
             [
@@ -988,12 +988,17 @@ def staff_role_assign_keyboard(role: str | None = None) -> MaxInlineKeyboard:
 
     normalized_role = normalize_role(role)
     role_payloads = [
-        (ROLE_MANAGER, STAFF_ASSIGN_MANAGER_PAYLOAD),
-        (ROLE_ADMIN, STAFF_ASSIGN_ADMIN_PAYLOAD),
         (ROLE_DEVELOPER, STAFF_ASSIGN_DEVELOPER_PAYLOAD),
+        (ROLE_ADMIN, STAFF_ASSIGN_ADMIN_PAYLOAD),
+        (ROLE_MANAGER, STAFF_ASSIGN_MANAGER_PAYLOAD),
     ]
+    labels = {
+        ROLE_DEVELOPER: "🧑‍💻 Разработчик",
+        ROLE_ADMIN: "🛠️ Администратор",
+        ROLE_MANAGER: "📋 Управляющий",
+    }
     rows = [
-        [MaxButton(text=target_role, payload=payload)]
+        [MaxButton(text=labels[target_role], payload=payload)]
         for target_role, payload in role_payloads
         if can_assign_role(normalized_role, target_role)
     ]
@@ -1010,8 +1015,13 @@ def staff_role_remove_keyboard(roles: list[str]) -> MaxInlineKeyboard:
         ROLE_ADMIN: STAFF_REMOVE_ADMIN_PAYLOAD,
         ROLE_DEVELOPER: STAFF_REMOVE_DEVELOPER_PAYLOAD,
     }
+    labels = {
+        ROLE_DEVELOPER: "🧑‍💻 Разработчик",
+        ROLE_ADMIN: "🛠️ Администратор",
+        ROLE_MANAGER: "📋 Управляющий",
+    }
     rows = [
-        [MaxButton(text=role, payload=payloads[role])]
+        [MaxButton(text=labels[role], payload=payloads[role])]
         for role in roles
         if role in payloads
     ]

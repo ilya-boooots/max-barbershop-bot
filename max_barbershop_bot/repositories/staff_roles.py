@@ -283,6 +283,31 @@ class StaffRolesRepository:
             platform=platform,
         )
 
+    def log_role_change_blocked(
+        self,
+        *,
+        actor_platform_user_id: str | None,
+        target_platform_user_id: str,
+        old_role: str | None,
+        new_role: str | None,
+        action: str,
+        platform: str = PLATFORM_MAX,
+    ) -> None:
+        """Audit a blocked non-protected role change attempt."""
+
+        platform = _required_text(platform, "platform")
+        target_platform_user_id = _required_text(target_platform_user_id, "target_platform_user_id")
+        self._audit_role_event(
+            event_type="role_change_blocked",
+            actor_platform_user_id=actor_platform_user_id,
+            target_platform_user_id=target_platform_user_id,
+            target_max_user_id=self._target_max_user_id(target_platform_user_id, platform),
+            old_role=normalize_role(old_role),
+            new_role=normalize_role(new_role),
+            metadata={"action": action},
+            platform=platform,
+        )
+
     def log_protected_developer_role_change_blocked(
         self,
         *,
