@@ -76,7 +76,7 @@ class NotificationDeliveryResult:
             message_type=message_type,
             recipient_type=result.recipient_type,
             recipient_id=result.recipient_id,
-            status="sent" if result.ok else "failed",
+            status="sent" if result.ok else "blocked" if result.is_blocked else "stopped" if result.is_stopped else "failed",
             status_code=result.status_code,
             error_code=result.error_code,
             error_message=result.error_message,
