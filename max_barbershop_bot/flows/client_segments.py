@@ -25,6 +25,7 @@ from max_barbershop_bot.services.client_segments import (
 from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.ui.buttons import (
     BROADCAST_SEGMENTS_PAYLOAD,
+    SEGMENTS_ALL_CLIENTS_PAYLOAD,
     SEGMENTS_ACTIVE_7_PAYLOAD,
     SEGMENTS_ACTIVE_30_PAYLOAD,
     SEGMENTS_ACTIVE_90_PAYLOAD,
@@ -54,6 +55,7 @@ _SELECTED_SEGMENT_RESULT_KEY = "selected_segment_result"
 _SELECTED_SEGMENT_RECIPIENTS_KEY = "selected_segment_recipients"
 
 _SEGMENT_CALLBACKS = {
+    SEGMENTS_ALL_CLIENTS_PAYLOAD,
     SEGMENTS_ACTIVE_7_PAYLOAD,
     SEGMENTS_ACTIVE_30_PAYLOAD,
     SEGMENTS_ACTIVE_90_PAYLOAD,
@@ -173,11 +175,16 @@ async def _show_segment(context: RouterContext, payload: str, *, notification: s
         return
 
     recipients = _map_members_to_recipients(result.members)
+    unreachable_count = max(0, result.count - len(recipients))
     logger.info(
-        "client_segment_ui_loaded segment_type=%s segment_count=%s mapped_recipient_count=%s",
+        "MAX client segments diagnostic: segment_type=%s yclients_clients_count=%s reachable_count=%s unreachable_count=%s active_days=%s master_id_present=%s no_future_bookings=%s",
         result.segment_type,
         result.count,
         len(recipients),
+        unreachable_count,
+        _active_days(result.segment_type),
+        False,
+        result.segment_type == "no_future_bookings",
     )
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SEGMENT_PAYLOAD_KEY, payload)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SEGMENT_RESULT_KEY, result)
@@ -186,12 +193,19 @@ async def _show_segment(context: RouterContext, payload: str, *, notification: s
 
     text = format_segment_summary(result)
     if result.count:
-        text += f"\n\n{CLIENT_SEGMENTS_BROADCAST_LIMIT_TEXT}\nДоступно для рассылки: {len(recipients)} из {result.count}."
+        text += (
+            f"\n\nКлиентов в YClients: {result.count}"
+            f"\nДоступны для рассылки в MAX: {len(recipients)}"
+            f"\nНедоступны в MAX: {unreachable_count}"
+            f"\n\n{CLIENT_SEGMENTS_BROADCAST_LIMIT_TEXT}"
+        )
     await context.send_text(text, keyboard=client_segment_result_keyboard(can_broadcast=bool(recipients)))
 
 
 async def _load_segment(payload: str) -> ClientSegmentResult:
     service = ClientSegmentService(_yclients_settings_repository())
+    if payload == SEGMENTS_ALL_CLIENTS_PAYLOAD:
+        return await service.get_all_clients()
     if payload == SEGMENTS_ACTIVE_7_PAYLOAD:
         return await service.get_active_clients(7)
     if payload == SEGMENTS_ACTIVE_30_PAYLOAD:
@@ -265,6 +279,15 @@ def _clear_segment_state(context: RouterContext) -> None:
 
 def _normalize_phone(value: str | None) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _active_days(segment_type: str) -> int | None:
+    if segment_type.startswith("active_"):
+        try:
+            return int(segment_type.removeprefix("active_"))
+        except ValueError:
+            return None
+    return None
 
 
 def _user_id(context: RouterContext) -> str | None:

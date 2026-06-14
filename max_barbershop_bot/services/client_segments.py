@@ -32,6 +32,7 @@ FUTURE_LOOKAHEAD_DAYS = 365
 class ClientSegmentType(StrEnum):
     """Supported client segments."""
 
+    ALL_CLIENTS = "all_clients"
     ACTIVE_7 = "active_7"
     ACTIVE_30 = "active_30"
     ACTIVE_90 = "active_90"
@@ -78,14 +79,16 @@ class ClientSegmentsLoadError(RuntimeError):
 
 
 SEGMENT_TITLES = {
+    ClientSegmentType.ALL_CLIENTS: "👥 Все клиенты",
     ClientSegmentType.ACTIVE_7: "🔥 Активные за 7 дней",
     ClientSegmentType.ACTIVE_30: "🔥 Активные за 30 дней",
     ClientSegmentType.ACTIVE_90: "🔥 Активные за 90 дней",
     ClientSegmentType.LOST: "😔 Потерянные клиенты",
-    ClientSegmentType.NO_FUTURE_BOOKINGS: "📭 Без будущих записей",
+    ClientSegmentType.NO_FUTURE_BOOKINGS: "📅 Без будущей записи",
 }
 
 SEGMENT_DESCRIPTIONS = {
+    ClientSegmentType.ALL_CLIENTS: "Все клиенты, которых бот может идентифицировать и которым потенциально можно отправлять уведомления.",
     ClientSegmentType.ACTIVE_7: "Клиенты, которые были активны за последние 7 дней.",
     ClientSegmentType.ACTIVE_30: "Клиенты, которые были активны за последние 30 дней.",
     ClientSegmentType.ACTIVE_90: "Клиенты, которые были активны за последние 90 дней.",
@@ -99,6 +102,25 @@ class ClientSegmentService:
 
     def __init__(self, settings_repository: YClientsSettingsRepository) -> None:
         self._settings_repository = settings_repository
+
+    async def get_all_clients(self) -> ClientSegmentResult:
+        settings = self._require_settings()
+        try:
+            client_rows = await self._fetch_clients(settings)
+        except YClientsError as exc:
+            logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", ClientSegmentType.ALL_CLIENTS.value, type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_yclients_error") from exc
+
+        members: dict[str, _MemberAccumulator] = {}
+        for client_row in client_rows:
+            identity = _client_identity(client_row)
+            key = _business_client_key(identity)
+            if key:
+                members[key] = _MemberAccumulator.from_identity(identity)
+
+        result = self._build_result(ClientSegmentType.ALL_CLIENTS, members.values(), settings.branch_timezone, {"clients_count": len(client_rows)})
+        logger.info("client_segment_loaded segment_type=%s segment_count=%s clients_count=%s", ClientSegmentType.ALL_CLIENTS.value, result.count, len(client_rows))
+        return result
 
     async def get_active_clients(self, days: int) -> ClientSegmentResult:
         if days not in {7, 30, 90}:
