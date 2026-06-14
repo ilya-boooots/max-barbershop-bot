@@ -346,6 +346,21 @@ class UsersRepository:
             ).fetchall()
         return [user for row in rows if (user := _row_to_user(row)) is not None]
 
+
+    def list_users_for_broadcast_audience(self, *, platform: str = PLATFORM_MAX) -> list[User]:
+        """Return local users considered for broadcast audience diagnostics."""
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM users
+                WHERE platform = ?
+                ORDER BY id ASC
+                """,
+                (_required_text(platform, "platform"),),
+            ).fetchall()
+        return [user for row in rows if (user := _row_to_user(row)) is not None]
+
     def update_notification_settings(
         self,
         platform_user_id: str,

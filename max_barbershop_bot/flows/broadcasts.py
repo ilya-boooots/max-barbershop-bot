@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from os import getenv
+from uuid import uuid4
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
@@ -12,12 +15,14 @@ from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.services.broadcasts import (
     ALL_USERS_AUDIENCE,
+    SELF_AUDIENCE,
     BroadcastAudience,
     BroadcastRecipient,
     build_broadcast_confirm_text,
     build_broadcast_preview,
+    build_recipients_from_users,
     format_broadcast_report,
-    get_all_registered_recipients,
+    BroadcastSendReport,
     send_one_time_broadcast,
     validate_broadcast_text,
 )
@@ -25,6 +30,7 @@ from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.ui.buttons import (
     ADMIN_BROADCASTS_PAYLOAD,
     BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD,
+    BROADCAST_AUDIENCE_SELF_PAYLOAD,
     BROADCAST_BACK_PAYLOAD,
     BROADCAST_CONFIRM_SEND_PAYLOAD,
     BROADCAST_HOME_PAYLOAD,
@@ -54,7 +60,13 @@ _BROADCAST_AUDIENCE_LABEL_KEY = "broadcast_audience_label"
 _BROADCAST_RECIPIENT_COUNT_KEY = "broadcast_recipient_count"
 _BROADCAST_RECIPIENTS_KEY = "broadcast_recipients"
 _BROADCAST_IN_PROGRESS_KEY = "broadcast_in_progress"
+_BROADCAST_SEND_TOKEN_KEY = "broadcast_send_token"
+_BROADCAST_SKIPPED_DISABLED_KEY = "broadcast_skipped_disabled"
+_BROADCAST_SKIPPED_MISSING_KEY = "broadcast_skipped_missing"
 _BROADCAST_RETURN_SCREEN_KEY = "broadcast_return_screen"
+
+logger = logging.getLogger(__name__)
+_BROADCAST_SEND_LOCK = asyncio.Lock()
 
 
 def register_broadcast_routes(router: Router) -> None:
@@ -65,6 +77,7 @@ def register_broadcast_routes(router: Router) -> None:
     router.on_callback(BROADCAST_PREVIEW_NEXT_PAYLOAD, handle_preview_next)
     router.on_callback(BROADCAST_PREVIEW_EDIT_PAYLOAD, handle_preview_edit)
     router.on_callback(BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD, handle_audience_all_users)
+    router.on_callback(BROADCAST_AUDIENCE_SELF_PAYLOAD, handle_audience_self)
     router.on_callback(BROADCAST_CONFIRM_SEND_PAYLOAD, handle_confirm_send)
     router.on_callback(BROADCAST_NEW_PAYLOAD, handle_one_time_start)
     router.on_callback(BROADCAST_BACK_PAYLOAD, handle_broadcast_back)
@@ -90,7 +103,7 @@ async def handle_one_time_start(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context):
+    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
         await _send_sending_in_progress(context)
         return
     await _answer_callback_if_needed(context, "Введите текст рассылки ✉️")
@@ -105,7 +118,7 @@ async def handle_text_input(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context):
+    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
         await _send_sending_in_progress(context)
         return
     validation = validate_broadcast_text(context.event.text)
@@ -127,7 +140,7 @@ async def handle_preview_next(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context):
+    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
         await _send_sending_in_progress(context)
         return
     text = _broadcast_text(context)
@@ -145,7 +158,7 @@ async def handle_preview_edit(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context):
+    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
         await _send_sending_in_progress(context)
         return
     await _answer_callback_if_needed(context, "Изменим текст ✏️")
@@ -156,10 +169,20 @@ async def handle_preview_edit(context: RouterContext) -> None:
 async def handle_audience_all_users(context: RouterContext) -> None:
     """Select all local registered users with enabled notifications."""
 
+    await _select_audience(context, ALL_USERS_AUDIENCE)
+
+
+async def handle_audience_self(context: RouterContext) -> None:
+    """Select current admin as a test recipient."""
+
+    await _select_audience(context, SELF_AUDIENCE)
+
+
+async def _select_audience(context: RouterContext, audience: BroadcastAudience) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context):
+    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
         await _send_sending_in_progress(context)
         return
     text = _broadcast_text(context)
@@ -167,11 +190,13 @@ async def handle_audience_all_users(context: RouterContext) -> None:
         await _open_text_step(context)
         return
 
-    recipients = get_all_registered_recipients(_users_repository())
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, ALL_USERS_AUDIENCE.key)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, ALL_USERS_AUDIENCE.label)
+    recipients, skipped_disabled, skipped_missing = _resolve_audience_recipients(context, audience)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience.key)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience.label)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENT_COUNT_KEY, len(recipients))
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENTS_KEY, recipients)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_DISABLED_KEY, skipped_disabled)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_MISSING_KEY, skipped_missing)
 
     await _answer_callback_if_needed(context, "Аудитория выбрана ✅")
     _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
@@ -180,7 +205,7 @@ async def handle_audience_all_users(context: RouterContext) -> None:
         return
     await context.send_text(
         build_broadcast_confirm_text(
-            audience_label=ALL_USERS_AUDIENCE.label,
+            audience_label=audience.label,
             recipient_count=len(recipients),
             text=text,
         ),
@@ -236,7 +261,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context):
+    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
         await _send_sending_in_progress(context)
         return
 
@@ -250,20 +275,57 @@ async def handle_confirm_send(context: RouterContext) -> None:
         await context.send_text(BROADCAST_NO_RECIPIENTS_TEXT, keyboard=broadcast_confirm_keyboard(can_send=False))
         return
 
+    send_token = uuid4().hex
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_IN_PROGRESS_KEY, True)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SEND_TOKEN_KEY, send_token)
     state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_SENDING_SCREEN)
     await _answer_callback_if_needed(context, "Отправляем рассылку 🚀")
     await context.send_text(BROADCAST_SENDING_TEXT)
 
-    audience = _broadcast_audience(context)
-    report = await send_one_time_broadcast(
-        sender=context.sender,
-        users_repository=_users_repository(),
-        database_path=_database_path(),
-        text=text,
-        recipients=recipients,
-        audience=audience,
-        actor_platform_user_id=context.event.platform_user_id,
+    if _BROADCAST_SEND_LOCK.locked():
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_IN_PROGRESS_KEY, False)
+        await _send_sending_in_progress(context)
+        return
+
+    try:
+        async with _BROADCAST_SEND_LOCK:
+            if state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SEND_TOKEN_KEY) != send_token:
+                await context.send_text("⚠️ Эта рассылка уже отправляется или была отправлена.")
+                return
+            audience = _broadcast_audience(context)
+            report = await send_one_time_broadcast(
+                sender=context.sender,
+                users_repository=_users_repository(),
+                database_path=_database_path(),
+                text=text,
+                recipients=recipients,
+                audience=audience,
+                actor_platform_user_id=context.event.platform_user_id,
+            )
+    except Exception as exc:
+        logger.warning(
+            "MAX broadcast diagnostic: send_failed actor_platform_user_id_present=%s audience=%s recipients_count=%s lock_active=%s error_class=%s",
+            bool(context.event.platform_user_id),
+            _broadcast_audience(context).key,
+            len(recipients),
+            _BROADCAST_SEND_LOCK.locked(),
+            type(exc).__name__,
+            exc_info=True,
+        )
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_IN_PROGRESS_KEY, False)
+        await context.send_text("⚠️ Не удалось завершить рассылку. Попробуйте позже.", keyboard=broadcast_report_keyboard())
+        return
+
+    report = BroadcastSendReport(
+        total=report.total,
+        sent=report.sent,
+        failed=report.failed,
+        blocked=report.blocked,
+        stopped=report.stopped,
+        skipped_notifications_disabled=_state_int(context, _BROADCAST_SKIPPED_DISABLED_KEY),
+        skipped_missing_recipient_id=_state_int(context, _BROADCAST_SKIPPED_MISSING_KEY),
+        rate_limited=report.rate_limited,
+        broadcast_id=report.broadcast_id,
     )
     _clear_broadcast_state(context)
     state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_REPORT_SCREEN)
@@ -273,7 +335,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
 async def handle_broadcast_back(context: RouterContext) -> None:
     """Handle Back inside broadcast wizard."""
 
-    if _is_sending(context):
+    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
         await _send_sending_in_progress(context)
         return
     await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
@@ -306,11 +368,57 @@ async def handle_broadcast_back(context: RouterContext) -> None:
 async def handle_broadcast_home(context: RouterContext) -> None:
     """Return to main menu and clear unsent broadcast state."""
 
-    if _is_sending(context):
+    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
         await _send_sending_in_progress(context)
         return
     await _answer_callback_if_needed(context, "Открываем главное меню 🏠")
+    _clear_broadcast_state(context)
     await show_home(context)
+
+
+def _resolve_audience_recipients(
+    context: RouterContext,
+    audience: BroadcastAudience,
+) -> tuple[list[BroadcastRecipient], int, int]:
+    repo = _users_repository()
+    if audience.key == SELF_AUDIENCE.key:
+        current = repo.find_by_platform_user_id(str(_user_id(context) or ""), platform=PLATFORM_MAX) if _user_id(context) else None
+        candidates = [current] if current else []
+    else:
+        candidates = repo.list_users_for_broadcast_audience(platform=PLATFORM_MAX)
+
+    skipped_disabled = 0
+    skipped_missing = 0
+    sendable = []
+    for user in candidates:
+        if user is None:
+            continue
+        if not user.notifications_enabled:
+            skipped_disabled += 1
+            continue
+        if not (user.max_user_id or user.chat_id):
+            skipped_missing += 1
+            continue
+        sendable.append(user)
+    recipients = build_recipients_from_users(sendable)
+    logger.info(
+        "MAX broadcast diagnostic: audience_resolved actor_platform_user_id_present=%s audience=%s total_candidates=%s recipients_count=%s skipped_notifications_disabled=%s skipped_blocked_stopped=%s",
+        bool(context.event.platform_user_id),
+        audience.key,
+        len(candidates),
+        len(recipients),
+        skipped_disabled,
+        0,
+    )
+    return recipients, skipped_disabled, skipped_missing
+
+
+def _state_int(context: RouterContext, key: str) -> int:
+    value = state.get_state_data_value(_user_id(context), _chat_id(context), key)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _can_open_broadcasts(context: RouterContext) -> bool:

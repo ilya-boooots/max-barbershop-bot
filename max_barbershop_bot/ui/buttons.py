@@ -75,7 +75,8 @@ NOTIFICATION_HISTORY_DETAIL_PAYLOAD_PREFIX = "notification_history:detail:"
 BROADCAST_ONE_TIME_START_PAYLOAD = "broadcast:one_time:start"
 BROADCAST_PREVIEW_NEXT_PAYLOAD = "broadcast:preview:next"
 BROADCAST_PREVIEW_EDIT_PAYLOAD = "broadcast:preview:edit"
-BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD = "broadcast:audience:all_users"
+BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD = "broadcast:aud:all"
+BROADCAST_AUDIENCE_SELF_PAYLOAD = "broadcast:aud:self"
 BROADCAST_SEGMENTS_PAYLOAD = "broadcast:segments"
 SEGMENTS_ACTIVE_7_PAYLOAD = "segments:active:7"
 SEGMENTS_ACTIVE_30_PAYLOAD = "segments:active:30"
@@ -581,7 +582,8 @@ def broadcast_audience_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="👥 Все пользователи", payload=BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD)],
+            [MaxButton(text="👥 Все клиенты", payload=BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD)],
+            [MaxButton(text="🧪 Отправить себе", payload=BROADCAST_AUDIENCE_SELF_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
         ]
@@ -593,7 +595,7 @@ def broadcast_confirm_keyboard(*, can_send: bool = True) -> MaxInlineKeyboard:
 
     rows: list[list[MaxButton]] = []
     if can_send:
-        rows.append([MaxButton(text="🚀 Отправить", payload=BROADCAST_CONFIRM_SEND_PAYLOAD)])
+        rows.append([MaxButton(text="✅ Отправить", payload=BROADCAST_CONFIRM_SEND_PAYLOAD)])
     rows.extend(
         [
             [MaxButton(text="✏️ Изменить текст", payload=BROADCAST_PREVIEW_EDIT_PAYLOAD)],
@@ -609,7 +611,7 @@ def broadcast_report_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="📣 Новая рассылка", payload=BROADCAST_NEW_PAYLOAD)],
+            [MaxButton(text="✉️ Новая рассылка", payload=BROADCAST_NEW_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
         ]
     )
