@@ -113,6 +113,12 @@ def can_view_statistics(role: str) -> bool:
     return normalize_role(role) in {ROLE_MANAGER, ROLE_DEVELOPER}
 
 
+def can_view_admin_bookings(role: str) -> bool:
+    """Allow admin bookings for managers, admins and developers, like Telegram."""
+
+    return is_manager_or_higher(role)
+
+
 def can_view_yclients(role: str) -> bool:
     """Allow YClients section for managers and developers, like Telegram."""
 

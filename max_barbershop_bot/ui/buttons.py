@@ -8,6 +8,7 @@ from max_barbershop_bot.core.permissions import (
     ROLE_MANAGER,
     can_assign_role,
     can_manage_roles,
+    can_view_admin_bookings,
     can_view_broadcasts,
     can_view_contacts_settings,
     can_view_diagnostics_settings,
@@ -31,6 +32,7 @@ ADMIN_STAFF_PAYLOAD = "admin:staff"
 ADMIN_SETTINGS_PAYLOAD = "admin:settings"
 ADMIN_BROADCASTS_PAYLOAD = "admin:broadcasts"
 ADMIN_STATISTICS_PAYLOAD = "admin:statistics"
+ADMIN_BOOKINGS_OPEN_PAYLOAD = "admbook:open"
 ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
 ADMIN_NOTIFICATION_HISTORY_PAYLOAD = "admin:notification_history"
 
@@ -66,6 +68,14 @@ STATISTICS_30_DAYS_PAYLOAD = "stats:period:30"
 STATISTICS_90_DAYS_PAYLOAD = "stats:period:90"
 STATISTICS_BACK_PAYLOAD = "stats:back"
 STATISTICS_HOME_PAYLOAD = "stats:home"
+ADMIN_BOOKINGS_TODAY_PAYLOAD = "admbook:day:today"
+ADMIN_BOOKINGS_TOMORROW_PAYLOAD = "admbook:day:tomorrow"
+ADMIN_BOOKINGS_REFRESH_PAYLOAD = "admbook:refresh"
+ADMIN_BOOKINGS_BACK_PAYLOAD = "admbook:back"
+ADMIN_BOOKINGS_HOME_PAYLOAD = "admbook:home"
+ADMIN_BOOKINGS_ITEM_PAYLOAD_PREFIX = "admbook:item:"
+ADMIN_BOOKINGS_MASTER_PAYLOAD_PREFIX = "admbook:master:"
+ADMIN_BOOKINGS_STATUS_PAYLOAD_PREFIX = "admbook:status:"
 
 NOTIFICATION_HISTORY_FAILED_PAYLOAD = "notification_history:failed"
 NOTIFICATION_HISTORY_REFRESH_PAYLOAD = "notification_history:refresh"
@@ -168,6 +178,7 @@ MENU_PAYLOADS = frozenset(
         ADMIN_SETTINGS_PAYLOAD,
         ADMIN_BROADCASTS_PAYLOAD,
         ADMIN_STATISTICS_PAYLOAD,
+        ADMIN_BOOKINGS_OPEN_PAYLOAD,
         ADMIN_YCLIENTS_PAYLOAD,
         ADMIN_NOTIFICATION_HISTORY_PAYLOAD,
     }
@@ -186,6 +197,8 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     ]
     if can_view_statistics(normalized_role):
         rows.append([MaxButton(text="📊 Статистика", payload=ADMIN_STATISTICS_PAYLOAD)])
+    if can_view_admin_bookings(normalized_role):
+        rows.append([MaxButton(text="📋 Записи", payload=ADMIN_BOOKINGS_OPEN_PAYLOAD)])
     if can_view_staff(normalized_role):
         rows.append([MaxButton(text="👥 Персонал", payload=ADMIN_STAFF_PAYLOAD)])
     if can_view_settings(normalized_role):
@@ -409,6 +422,67 @@ def statistics_result_keyboard() -> MaxInlineKeyboard:
         [
             [MaxButton(text="⬅️ Назад", payload=STATISTICS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=STATISTICS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def admin_bookings_list_keyboard(items: list[str], *, page: int, max_page: int) -> MaxInlineKeyboard:
+    """Build Telegram-equivalent admin bookings list keyboard with indexed callbacks."""
+
+    rows: list[list[MaxButton]] = [
+        [
+            MaxButton(text="📅 Сегодня", payload=ADMIN_BOOKINGS_TODAY_PAYLOAD),
+            MaxButton(text="📅 Завтра", payload=ADMIN_BOOKINGS_TOMORROW_PAYLOAD),
+        ],
+        [
+            MaxButton(text="👤 Мастер", payload="admbook:filter:master"),
+            MaxButton(text="🧾 Статус", payload="admbook:filter:status"),
+        ],
+        [MaxButton(text="🔄 Обновить", payload=ADMIN_BOOKINGS_REFRESH_PAYLOAD)],
+    ]
+    for index, label in enumerate(items[:10]):
+        rows.append([MaxButton(text=label, payload=f"{ADMIN_BOOKINGS_ITEM_PAYLOAD_PREFIX}{index}")])
+    navigation: list[MaxButton] = []
+    if page > 0:
+        navigation.append(MaxButton(text="⬅️", payload=f"admbook:page:{page - 1}"))
+    if page < max_page and page < 9:
+        navigation.append(MaxButton(text="➡️", payload=f"admbook:page:{page + 1}"))
+    if navigation:
+        rows.append(navigation)
+    rows.append([MaxButton(text="⬅️ Назад", payload=ADMIN_BOOKINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=ADMIN_BOOKINGS_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def admin_bookings_master_keyboard(masters: list[tuple[str, str]]) -> MaxInlineKeyboard:
+    """Build indexed master filter keyboard without raw ids in payloads."""
+
+    rows: list[list[MaxButton]] = [[MaxButton(text="🎲 Все мастера", payload="admbook:master:all")]]
+    for index, (_, name) in enumerate(masters[:30]):
+        rows.append([MaxButton(text=f"👤 {name}", payload=f"{ADMIN_BOOKINGS_MASTER_PAYLOAD_PREFIX}{index}")])
+    rows.append([MaxButton(text="⬅️ Назад", payload=ADMIN_BOOKINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=ADMIN_BOOKINGS_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def admin_bookings_status_keyboard(statuses: list[str]) -> MaxInlineKeyboard:
+    """Build indexed status filter keyboard."""
+
+    rows: list[list[MaxButton]] = [[MaxButton(text="📌 Все статусы", payload="admbook:status:all")]]
+    for index, status in enumerate(statuses[:30]):
+        rows.append([MaxButton(text=f"🧾 {status}", payload=f"{ADMIN_BOOKINGS_STATUS_PAYLOAD_PREFIX}{index}")])
+    rows.append([MaxButton(text="⬅️ Назад", payload=ADMIN_BOOKINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=ADMIN_BOOKINGS_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def admin_booking_detail_keyboard() -> MaxInlineKeyboard:
+    """Build admin booking detail navigation keyboard."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=ADMIN_BOOKINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=ADMIN_BOOKINGS_HOME_PAYLOAD)],
         ]
     )
 
