@@ -16,7 +16,8 @@ from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
-from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
+from max_barbershop_bot.services.company_time import normalize_branch_timezone, zoneinfo_or_default
+from max_barbershop_bot.services.contacts import ContactsService
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -58,6 +59,8 @@ class BookingNotificationContext:
     booking_datetime: datetime
     service_name: str
     master_name: str
+    client_name: str = ""
+    branch_address: str | None = None
     yclients_client_id: str | None = None
     max_user_id: str | None = None
     chat_id: str | None = None
@@ -72,15 +75,20 @@ class DueReminder:
     record: dict[str, Any]
 
 
-def build_reminder_schedule(booking_datetime: datetime, timezone_name: str) -> dict[str, datetime]:
-    """Return 48h/6h/2h scheduled moments in the branch timezone."""
+def build_reminder_schedule(booking_datetime: datetime, timezone_name: str, *, now: datetime | None = None) -> dict[str, datetime]:
+    """Return Telegram-aligned scheduled moments in the branch timezone."""
 
     branch_timezone = _zoneinfo(timezone_name)
     local_dt = _ensure_timezone(booking_datetime, branch_timezone)
-    return {
+    now_local = _ensure_timezone(now or datetime.now(UTC), branch_timezone)
+    schedule = {
         notification_type: local_dt - offset
         for notification_type, offset in REMINDER_OFFSETS.items()
     }
+    confirmation_due = _calculate_telegram_confirmation_due(local_dt, now_local)
+    if confirmation_due is not None:
+        schedule[BOOKING_REMINDER_48H] = confirmation_due
+    return schedule
 
 
 def render_booking_notification_text(context: BookingNotificationContext, timezone_name: str) -> str:
@@ -92,6 +100,8 @@ def render_booking_notification_text(context: BookingNotificationContext, timezo
     time_text = dt_local.strftime("%H:%M")
     service_name = context.service_name or "услуга"
     master_name = context.master_name or "ваш мастер"
+    client_name = _first_name(context.client_name) or "Здравствуйте"
+    date_label = _date_label_for(dt_local, datetime.now(branch_timezone))
 
     if context.notification_type == BOOKING_CONFIRMATION_IMMEDIATE:
         return (
@@ -102,12 +112,11 @@ def render_booking_notification_text(context: BookingNotificationContext, timezo
             f"Время: {time_text}"
         )
     if context.notification_type == BOOKING_REMINDER_48H:
+        date_fragment = f"{date_label} ({date_text})" if date_label else date_text
         return (
-            f"Напоминаем о записи через 48 часов ⏰\n\n"
-            f"Услуга: {service_name}\n"
-            f"Мастер: {master_name}\n"
-            f"Дата: {date_text}\n"
-            f"Время: {time_text}"
+            f"{client_name}, здравствуйте! {master_name} ждёт вас {date_fragment} "
+            f"на услугу \"{service_name}\" к {time_text}.\n\n"
+            "Подтвердите, пожалуйста, запись 👇"
         )
     if context.notification_type == BOOKING_REMINDER_6H:
         return (
@@ -117,12 +126,14 @@ def render_booking_notification_text(context: BookingNotificationContext, timezo
             f"Время: {time_text}"
         )
     if context.notification_type == BOOKING_REMINDER_2H:
-        return (
-            "До вашей записи осталось 2 часа ⏰\n\n"
-            f"Услуга: {service_name}\n"
-            f"Мастер: {master_name}\n"
-            f"Время: {time_text}"
-        )
+        lines = [
+            f"{client_name}, вы записаны на услугу «{service_name}», ждём вас {date_text} к {time_text}.",
+            f"Ваш мастер: {master_name}",
+            "",
+        ]
+        if context.branch_address:
+            lines.extend([f"📍 Адрес: {context.branch_address}", ""])
+        return "\n".join(lines)
     raise ValueError(f"Неизвестный тип уведомления: {context.notification_type}")
 
 
@@ -257,6 +268,14 @@ async def get_due_reminders(
                 continue
             user = UsersRepository(database_path).find_by_platform_user_id(attribution.platform_user_id, platform=attribution.platform)
             if user is None or not user.notifications_enabled:
+                _log_reminder_diagnostic(
+                    notification_type="all",
+                    platform_user_id=attribution.platform_user_id,
+                    yclients_record_id=attribution.yclients_record_id,
+                    company_timezone=branch_timezone_name,
+                    skipped_reason="notifications_disabled_or_user_missing",
+                    blocked_or_stopped=user is not None and not user.notifications_enabled,
+                )
                 continue
             try:
                 payload = await service.get_booking_details(
@@ -273,14 +292,27 @@ async def get_due_reminders(
                 continue
             record = _extract_record(payload)
             if not _record_is_active(record):
+                _record_skipped_reminders(
+                    database_path,
+                    attribution=attribution,
+                    timezone_name=branch_timezone_name,
+                    reason="record_not_active",
+                )
                 continue
             booking_datetime = _record_datetime(record, branch_timezone_name)
             if booking_datetime is None:
                 continue
             booking_datetime = _ensure_timezone(booking_datetime, branch_timezone)
             if booking_datetime <= now_local:
+                _record_skipped_reminders(
+                    database_path,
+                    attribution=attribution,
+                    timezone_name=branch_timezone_name,
+                    reason="booking_in_past",
+                )
                 continue
-            schedule = build_reminder_schedule(booking_datetime, branch_timezone_name)
+            schedule = build_reminder_schedule(booking_datetime, branch_timezone_name, now=now_local)
+            branch_address = await _resolve_branch_address(database_path)
             for notification_type, scheduled_for in schedule.items():
                 if not (scheduled_for <= now_local < booking_datetime):
                     continue
@@ -304,6 +336,8 @@ async def get_due_reminders(
                             booking_datetime=booking_datetime,
                             service_name=_record_service_name(record),
                             master_name=_record_master_name(record),
+                            client_name=_record_client_name(record),
+                            branch_address=branch_address,
                             scheduled_for=scheduled_for,
                         ),
                         record=record,
@@ -457,3 +491,95 @@ def _iso(value: datetime | None) -> str | None:
 
 def _clean(value: Any) -> str:
     return str(value).strip() if value is not None else ""
+
+
+def _calculate_telegram_confirmation_due(booking_datetime: datetime, now: datetime) -> datetime | None:
+    time_to_visit = booking_datetime - now
+    if time_to_visit <= timedelta(0):
+        return None
+    if time_to_visit >= timedelta(hours=48):
+        return booking_datetime - timedelta(hours=48)
+    if time_to_visit >= timedelta(hours=6):
+        return booking_datetime - timedelta(hours=6)
+    return now
+
+
+def _date_label_for(dt_local: datetime, now_local: datetime) -> str:
+    delta_days = (dt_local.date() - now_local.date()).days
+    if delta_days == 0:
+        return "сегодня"
+    if delta_days == 1:
+        return "завтра"
+    if delta_days == 2:
+        return "послезавтра"
+    return ""
+
+
+def _first_name(fullname: str) -> str:
+    return " ".join(_clean(fullname).split()).split(" ")[0] if _clean(fullname) else ""
+
+
+def _record_client_name(record: dict[str, Any]) -> str:
+    client = record.get("client")
+    if isinstance(client, dict):
+        name = _clean(client.get("name") or client.get("fullname"))
+        if name:
+            return name
+    return _clean(record.get("fullname") or record.get("client_name"))
+
+
+async def _resolve_branch_address(database_path: str) -> str | None:
+    try:
+        contacts = await ContactsService(YClientsSettingsRepository(database_path)).get_contacts()
+    except Exception:
+        logger.warning("MAX booking reminder diagnostic: skipped_reason=branch_address_unavailable error_class=unexpected", exc_info=True)
+        return None
+    return _clean(contacts.address) or None
+
+
+def _record_skipped_reminders(database_path: str, *, attribution: Any, timezone_name: str, reason: str) -> None:
+    schedule = {BOOKING_REMINDER_48H: None, BOOKING_REMINDER_2H: None}
+    for notification_type in schedule:
+        if get_notification_history(
+            database_path,
+            platform=PLATFORM_MAX,
+            platform_user_id=attribution.platform_user_id,
+            yclients_record_id=attribution.yclients_record_id,
+            notification_type=notification_type,
+        ):
+            continue
+        mark_notification_history_skipped(
+            database_path,
+            platform=PLATFORM_MAX,
+            platform_user_id=attribution.platform_user_id,
+            yclients_record_id=attribution.yclients_record_id,
+            notification_type=notification_type,
+            scheduled_for=None,
+            reason=reason,
+            metadata={"company_timezone": timezone_name},
+        )
+        _log_reminder_diagnostic(
+            notification_type=notification_type,
+            platform_user_id=attribution.platform_user_id,
+            yclients_record_id=attribution.yclients_record_id,
+            company_timezone=timezone_name,
+            yclients_record_active=False,
+            canceled_or_rescheduled=reason == "record_not_active",
+            skipped_reason=reason,
+        )
+
+
+def _log_reminder_diagnostic(**fields: Any) -> None:
+    safe_fields = {
+        key: value
+        for key, value in fields.items()
+        if key in {
+            "notification_type", "due_at", "booking_datetime", "company_timezone",
+            "history_existing", "yclients_record_active", "canceled_or_rescheduled",
+            "send_attempted", "send_status", "delivery_status", "blocked_or_stopped",
+            "skipped_reason", "error_class", "http_status", "trace_id",
+        }
+    }
+    safe_fields["platform_user_id_present"] = bool(fields.get("platform_user_id"))
+    safe_fields["yclients_record_id_present"] = bool(fields.get("yclients_record_id"))
+    logger.info("MAX booking reminder diagnostic: %s", safe_fields)
