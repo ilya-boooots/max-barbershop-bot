@@ -78,6 +78,7 @@ BROADCAST_PREVIEW_EDIT_PAYLOAD = "broadcast:preview:edit"
 BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD = "broadcast:aud:all"
 BROADCAST_AUDIENCE_SELF_PAYLOAD = "broadcast:aud:self"
 BROADCAST_SEGMENTS_PAYLOAD = "broadcast:segments"
+SEGMENTS_ALL_CLIENTS_PAYLOAD = "segments:all_clients"
 SEGMENTS_ACTIVE_7_PAYLOAD = "segments:active:7"
 SEGMENTS_ACTIVE_30_PAYLOAD = "segments:active:30"
 SEGMENTS_ACTIVE_90_PAYLOAD = "segments:active:90"
@@ -510,11 +511,12 @@ def client_segments_menu_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
+            [MaxButton(text="👥 Все клиенты", payload=SEGMENTS_ALL_CLIENTS_PAYLOAD)],
             [MaxButton(text="🔥 Активные за 7 дней", payload=SEGMENTS_ACTIVE_7_PAYLOAD)],
-            [MaxButton(text="📆 Активные за 30 дней", payload=SEGMENTS_ACTIVE_30_PAYLOAD)],
-            [MaxButton(text="🗓 Активные за 90 дней", payload=SEGMENTS_ACTIVE_90_PAYLOAD)],
+            [MaxButton(text="🔥 Активные за 30 дней", payload=SEGMENTS_ACTIVE_30_PAYLOAD)],
+            [MaxButton(text="🔥 Активные за 90 дней", payload=SEGMENTS_ACTIVE_90_PAYLOAD)],
             [MaxButton(text="😔 Потерянные клиенты", payload=LOST_CLIENTS_OPEN_PAYLOAD)],
-            [MaxButton(text="📭 Без будущих записей", payload=SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD)],
+            [MaxButton(text="📅 Без будущей записи", payload=SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
         ]

@@ -285,6 +285,7 @@ def format_lost_clients_summary(result: LostClientsResult, *, limit: int = LOST_
         "",
         f"Всего: {result.total}",
         f"Доступны для рассылки в MAX: {result.mappable_count}",
+        f"Недоступны в MAX: {max(0, result.total - result.mappable_count)}",
         "",
     ]
     shown_clients = result.clients[: max(1, limit)]

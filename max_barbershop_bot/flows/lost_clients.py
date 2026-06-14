@@ -138,7 +138,15 @@ async def _show_lost_clients(context: RouterContext, *, notification: str = "Ð—Ð
         return
 
     recipients = lost_clients_to_broadcast_recipients(result.clients)
-    logger.info("lost_clients_ui_loaded total=%s mappable_count=%s", result.total, len(recipients))
+    logger.info(
+        "MAX client segments diagnostic: segment_type=lost yclients_clients_count=%s reachable_count=%s unreachable_count=%s active_days=%s master_id_present=%s no_future_bookings=%s",
+        result.total,
+        len(recipients),
+        max(0, result.total - len(recipients)),
+        None,
+        False,
+        False,
+    )
     state.set_state_data_value(_user_id(context), _chat_id(context), _LOST_CLIENTS_RESULT_KEY, result)
     state.set_state_data_value(_user_id(context), _chat_id(context), _LOST_CLIENTS_RECIPIENTS_KEY, recipients)
     state.set_current_screen(_user_id(context), _chat_id(context), state.LOST_CLIENTS_SCREEN)
