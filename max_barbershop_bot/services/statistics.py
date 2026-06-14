@@ -58,8 +58,12 @@ class StatisticsResult:
     """Business statistics shown to staff."""
 
     period_label: str
+    period_start: date
+    period_end: date
     records_count: int
+    clients_count: int | None
     revenue: float | None
+    cancellations_count: int
     new_clients_count: int | None
     returning_clients_count: int | None
     max_records_count: int
@@ -92,40 +96,64 @@ async def get_statistics_for_period(days: int | None, period_name: str) -> Stati
             service = YClientsServiceLayer(client, company_id=settings.company_id)
             rows = await get_records_for_period_from_yclients(service, period=period)
             detailed_rows = await _load_record_details(service, rows)
-            valid_rows = [row for row in detailed_rows if _is_valid_business_record(row)]
-            revenue = calculate_revenue(valid_rows)
+            business_rows = detailed_rows
+            revenue_rows = [row for row in business_rows if _is_revenue_record(row)]
+            revenue = calculate_revenue(revenue_rows)
+            clients_count = calculate_unique_clients(business_rows)
+            cancellations_count = calculate_cancellations(business_rows)
             new_count, returning_count = await calculate_new_returning_clients(
                 service,
                 period=period,
-                records=valid_rows,
+                records=revenue_rows,
             )
-            attribution = calculate_platform_attribution(valid_rows, revenue_available=revenue is not None)
+            attribution = calculate_platform_attribution(business_rows, revenue_available=revenue is not None)
     except YClientsError as exc:
         logger.warning(
-            "Statistics YClients load failed: operation=get_statistics period=%s error_class=%s status_code=%s",
+            "MAX statistics diagnostic: period=%s start_date=%s end_date=%s branch_timezone=%s "
+            "yclients_error_category=%s http_status=%s",
             period.label,
+            period.start.isoformat(),
+            period.end.isoformat(),
+            settings.branch_timezone or DEFAULT_BRANCH_TIMEZONE,
             type(exc).__name__,
             exc.status_code,
         )
         raise StatisticsLoadError("YClients request failed") from exc
     except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
         logger.warning(
-            "Statistics load failed: operation=get_statistics period=%s error_class=%s",
+            "MAX statistics diagnostic: period=%s start_date=%s end_date=%s branch_timezone=%s "
+            "yclients_error_category=%s",
             period.label,
+            period.start.isoformat(),
+            period.end.isoformat(),
+            settings.branch_timezone or DEFAULT_BRANCH_TIMEZONE,
             type(exc).__name__,
         )
         raise StatisticsLoadError("Statistics load failed") from exc
 
     logger.info(
-        "Statistics loaded: operation=get_statistics period=%s records_count=%s attribution_count=%s",
+        "MAX statistics diagnostic: period=%s start_date=%s end_date=%s branch_timezone=%s "
+        "yclients_records_count=%s bookings_count=%s clients_count=%s revenue_present=%s "
+        "cancellations_count=%s max_attribution_count=%s",
         period.label,
-        len(valid_rows),
+        period.start.isoformat(),
+        period.end.isoformat(),
+        settings.branch_timezone or DEFAULT_BRANCH_TIMEZONE,
+        len(business_rows),
+        len(business_rows),
+        clients_count,
+        revenue is not None,
+        cancellations_count,
         attribution.max_records_count,
     )
     return StatisticsResult(
         period_label=period.label,
-        records_count=len(valid_rows),
+        period_start=period.start,
+        period_end=period.end,
+        records_count=len(business_rows),
+        clients_count=clients_count,
         revenue=revenue,
+        cancellations_count=cancellations_count,
         new_clients_count=new_count,
         returning_clients_count=returning_count,
         max_records_count=attribution.max_records_count,
@@ -160,9 +188,21 @@ async def get_records_for_period_from_yclients(
 
 
 def calculate_revenue(records: list[dict[str, Any]]) -> float | None:
-    """Calculate revenue from verified paid/amount fields in YClients records."""
+    """Calculate revenue from paid YClients records, excluding cancelled/no-show rows."""
 
-    return sum(_extract_record_amount(row) for row in records)
+    return sum(_extract_paid_amount(row) for row in records)
+
+
+def calculate_unique_clients(records: list[dict[str, Any]]) -> int:
+    """Count unique YClients clients represented in period records."""
+
+    return len({_extract_client_id(row) for row in records if _extract_client_id(row)})
+
+
+def calculate_cancellations(records: list[dict[str, Any]]) -> int:
+    """Count cancelled YClients records using Telegram-compatible status rules."""
+
+    return sum(1 for row in records if _is_cancelled(row))
 
 
 async def calculate_new_returning_clients(
@@ -198,7 +238,11 @@ async def calculate_new_returning_clients(
 def calculate_platform_attribution(records: list[dict[str, Any]], *, revenue_available: bool = True) -> AttributionStats:
     """Match YClients record ids with local MAX platform attribution rows."""
 
-    record_amount_by_id = {_extract_record_id(row): _extract_record_amount(row) for row in records if _extract_record_id(row)}
+    record_amount_by_id = {
+        _extract_record_id(row): (_extract_paid_amount(row) if _is_revenue_record(row) else 0.0)
+        for row in records
+        if _extract_record_id(row)
+    }
     if not record_amount_by_id:
         return AttributionStats(max_records_count=0, max_revenue=0.0 if revenue_available else None)
 
@@ -233,8 +277,11 @@ def format_statistics_text(result: StatisticsResult) -> str:
                 "",
                 EMPTY_PERIOD_TEXT,
                 "",
-                f"📅 Записей: {result.records_count}",
+                f"🗓️ Период: {_format_period_range(result)}",
+                f"🧾 Записей: {result.records_count}",
+                f"👥 Клиентов: {_format_count(result.clients_count)}",
                 f"💰 Выручка: {format_money(result.revenue)}",
+                f"❌ Отмены: {result.cancellations_count}",
                 f"🆕 Новых клиентов: {_format_count(result.new_clients_count)}",
                 f"🔁 Возвратных клиентов: {_format_count(result.returning_clients_count)}",
                 "",
@@ -248,8 +295,11 @@ def format_statistics_text(result: StatisticsResult) -> str:
         [
             f"📊 Статистика за {result.period_label}",
             "",
-            f"📅 Записей: {result.records_count}",
+            f"🗓️ Период: {_format_period_range(result)}",
+            f"🧾 Записей: {result.records_count}",
+            f"👥 Клиентов: {_format_count(result.clients_count)}",
             f"💰 Выручка: {format_money(result.revenue)}",
+            f"❌ Отмены: {result.cancellations_count}",
             f"🆕 Новых клиентов: {_format_count(result.new_clients_count)}",
             f"🔁 Возвратных клиентов: {_format_count(result.returning_clients_count)}",
             "",
@@ -290,6 +340,19 @@ def _safe_zoneinfo(value: str | None) -> ZoneInfo:
 
 def _is_valid_business_record(item: dict[str, Any]) -> bool:
     return not _is_cancelled(item) and not _is_no_show(item)
+
+
+def _is_revenue_record(item: dict[str, Any]) -> bool:
+    return _is_valid_business_record(item) and _is_paid(item)
+
+
+def _is_paid(item: dict[str, Any]) -> bool:
+    if any(bool(item.get(key)) for key in ("paid", "is_paid", "paid_full", "fully_paid")):
+        return True
+    payment_state = _s(item.get("payment_status") or item.get("payment_state") or item.get("paid_status")).lower()
+    if payment_state in {"paid", "fully_paid", "closed"}:
+        return True
+    return _extract_paid_amount(item) > 0 and _extract_status(item) in COMPLETED_STATUSES
 
 
 def _is_cancelled(item: dict[str, Any]) -> bool:
@@ -446,6 +509,12 @@ def _s(value: Any) -> str:
 
 def _format_count(value: int | None) -> str:
     return str(value) if value is not None else "недоступно"
+
+
+def _format_period_range(result: StatisticsResult) -> str:
+    if result.period_start == result.period_end:
+        return result.period_start.strftime("%d.%m.%Y")
+    return f"{result.period_start.strftime('%d.%m.%Y')}–{result.period_end.strftime('%d.%m.%Y')}"
 
 
 def _database_path() -> str:
