@@ -70,6 +70,7 @@ STATISTICS_HOME_PAYLOAD = "stats:home"
 NOTIFICATION_HISTORY_FAILED_PAYLOAD = "notification_history:failed"
 NOTIFICATION_HISTORY_REFRESH_PAYLOAD = "notification_history:refresh"
 NOTIFICATION_HISTORY_BACK_PAYLOAD = "notification_history:back"
+NOTIFICATION_HISTORY_DIAGNOSTICS_PAYLOAD = "notification_history:diagnostics"
 NOTIFICATION_HISTORY_DETAIL_PAYLOAD_PREFIX = "notification_history:detail:"
 
 BROADCAST_ONE_TIME_START_PAYLOAD = "broadcast:one_time:start"
@@ -431,9 +432,10 @@ def notification_history_keyboard(
             ]
         )
     if failed:
+        rows.append([MaxButton(text="📋 Все уведомления", payload=NOTIFICATION_HISTORY_REFRESH_PAYLOAD)])
         rows.append([MaxButton(text="🔄 Обновить", payload=NOTIFICATION_HISTORY_FAILED_PAYLOAD)])
     else:
-        rows.append([MaxButton(text="❌ Ошибки", payload=NOTIFICATION_HISTORY_FAILED_PAYLOAD)])
+        rows.append([MaxButton(text="❌ Только ошибки", payload=NOTIFICATION_HISTORY_FAILED_PAYLOAD)])
         rows.append([MaxButton(text="🔄 Обновить", payload=NOTIFICATION_HISTORY_REFRESH_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
@@ -445,6 +447,7 @@ def notification_history_detail_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
+            [MaxButton(text="🔎 Диагностика", payload=NOTIFICATION_HISTORY_DIAGNOSTICS_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=NOTIFICATION_HISTORY_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]

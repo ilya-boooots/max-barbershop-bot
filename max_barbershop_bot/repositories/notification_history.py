@@ -103,7 +103,7 @@ class NotificationHistoryRepository:
         return self._fetch_many(
             """
             SELECT * FROM notification_history
-            WHERE status IN ('failed', 'blocked', 'stopped')
+            WHERE status IN ('failed', 'blocked', 'stopped', 'rate_limited', 'delivery_error')
                OR is_blocked = 1
                OR is_stopped = 1
                OR delivery_error_code IS NOT NULL
