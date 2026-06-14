@@ -39,6 +39,11 @@ from max_barbershop_bot.services.contacts import ContactsService
 from max_barbershop_bot.services.master_photos import MasterPhotosService
 from max_barbershop_bot.services.navigation import show_booking_stale_callback, show_home
 from max_barbershop_bot.services.registration import contains_contact_attachment, extract_contact_phone, normalize_phone
+from max_barbershop_bot.services.notifications import (
+    BOOKING_CONFIRMATION_IMMEDIATE,
+    get_notification_history,
+    mark_notification_history_skipped,
+)
 from max_barbershop_bot.services.reminders import send_immediate_confirmation
 from max_barbershop_bot.ui.buttons import (
     BOOKING_BACK_PAYLOAD,
@@ -1374,33 +1379,72 @@ async def _show_booking_success(context: RouterContext) -> None:
 async def _send_immediate_confirmation_safely(context: RouterContext, *, created, user, booking_data: dict) -> None:
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     timezone_name = booking_service.get_branch_timezone()
+    database_path = _database_path()
+    platform_user_id = user.platform_user_id
+    yclients_record_id = created.yclients_record_id
     state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SUCCESS_SCREEN)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
 
     booking_datetime = _parse_booking_datetime(created.datetime_iso or booking_data.get("selected_datetime"), timezone_name)
+    history_existing = get_notification_history(
+        database_path,
+        platform=PLATFORM_MAX,
+        platform_user_id=platform_user_id,
+        yclients_record_id=yclients_record_id,
+        notification_type=BOOKING_CONFIRMATION_IMMEDIATE,
+    )
+    contacts = await _booking_contacts_safely()
+    success_text = format_booking_success(_booking_state_snapshot(context), contacts=contacts, timezone_name=timezone_name)
+    if history_existing is not None:
+        logger.info(
+            "MAX immediate booking confirmation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s notification_type=%s notifications_enabled=%s history_existing=%s send_attempted=%s send_status=%s delivery_status=%s message_id_present=%s blocked_or_stopped=%s error_class=%s http_status=%s",
+            bool(platform_user_id), bool(yclients_record_id), BOOKING_CONFIRMATION_IMMEDIATE, user.notifications_enabled, True, False, history_existing.status, history_existing.status, bool(history_existing.message_id), bool(history_existing.is_blocked or history_existing.is_stopped), None, history_existing.delivery_status_code,
+        )
+        await context.send_text(success_text, keyboard=booking_success_keyboard(), attachments=_selected_master_photo_attachment(context))
+        return
+    if not user.notifications_enabled:
+        mark_notification_history_skipped(
+            database_path,
+            platform=PLATFORM_MAX,
+            platform_user_id=platform_user_id,
+            yclients_record_id=yclients_record_id,
+            notification_type=BOOKING_CONFIRMATION_IMMEDIATE,
+            scheduled_for=None,
+            reason="notifications_disabled",
+            metadata={"label": "подтверждение записи"},
+        )
+        logger.info(
+            "MAX immediate booking confirmation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s notification_type=%s notifications_enabled=%s history_existing=%s send_attempted=%s send_status=%s delivery_status=%s message_id_present=%s blocked_or_stopped=%s error_class=%s",
+            bool(platform_user_id), bool(yclients_record_id), BOOKING_CONFIRMATION_IMMEDIATE, False, bool(history_existing), False, "skipped", "skipped", False, False, None,
+        )
+        await context.send_text(success_text, keyboard=booking_success_keyboard(), attachments=_selected_master_photo_attachment(context))
+        return
     try:
         history = await send_immediate_confirmation(
             context.sender,
-            database_path=_database_path(),
-            platform_user_id=user.platform_user_id,
+            database_path=database_path,
+            platform_user_id=platform_user_id,
             max_user_id=user.max_user_id or context.event.max_user_id,
             chat_id=user.chat_id or context.event.chat_id,
-            yclients_record_id=created.yclients_record_id,
+            yclients_record_id=yclients_record_id,
             yclients_client_id=created.yclients_client_id or user.yclients_client_id,
             booking_datetime=booking_datetime,
             service_name=str(booking_data.get("selected_service_name") or "услуга"),
             master_name=str(booking_data.get("selected_master_name") or "ваш мастер"),
             timezone_name=timezone_name,
             keyboard=booking_success_keyboard(),
+            text_override=success_text,
+        )
+        logger.info(
+            "MAX immediate booking confirmation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s notification_type=%s notifications_enabled=%s history_existing=%s send_attempted=%s send_status=%s delivery_status=%s message_id_present=%s blocked_or_stopped=%s error_class=%s http_status=%s",
+            bool(platform_user_id), bool(yclients_record_id), BOOKING_CONFIRMATION_IMMEDIATE, True, bool(history_existing), not (history_existing and history and history.id == history_existing.id), history.status if history else None, history.status if history else None, bool(history and history.message_id), bool(history and (history.is_blocked or history.is_stopped)), None, history.delivery_status_code if history else None,
         )
         if history is None or history.status != "sent":
             await _show_booking_success(context)
     except Exception as exc:  # noqa: BLE001 - booking is already created; keep success flow intact.
         logger.warning(
-            "Booking immediate confirmation failed safely: platform_user_id=%s yclients_record_id=%s error_class=%s",
-            user.platform_user_id,
-            created.yclients_record_id,
-            type(exc).__name__,
+            "MAX immediate booking confirmation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s notification_type=%s notifications_enabled=%s history_existing=%s send_attempted=%s send_status=%s delivery_status=%s message_id_present=%s blocked_or_stopped=%s error_class=%s",
+            bool(platform_user_id), bool(yclients_record_id), BOOKING_CONFIRMATION_IMMEDIATE, user.notifications_enabled, bool(history_existing), True, "failed", "failed", False, False, type(exc).__name__,
         )
         await _show_booking_success(context)
 

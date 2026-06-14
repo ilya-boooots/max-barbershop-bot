@@ -133,6 +133,7 @@ async def send_booking_notification(
     context: BookingNotificationContext,
     timezone_name: str,
     keyboard: MaxInlineKeyboard | None = None,
+    text_override: str | None = None,
 ) -> NotificationHistoryRecord | None:
     """Send and record one booking notification without raising transport errors."""
 
@@ -154,7 +155,7 @@ async def send_booking_notification(
             reason="recipient_not_found",
         )
 
-    text = render_booking_notification_text(context, timezone_name)
+    text = text_override or render_booking_notification_text(context, timezone_name)
     try:
         return await send_business_notification(
             sender,
@@ -198,6 +199,7 @@ async def send_immediate_confirmation(
     max_user_id: str | None = None,
     chat_id: str | None = None,
     keyboard: MaxInlineKeyboard | None = None,
+    text_override: str | None = None,
 ) -> NotificationHistoryRecord | None:
     """Send the booking success confirmation through the notification service."""
 
@@ -219,6 +221,7 @@ async def send_immediate_confirmation(
         context=context,
         timezone_name=timezone_name,
         keyboard=keyboard,
+        text_override=text_override,
     )
 
 
