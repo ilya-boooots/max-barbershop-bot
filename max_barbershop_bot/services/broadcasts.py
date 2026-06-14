@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 BROADCAST_NOTIFICATION_TYPE = "broadcast_one_time"
 BROADCAST_ALL_USERS_AUDIENCE = "all_users"
-BROADCAST_ALL_USERS_LABEL = "👥 Все пользователи"
+BROADCAST_ALL_USERS_LABEL = "👥 Все клиенты"
+BROADCAST_SELF_AUDIENCE = "send_to_self"
+BROADCAST_SELF_LABEL = "🧪 Отправить себе"
 MAX_BROADCAST_TEXT_LENGTH = 4000
 DEFAULT_SEND_DELAY_SECONDS = 0.1
 DEFAULT_BATCH_SIZE = 20
@@ -61,6 +63,10 @@ class BroadcastSendReport:
     sent: int
     failed: int
     blocked: int
+    stopped: int = 0
+    skipped_notifications_disabled: int = 0
+    skipped_missing_recipient_id: int = 0
+    rate_limited: int = 0
     broadcast_id: str | None = None
 
 
@@ -77,6 +83,10 @@ ALL_USERS_AUDIENCE = BroadcastAudience(
     key=BROADCAST_ALL_USERS_AUDIENCE,
     label=BROADCAST_ALL_USERS_LABEL,
 )
+SELF_AUDIENCE = BroadcastAudience(
+    key=BROADCAST_SELF_AUDIENCE,
+    label=BROADCAST_SELF_LABEL,
+)
 
 
 def validate_broadcast_text(text: str | None) -> BroadcastTextValidation:
@@ -84,11 +94,13 @@ def validate_broadcast_text(text: str | None) -> BroadcastTextValidation:
 
     clean = (text or "").strip()
     if not clean:
-        return BroadcastTextValidation(ok=False, error="Текст рассылки не может быть пустым 🙏")
+        return BroadcastTextValidation(ok=False, error="⚠️ Текст рассылки не может быть пустым. Введите сообщение.")
+    if clean.startswith("/"):
+        return BroadcastTextValidation(ok=False, error="⚠️ Команды нельзя отправлять как текст рассылки. Введите сообщение.")
     if len(clean) > MAX_BROADCAST_TEXT_LENGTH:
         return BroadcastTextValidation(
             ok=False,
-            error=f"Текст слишком длинный 🙏 Максимум {MAX_BROADCAST_TEXT_LENGTH} символов.",
+            error=f"⚠️ Слишком длинный текст. Максимум {MAX_BROADCAST_TEXT_LENGTH} символов.",
         )
     return BroadcastTextValidation(ok=True, text=clean)
 
@@ -96,17 +108,18 @@ def validate_broadcast_text(text: str | None) -> BroadcastTextValidation:
 def build_broadcast_preview(text: str) -> str:
     """Build the preview screen text."""
 
-    return f"Предпросмотр рассылки 👀\n\n{text}"
+    return f"👀 Предпросмотр рассылки\n\n{text}"
 
 
 def build_broadcast_confirm_text(*, audience_label: str, recipient_count: int, text: str) -> str:
     """Build the final confirmation screen text."""
 
     return (
-        "Проверьте рассылку 📣\n\n"
+        f"👀 Предпросмотр рассылки\n\n"
         f"Аудитория: {audience_label}\n"
         f"Получателей: {recipient_count}\n\n"
-        f"Текст:\n{text}"
+        f"{text}\n\n"
+        "Отправить рассылку?"
     )
 
 
@@ -114,29 +127,49 @@ def format_broadcast_report(report: BroadcastSendReport) -> str:
     """Build final one-time broadcast report text."""
 
     return (
-        "Рассылка завершена ✅\n\n"
-        f"Получателей: {report.total}\n"
+        "✅ Рассылка завершена\n\n"
+        f"Всего клиентов: {report.total}\n"
         f"Отправлено: {report.sent}\n"
         f"Ошибок: {report.failed}\n"
-        f"Заблокировали/остановили бота: {report.blocked}"
+        f"Заблокировали бота: {report.blocked}\n"
+        f"Остановили бота: {report.stopped}\n"
+        f"Пропущено: {report.skipped_notifications_disabled + report.skipped_missing_recipient_id}\n"
+        f"— отключены уведомления: {report.skipped_notifications_disabled}\n"
+        f"— нет MAX ID/чата: {report.skipped_missing_recipient_id}\n"
+        f"Rate limit/повторы: {report.rate_limited}"
     )
 
 
 def get_all_registered_recipients(users_repository: UsersRepository) -> list[BroadcastRecipient]:
     """Return local MAX users who can receive a broadcast."""
 
-    return [
-        BroadcastRecipient(
-            platform_user_id=user.platform_user_id,
-            max_user_id=user.max_user_id,
-            chat_id=user.chat_id,
-            display_name=user.display_name or user.first_name,
-        )
-        for user in users_repository.list_broadcast_recipients(
+    return build_recipients_from_users(
+        users_repository.list_broadcast_recipients(
             platform=PLATFORM_MAX,
             notifications_enabled=True,
         )
-    ]
+    )
+
+
+def build_recipients_from_users(users: Sequence[object]) -> list[BroadcastRecipient]:
+    """Build sendable broadcast recipients from user-like objects."""
+
+    recipients: list[BroadcastRecipient] = []
+    for user in users:
+        platform_user_id = str(getattr(user, "platform_user_id", "") or "").strip()
+        max_user_id = str(getattr(user, "max_user_id", "") or "").strip() or None
+        chat_id = str(getattr(user, "chat_id", "") or "").strip() or None
+        if not platform_user_id or not (max_user_id or chat_id):
+            continue
+        recipients.append(
+            BroadcastRecipient(
+                platform_user_id=platform_user_id,
+                max_user_id=max_user_id,
+                chat_id=chat_id,
+                display_name=getattr(user, "display_name", None) or getattr(user, "first_name", None),
+            )
+        )
+    return recipients
 
 
 async def send_one_time_broadcast(
@@ -157,17 +190,17 @@ async def send_one_time_broadcast(
     """Send a one-time broadcast and persist every recipient delivery result."""
 
     session_id = broadcast_id or uuid.uuid4().hex
-    sent = failed = blocked = 0
+    sent = failed = blocked = stopped = rate_limited = 0
     safe_batch_size = max(1, int(batch_size))
     safe_send_delay = max(0.0, float(send_delay_seconds))
     safe_batch_pause = max(0.0, float(batch_pause_seconds))
 
     logger.info(
-        "broadcast_one_time_started broadcast_id=%s audience=%s recipients=%s actor_platform_user_id=%s",
+        "MAX broadcast diagnostic: broadcast_one_time_started broadcast_id=%s audience=%s recipients_count=%s actor_platform_user_id_present=%s",
         session_id,
         audience.key,
         len(recipients),
-        actor_platform_user_id,
+        bool(actor_platform_user_id),
     )
 
     for index, recipient in enumerate(recipients, start=1):
@@ -204,8 +237,13 @@ async def send_one_time_broadcast(
             sent += 1
         else:
             failed += 1
-        if result.is_blocked or result.is_stopped:
+        if result.is_blocked:
             blocked += 1
+        if result.is_stopped:
+            stopped += 1
+        if result.status_code == 429 or result.error_code == "rate_limited":
+            rate_limited += 1
+        if result.is_blocked or result.is_stopped:
             _disable_recipient_notifications(users_repository, recipient)
 
         _save_broadcast_delivery(
@@ -227,10 +265,12 @@ async def send_one_time_broadcast(
         sent=sent,
         failed=failed,
         blocked=blocked,
+        stopped=stopped,
+        rate_limited=rate_limited,
         broadcast_id=session_id,
     )
     logger.info(
-        "broadcast_one_time_finished broadcast_id=%s recipients=%s sent=%s failed=%s blocked=%s",
+        "MAX broadcast diagnostic: broadcast_one_time_finished broadcast_id=%s recipients_count=%s sent_count=%s failed_count=%s blocked_count=%s",
         session_id,
         report.total,
         report.sent,

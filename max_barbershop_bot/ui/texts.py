@@ -188,13 +188,15 @@ STAFF_PROTECTED_DEVELOPER_ROLE_TEXT = "⛔ Нельзя снять роль у �
 
 BROADCAST_MENU_TEXT = """📣 Рассылка
 
-Выберите действие:"""
-BROADCAST_TEXT_INPUT_TEXT = "Введите текст рассылки 👇"
+Выберите раздел 👇"""
+BROADCAST_TEXT_INPUT_TEXT = "Введите текст рассылки:"
 BROADCAST_EMPTY_TEXT = "Текст рассылки не может быть пустым 🙏"
-BROADCAST_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
-BROADCAST_NO_RECIPIENTS_TEXT = "Нет получателей для рассылки 🙏"
-BROADCAST_SENDING_TEXT = "Рассылка отправляется, подождите немного ⏳"
-BROADCAST_ALREADY_SENDING_TEXT = "Рассылка уже отправляется, подождите немного ⏳"
+BROADCAST_NO_ACCESS_TEXT = "⛔ Раздел недоступен."
+BROADCAST_NO_RECIPIENTS_TEXT = "😌 В этой аудитории пока нет клиентов для рассылки."
+BROADCAST_SENDING_TEXT = "🚀 Отправляю рассылку..."
+BROADCAST_ALREADY_SENDING_TEXT = """Рассылка уже выполняется 🙏
+
+Дождитесь завершения текущей рассылки."""
 
 STATISTICS_MENU_TEXT = """📊 Статистика
 
