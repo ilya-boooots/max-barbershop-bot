@@ -175,6 +175,35 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             UNIQUE(platform, yclients_staff_id)
         );
 
+        CREATE TABLE IF NOT EXISTS feedback_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            platform_user_id TEXT NOT NULL,
+            yclients_record_id TEXT NOT NULL,
+            yclients_client_id TEXT,
+            status TEXT NOT NULL,
+            requested_at TEXT,
+            completed_at TEXT,
+            skipped_at TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(platform, platform_user_id, yclients_record_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS feedback_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            platform_user_id TEXT NOT NULL,
+            yclients_record_id TEXT NOT NULL,
+            rating INTEGER NOT NULL,
+            comment TEXT,
+            is_negative INTEGER NOT NULL DEFAULT 0,
+            admin_notified_at TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(platform, platform_user_id, yclients_record_id)
+        );
+
         CREATE TABLE IF NOT EXISTS notification_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -242,6 +271,10 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON master_photos(platform, yclients_staff_id);
         CREATE INDEX IF NOT EXISTS idx_master_photos_active
             ON master_photos(platform, is_active);
+        CREATE INDEX IF NOT EXISTS idx_feedback_requests_pending
+            ON feedback_requests(platform, status, requested_at);
+        CREATE INDEX IF NOT EXISTS idx_feedback_responses_user
+            ON feedback_responses(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_notification_history_platform_user_id
             ON notification_history(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_notification_history_yclients_record_id
@@ -310,6 +343,23 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "master_photos", "updated_by_platform_user_id", "TEXT")
     _ensure_column(connection, "master_photos", "created_at", "TEXT")
     _ensure_column(connection, "master_photos", "updated_at", "TEXT")
+    _ensure_column(connection, "feedback_requests", "platform", "TEXT NOT NULL DEFAULT 'max'")
+    _ensure_column(connection, "feedback_requests", "platform_user_id", "TEXT")
+    _ensure_column(connection, "feedback_requests", "yclients_record_id", "TEXT")
+    _ensure_column(connection, "feedback_requests", "yclients_client_id", "TEXT")
+    _ensure_column(connection, "feedback_requests", "status", "TEXT")
+    _ensure_column(connection, "feedback_requests", "requested_at", "TEXT")
+    _ensure_column(connection, "feedback_requests", "completed_at", "TEXT")
+    _ensure_column(connection, "feedback_requests", "skipped_at", "TEXT")
+    _ensure_column(connection, "feedback_requests", "error", "TEXT")
+    _ensure_column(connection, "feedback_requests", "updated_at", "TEXT")
+    _ensure_column(connection, "feedback_responses", "platform", "TEXT NOT NULL DEFAULT 'max'")
+    _ensure_column(connection, "feedback_responses", "platform_user_id", "TEXT")
+    _ensure_column(connection, "feedback_responses", "yclients_record_id", "TEXT")
+    _ensure_column(connection, "feedback_responses", "rating", "INTEGER")
+    _ensure_column(connection, "feedback_responses", "comment", "TEXT")
+    _ensure_column(connection, "feedback_responses", "is_negative", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "feedback_responses", "admin_notified_at", "TEXT")
     _ensure_column(connection, "notification_history", "max_user_id", "TEXT")
     _ensure_column(connection, "notification_history", "chat_id", "TEXT")
     _ensure_column(connection, "notification_history", "yclients_client_id", "TEXT")
