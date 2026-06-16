@@ -15,6 +15,8 @@ DEFAULT_REMINDERS_ENABLED = False
 DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS = 300
 DEFAULT_BIRTHDAY_FUNNEL_ENABLED = False
 DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS = 3600
+DEFAULT_CANCELLATION_RECOVERY_ENABLED = False
+DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS = 300
 DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED = True
 
 
@@ -37,6 +39,8 @@ class Config:
     reminders_poll_interval_seconds: int = DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS
     birthday_funnel_enabled: bool = DEFAULT_BIRTHDAY_FUNNEL_ENABLED
     birthday_funnel_poll_interval_seconds: int = DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS
+    cancellation_recovery_enabled: bool = DEFAULT_CANCELLATION_RECOVERY_ENABLED
+    cancellation_recovery_poll_interval_seconds: int = DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS
     developer_diagnostics_enabled: bool = DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED
 
 
@@ -73,6 +77,12 @@ def load_config() -> Config:
             "BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS",
             DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS,
             minimum=300,
+        ),
+        cancellation_recovery_enabled=_bool_env("CANCELLATION_RECOVERY_ENABLED", DEFAULT_CANCELLATION_RECOVERY_ENABLED),
+        cancellation_recovery_poll_interval_seconds=_int_env(
+            "CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS",
+            DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS,
+            minimum=30,
         ),
         developer_diagnostics_enabled=_bool_env(
             "DEVELOPER_DIAGNOSTICS_ENABLED",

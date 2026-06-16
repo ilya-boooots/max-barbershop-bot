@@ -126,6 +126,23 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             UNIQUE(platform, platform_user_id, birth_year, notification_type)
         );
 
+        CREATE TABLE IF NOT EXISTS cancellation_recovery_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            platform_user_id TEXT NOT NULL,
+            yclients_record_id TEXT NOT NULL,
+            yclients_client_id TEXT,
+            max_user_id TEXT,
+            chat_id TEXT,
+            scheduled_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            sent_at TEXT,
+            skipped_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(platform, platform_user_id, yclients_record_id)
+        );
+
         CREATE TABLE IF NOT EXISTS notification_delivery (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -261,6 +278,10 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON birthday_funnel_events(platform, platform_user_id, birth_year);
         CREATE INDEX IF NOT EXISTS idx_birthday_funnel_events_status
             ON birthday_funnel_events(status);
+        CREATE INDEX IF NOT EXISTS idx_cancellation_recovery_events_due
+            ON cancellation_recovery_events(status, scheduled_at);
+        CREATE INDEX IF NOT EXISTS idx_cancellation_recovery_events_user
+            ON cancellation_recovery_events(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_notification_delivery_platform_user_id
             ON notification_delivery(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_notification_delivery_message_type
@@ -320,6 +341,18 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "birthday_funnel_events", "notification_type", "TEXT")
     _ensure_column(connection, "birthday_funnel_events", "status", "TEXT")
     _ensure_column(connection, "birthday_funnel_events", "sent_at", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "platform", "TEXT NOT NULL DEFAULT 'max'")
+    _ensure_column(connection, "cancellation_recovery_events", "platform_user_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "yclients_record_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "yclients_client_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "max_user_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "chat_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "scheduled_at", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "status", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "sent_at", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "skipped_reason", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "created_at", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "updated_at", "TEXT")
 
     _ensure_column(connection, "yclients_settings", "company_id", "TEXT")
     _ensure_column(connection, "yclients_settings", "partner_token", "TEXT")

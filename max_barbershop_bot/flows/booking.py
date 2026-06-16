@@ -35,6 +35,7 @@ from max_barbershop_bot.services.booking import (
     has_available_services,
     is_service_compatible_with_master,
 )
+from max_barbershop_bot.services.cancellation_recovery import CANCELLATION_RECOVERY_BOOKING_PAYLOAD
 from max_barbershop_bot.services.contacts import ContactsService
 from max_barbershop_bot.services.master_photos import MasterPhotosService
 from max_barbershop_bot.services.navigation import show_booking_stale_callback, show_home
@@ -168,6 +169,7 @@ def register_booking_routes(router: Router) -> None:
     """Register booking category/service callbacks."""
 
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
+    router.on_callback(CANCELLATION_RECOVERY_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
     router.on_callback(BOOKING_CONFIRM_PAYLOAD, handle_booking_confirm)
     router.on_callback(BOOKING_CANCEL_DRAFT_PAYLOAD, handle_booking_cancel_draft)
