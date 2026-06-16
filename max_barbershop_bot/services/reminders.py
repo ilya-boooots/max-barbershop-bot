@@ -24,6 +24,7 @@ from max_barbershop_bot.services.yclients_context import (
     load_active_yclients_settings,
 )
 from max_barbershop_bot.services.feedback import send_due_feedback_requests
+from max_barbershop_bot.services.repeat_visit import process_due_repeat_visit_events
 from max_barbershop_bot.services.notifications import (
     NotificationHistoryRecord,
     BOOKING_CONFIRMATION_IMMEDIATE,
@@ -389,8 +390,9 @@ async def run_reminder_loop(
         try:
             count = await send_due_reminders(sender, database_path=database_path)
             feedback_count = await send_due_feedback_requests(sender, database_path=database_path)
-            if count or feedback_count:
-                logger.info("booking_reminder_loop_processed count=%s feedback_count=%s", count, feedback_count)
+            repeat_visit_count = await process_due_repeat_visit_events(sender, database_path=database_path)
+            if count or feedback_count or repeat_visit_count:
+                logger.info("booking_reminder_loop_processed count=%s feedback_count=%s repeat_visit_count=%s", count, feedback_count, repeat_visit_count)
         except asyncio.CancelledError:
             raise
         except Exception as error:
