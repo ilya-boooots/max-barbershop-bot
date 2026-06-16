@@ -114,6 +114,18 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         );
 
 
+        CREATE TABLE IF NOT EXISTS birthday_funnel_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            platform_user_id TEXT NOT NULL,
+            birth_year INTEGER NOT NULL,
+            notification_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            sent_at TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(platform, platform_user_id, birth_year, notification_type)
+        );
+
         CREATE TABLE IF NOT EXISTS notification_delivery (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -245,6 +257,10 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON platform_attribution(yclients_record_id);
         CREATE INDEX IF NOT EXISTS idx_state_storage_state_key
             ON state_storage(state_key);
+        CREATE INDEX IF NOT EXISTS idx_birthday_funnel_events_user_year
+            ON birthday_funnel_events(platform, platform_user_id, birth_year);
+        CREATE INDEX IF NOT EXISTS idx_birthday_funnel_events_status
+            ON birthday_funnel_events(status);
         CREATE INDEX IF NOT EXISTS idx_notification_delivery_platform_user_id
             ON notification_delivery(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_notification_delivery_message_type
@@ -298,6 +314,13 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         "notification_settings_json",
         "TEXT NOT NULL DEFAULT '{}'",
     )
+    _ensure_column(connection, "birthday_funnel_events", "platform", "TEXT NOT NULL DEFAULT 'max'")
+    _ensure_column(connection, "birthday_funnel_events", "platform_user_id", "TEXT")
+    _ensure_column(connection, "birthday_funnel_events", "birth_year", "INTEGER")
+    _ensure_column(connection, "birthday_funnel_events", "notification_type", "TEXT")
+    _ensure_column(connection, "birthday_funnel_events", "status", "TEXT")
+    _ensure_column(connection, "birthday_funnel_events", "sent_at", "TEXT")
+
     _ensure_column(connection, "yclients_settings", "company_id", "TEXT")
     _ensure_column(connection, "yclients_settings", "partner_token", "TEXT")
     _ensure_column(connection, "yclients_settings", "user_token", "TEXT")
