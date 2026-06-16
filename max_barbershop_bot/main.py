@@ -17,6 +17,7 @@ from max_barbershop_bot.db.sqlite import init_database
 from max_barbershop_bot.flows import create_router
 from max_barbershop_bot.max_api.client import MaxApiClient, MaxApiError
 from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.services.birthday_funnel import run_birthday_loop
 from max_barbershop_bot.services.reminders import run_reminder_loop
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
     diagnostics = ErrorDiagnostics.from_config(config)
     polling_task = asyncio.create_task(_poll_dev_updates(client, sender, router, stop_event, diagnostics))
     reminder_task: asyncio.Task | None = None
+    birthday_task: asyncio.Task | None = None
     if config.reminders_enabled:
         reminder_task = asyncio.create_task(
             run_reminder_loop(
@@ -65,6 +67,23 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
         )
     else:
         logger.info("Booking reminders disabled by REMINDERS_ENABLED")
+    if config.birthday_funnel_enabled:
+        birthday_task = asyncio.create_task(
+            run_birthday_loop(
+                sender,
+                database_path=config.database_path,
+                stop_event=stop_event,
+                interval_seconds=config.birthday_funnel_poll_interval_seconds,
+                error_callback=lambda error: diagnostics.handle_runtime_exception(
+                    exception=error,
+                    sender=sender,
+                    location="birthday_funnel_loop",
+                ),
+            ),
+            name="birthday-funnel",
+        )
+    else:
+        logger.info("Birthday funnel disabled by BIRTHDAY_FUNNEL_ENABLED")
     try:
         await stop_event.wait()
     finally:
@@ -73,6 +92,9 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
         if reminder_task is not None:
             reminder_task.cancel()
             tasks.append(reminder_task)
+        if birthday_task is not None:
+            birthday_task.cancel()
+            tasks.append(birthday_task)
         for task in tasks:
             try:
                 await task

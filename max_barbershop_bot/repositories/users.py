@@ -321,6 +321,24 @@ class UsersRepository:
             connection.commit()
             return self.find_by_platform_user_id(platform_user_id, platform=platform)
 
+    def list_birthday_candidates(self, *, platform: str = PLATFORM_MAX) -> list[User]:
+        """Return users with birthdate and a reachable MAX recipient id."""
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM users
+                WHERE platform = ?
+                  AND NULLIF(TRIM(COALESCE(birthdate, '')), '') IS NOT NULL
+                  AND (NULLIF(TRIM(COALESCE(max_user_id, '')), '') IS NOT NULL
+                       OR NULLIF(TRIM(COALESCE(chat_id, '')), '') IS NOT NULL)
+                ORDER BY id ASC
+                """,
+                (_required_text(platform, "platform"),),
+            ).fetchall()
+        return [user for row in rows if (user := _row_to_user(row)) is not None]
+
+
     def list_broadcast_recipients(
         self,
         *,
