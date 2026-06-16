@@ -48,10 +48,10 @@ def main_menu_screen(role: str | None = None, *, display_name: str | None = None
     return Screen(text=text, keyboard=main_menu_keyboard(role))
 
 
-def settings_menu_screen(role: str | None = None) -> Screen:
+def settings_menu_screen(role: str | None = None, *, protected_developer: bool = False) -> Screen:
     """Build settings hub screen."""
 
-    return Screen(text=SETTINGS_MENU_TEXT, keyboard=settings_menu_keyboard(role))
+    return Screen(text=SETTINGS_MENU_TEXT, keyboard=settings_menu_keyboard(role, protected_developer=protected_developer))
 
 
 def staff_menu_screen(role: str | None = None) -> Screen:

@@ -8,7 +8,7 @@ from os import getenv
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
-from max_barbershop_bot.core.permissions import ROLE_USER, can_view_notification_history
+from max_barbershop_bot.core.permissions import ROLE_USER, can_view_notification_history, is_protected_developer
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.notification_history import NotificationHistoryRecord, NotificationHistoryRepository
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
@@ -342,6 +342,12 @@ def _set_screen(context: RouterContext, screen_id: str) -> None:
 
 
 def _can_view(context: RouterContext) -> bool:
+    if is_protected_developer(
+        context.event.platform_user_id,
+        getenv("DEV_MAX_USER_ID"),
+        max_user_id=context.event.max_user_id,
+    ):
+        return True
     return can_view_notification_history(_actor_role(context))
 
 

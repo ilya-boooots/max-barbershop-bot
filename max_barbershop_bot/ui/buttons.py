@@ -12,7 +12,6 @@ from max_barbershop_bot.core.permissions import (
     can_view_broadcasts,
     can_view_clients_directory,
     can_view_contacts_settings,
-    can_view_diagnostics_settings,
     can_view_notification_settings,
     can_view_settings,
     can_view_staff,
@@ -46,6 +45,8 @@ SETTINGS_ROLES_PAYLOAD = "settings:roles"
 SETTINGS_DIAGNOSTICS_PAYLOAD = "settings:diagnostics"
 SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD = "settings:diagnostics:notification_history"
 SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD = "settings:diagnostics:yclients_check"
+DEV_DIAGNOSTICS_REFRESH_PAYLOAD = "devdiag:refresh"
+DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD = "devdiag:notif_failed"
 SETTINGS_BACK_PAYLOAD = "settings:back"
 SETTINGS_HOME_PAYLOAD = "settings:home"
 SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD = "settings:contacts:address"
@@ -284,7 +285,7 @@ def _mask_clients_directory_phone(phone: str | None) -> str:
     return f"+{'*' * max(1, len(digits) - 4)}{digits[-4:]}"
 
 
-def settings_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
+def settings_menu_keyboard(role: str | None = None, *, protected_developer: bool = False) -> MaxInlineKeyboard:
     """Build settings hub buttons for the current role."""
 
     normalized_role = normalize_role(role)
@@ -299,7 +300,7 @@ def settings_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="🔔 Уведомления", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)])
     if can_manage_roles(normalized_role):
         rows.append([MaxButton(text="👥 Роли", payload=SETTINGS_ROLES_PAYLOAD)])
-    if can_view_diagnostics_settings(normalized_role):
+    if protected_developer:
         rows.append([MaxButton(text="🛠 Диагностика", payload=SETTINGS_DIAGNOSTICS_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
@@ -461,10 +462,10 @@ def settings_diagnostics_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="🔔 История уведомлений", payload=SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD)],
-            [MaxButton(text="🧩 Проверить YClients", payload=SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD)],
-            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
-            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+            [MaxButton(text="🔄 Обновить", payload=DEV_DIAGNOSTICS_REFRESH_PAYLOAD)],
+            [MaxButton(text="📜 Ошибки уведомлений", payload=DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
 

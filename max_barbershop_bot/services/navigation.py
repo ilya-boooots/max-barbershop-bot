@@ -6,6 +6,7 @@ from os import getenv
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
+from max_barbershop_bot.core.permissions import effective_role, is_protected_developer
 from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
@@ -85,7 +86,10 @@ async def render_screen(context: RouterContext, screen_id: str) -> None:
         state.SETTINGS_NOTIFICATIONS_SCREEN,
         state.SETTINGS_DIAGNOSTICS_SCREEN,
     }:
-        screen = settings_menu_screen(_current_role(context))
+        screen = settings_menu_screen(
+            _current_role(context),
+            protected_developer=_is_protected_developer(context),
+        )
     else:
         screen = placeholder_screen()
 
@@ -104,8 +108,19 @@ def _current_role(context: RouterContext, user: object | None = None) -> str:
             platform=PLATFORM_MAX,
         )
     if user is None:
-        return "user"
-    return StaffRolesRepository(database_path).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+        return effective_role(
+            None,
+            platform_user_id=platform_user_id,
+            dev_max_user_id=getenv("DEV_MAX_USER_ID"),
+            max_user_id=context.event.max_user_id,
+        )
+    db_role = StaffRolesRepository(database_path).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+    return effective_role(
+        db_role,
+        platform_user_id=platform_user_id,
+        dev_max_user_id=getenv("DEV_MAX_USER_ID"),
+        max_user_id=context.event.max_user_id,
+    )
 
 
 def _current_user(context: RouterContext) -> object | None:
@@ -144,3 +159,11 @@ def _is_current_user_registered(context: RouterContext) -> bool:
 
 def _database_path() -> str:
     return getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH
+
+
+def _is_protected_developer(context: RouterContext) -> bool:
+    return is_protected_developer(
+        context.event.platform_user_id,
+        getenv("DEV_MAX_USER_ID"),
+        max_user_id=context.event.max_user_id,
+    )

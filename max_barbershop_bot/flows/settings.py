@@ -10,13 +10,14 @@ from max_barbershop_bot.core.permissions import (
     ROLE_USER,
     can_manage_roles,
     can_view_contacts_settings,
-    can_view_diagnostics_settings,
     can_view_notification_settings,
     can_view_settings,
     can_view_yclients_settings,
+    effective_role,
+    is_protected_developer,
 )
 from max_barbershop_bot.core.router import Router, RouterContext
-from max_barbershop_bot.flows.notification_history import handle_notification_history
+from max_barbershop_bot.flows.notification_history import handle_notification_history, handle_notification_history_failed
 from max_barbershop_bot.flows.staff import handle_staff_menu
 from max_barbershop_bot.flows.yclients_settings import handle_connection_check, handle_yclients_menu
 from max_barbershop_bot.flows.support import render_support_message
@@ -30,6 +31,8 @@ from max_barbershop_bot.services.settings_audit import log_settings_action
 from max_barbershop_bot.ui.buttons import (
     ADMIN_SETTINGS_PAYLOAD,
     SETTINGS_BACK_PAYLOAD,
+    DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD,
+    DEV_DIAGNOSTICS_REFRESH_PAYLOAD,
     SETTINGS_CONTACTS_PAYLOAD,
     SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD,
     SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD,
@@ -61,6 +64,10 @@ from max_barbershop_bot.ui.texts import (
     SETTINGS_NO_ACCESS_TEXT,
     SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT,
 )
+from max_barbershop_bot.services.developer_diagnostics import (
+    NO_ACCESS_TEXT as DEV_DIAGNOSTICS_NO_ACCESS_TEXT,
+    build_developer_diagnostics_text,
+)
 
 
 def register_settings_routes(router: Router) -> None:
@@ -81,6 +88,8 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_NOTIFICATIONS_PAYLOAD, handle_settings_notifications)
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
+    router.on_callback(DEV_DIAGNOSTICS_REFRESH_PAYLOAD, handle_settings_diagnostics_refresh)
+    router.on_callback(DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD, handle_settings_diagnostics_failed_notifications)
     router.on_callback(SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD, handle_settings_notification_history)
     router.on_callback(SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD, handle_settings_yclients_check)
     router.on_callback(SETTINGS_BACK_PAYLOAD, handle_settings_back)
@@ -291,23 +300,40 @@ async def handle_settings_roles(context: RouterContext) -> None:
 
 
 async def handle_settings_diagnostics(context: RouterContext) -> None:
-    """Show compact diagnostics entry points."""
+    """Show protected developer diagnostics."""
 
     actor_role = _actor_role(context)
-    if not can_view_diagnostics_settings(actor_role):
-        await _send_no_access(context)
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
         return
     await _answer_callback_if_needed(context, "Открываем диагностику 🛠")
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
-    text = (
-        "🛠 Диагностика\n\n"
-        "Базовый статус: бот запущен ✅\n\n"
-        "Доступно:\n"
-        "• 🔔 История уведомлений\n"
-        "• 🧩 Проверка подключения YClients"
-    )
+    text = await build_developer_diagnostics_text(database_path=_database_path())
     _audit(context, actor_role, action="settings_section_opened", section="diagnostics")
     await context.send_text(text, keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_refresh(context: RouterContext) -> None:
+    """Refresh protected developer diagnostics."""
+
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context, "Обновляем диагностику 🔄")
+    text = await build_developer_diagnostics_text(database_path=_database_path())
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
+    _audit(context, _actor_role(context), action="settings_section_refreshed", section="diagnostics")
+    await context.send_text(text, keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_failed_notifications(context: RouterContext) -> None:
+    """Open existing failed notification history from protected diagnostics."""
+
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    _audit(context, _actor_role(context), action="diagnostics_failed_notifications_opened", section="diagnostics")
+    await handle_notification_history_failed(context)
 
 
 async def handle_settings_notification_history(context: RouterContext) -> None:
@@ -325,8 +351,8 @@ async def handle_settings_yclients_check(context: RouterContext) -> None:
     """Run existing YClients check from diagnostics."""
 
     actor_role = _actor_role(context)
-    if not can_view_diagnostics_settings(actor_role):
-        await _send_no_access(context)
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
         return
     _audit(context, actor_role, action="diagnostics_yclients_check_started", section="diagnostics")
     await handle_connection_check(context)
@@ -362,7 +388,10 @@ async def handle_settings_home(context: RouterContext) -> None:
 
 async def _show_settings_menu(context: RouterContext, actor_role: str) -> None:
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_MENU_SCREEN)
-    await context.send_text(SETTINGS_MENU_TEXT, keyboard=settings_menu_keyboard(actor_role))
+    await context.send_text(
+        SETTINGS_MENU_TEXT,
+        keyboard=settings_menu_keyboard(actor_role, protected_developer=_is_protected_developer(context)),
+    )
 
 
 async def _show_contacts_editor(context: RouterContext) -> None:
@@ -490,7 +519,13 @@ def _actor_role(context: RouterContext) -> str:
     platform_user_id = context.event.platform_user_id
     if platform_user_id is None:
         return ROLE_USER
-    return StaffRolesRepository(_database_path()).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+    db_role = StaffRolesRepository(_database_path()).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+    return effective_role(
+        db_role,
+        platform_user_id=platform_user_id,
+        dev_max_user_id=getenv("DEV_MAX_USER_ID"),
+        max_user_id=context.event.max_user_id,
+    )
 
 
 def _push_current_screen(context: RouterContext, screen_id: str) -> None:
@@ -514,6 +549,11 @@ def _audit(context: RouterContext, actor_role: str, *, action: str, section: str
 async def _send_no_access(context: RouterContext) -> None:
     await _answer_callback_if_needed(context, SETTINGS_NO_ACCESS_TEXT)
     await context.send_text(SETTINGS_NO_ACCESS_TEXT)
+
+
+async def _send_dev_no_access(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context, DEV_DIAGNOSTICS_NO_ACCESS_TEXT)
+    await context.send_text(DEV_DIAGNOSTICS_NO_ACCESS_TEXT)
 
 
 async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
@@ -541,3 +581,11 @@ def _int_env(name: str, default: int, *, minimum: int = 1) -> int:
 
 def _database_path() -> str:
     return getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH
+
+
+def _is_protected_developer(context: RouterContext) -> bool:
+    return is_protected_developer(
+        context.event.platform_user_id,
+        getenv("DEV_MAX_USER_ID"),
+        max_user_id=context.event.max_user_id,
+    )
