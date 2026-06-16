@@ -10,6 +10,7 @@ from max_barbershop_bot.core.permissions import (
     can_manage_roles,
     can_view_admin_bookings,
     can_view_broadcasts,
+    can_view_clients_directory,
     can_view_contacts_settings,
     can_view_diagnostics_settings,
     can_view_notification_settings,
@@ -35,6 +36,7 @@ ADMIN_STATISTICS_PAYLOAD = "admin:statistics"
 ADMIN_BOOKINGS_OPEN_PAYLOAD = "admbook:open"
 ADMIN_YCLIENTS_PAYLOAD = "admin:yclients"
 ADMIN_NOTIFICATION_HISTORY_PAYLOAD = "admin:notification_history"
+ADMIN_CLIENTS_DIRECTORY_PAYLOAD = "admin:clients_directory"
 
 SETTINGS_YCLIENTS_PAYLOAD = "settings:yclients"
 SETTINGS_CONTACTS_PAYLOAD = "settings:contacts"
@@ -112,6 +114,13 @@ BROADCAST_HOME_PAYLOAD = "broadcast:home"
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
 
+CLIENTS_DIRECTORY_SEARCH_PHONE_PAYLOAD = "clients:search_phone"
+CLIENTS_DIRECTORY_SEARCH_NAME_PAYLOAD = "clients:search_name"
+CLIENTS_DIRECTORY_BACK_PAYLOAD = "clients:back"
+CLIENTS_DIRECTORY_HOME_PAYLOAD = "clients:home"
+CLIENTS_DIRECTORY_REFRESH_PAYLOAD = "clients:refresh"
+CLIENTS_DIRECTORY_RESULT_PAYLOAD_PREFIX = "clients:result:"
+
 YCLIENTS_SETUP_PAYLOAD = "yclients:setup"
 YCLIENTS_CHECK_PAYLOAD = "yclients:check"
 YCLIENTS_SAVE_PAYLOAD = "yclients:save"
@@ -181,6 +190,7 @@ MENU_PAYLOADS = frozenset(
         ADMIN_BOOKINGS_OPEN_PAYLOAD,
         ADMIN_YCLIENTS_PAYLOAD,
         ADMIN_NOTIFICATION_HISTORY_PAYLOAD,
+        ADMIN_CLIENTS_DIRECTORY_PAYLOAD,
     }
 )
 
@@ -199,6 +209,8 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="📊 Статистика", payload=ADMIN_STATISTICS_PAYLOAD)])
     if can_view_admin_bookings(normalized_role):
         rows.append([MaxButton(text="📋 Записи", payload=ADMIN_BOOKINGS_OPEN_PAYLOAD)])
+    if can_view_clients_directory(normalized_role):
+        rows.append([MaxButton(text="👥 Клиенты", payload=ADMIN_CLIENTS_DIRECTORY_PAYLOAD)])
     if can_view_staff(normalized_role):
         rows.append([MaxButton(text="👥 Персонал", payload=ADMIN_STAFF_PAYLOAD)])
     if can_view_settings(normalized_role):
@@ -209,6 +221,67 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="🧩 YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
+
+
+def clients_directory_menu_keyboard() -> MaxInlineKeyboard:
+    """Build clients directory search mode buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="📞 По телефону", payload=CLIENTS_DIRECTORY_SEARCH_PHONE_PAYLOAD)],
+            [MaxButton(text="🔎 По имени", payload=CLIENTS_DIRECTORY_SEARCH_NAME_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=CLIENTS_DIRECTORY_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def clients_directory_search_keyboard() -> MaxInlineKeyboard:
+    """Build navigation for clients directory text input."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=CLIENTS_DIRECTORY_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def clients_directory_results_keyboard(results: list[object], *, has_next: bool = False) -> MaxInlineKeyboard:
+    """Build safe state-indexed client search result buttons."""
+
+    rows: list[list[MaxButton]] = []
+    for index, item in enumerate(results[:8]):
+        name = str(item.get("name") or item.get("fullname") or "Клиент") if isinstance(item, dict) else "Клиент"
+        phone = str(item.get("phone") or "") if isinstance(item, dict) else ""
+        yclients_client_id = str(item.get("id") or item.get("client_id") or "") if isinstance(item, dict) else ""
+        suffix = f" • ID {yclients_client_id}" if yclients_client_id else ""
+        phone_part = f" • 📞 {_mask_clients_directory_phone(phone)}" if phone else ""
+        rows.append([MaxButton(text=f"👤 {name}{phone_part}{suffix}"[:64], payload=indexed_payload(CLIENTS_DIRECTORY_RESULT_PAYLOAD_PREFIX, index))])
+    if has_next:
+        rows.append([MaxButton(text="Уточните запрос, найдено больше 8", payload=CLIENTS_DIRECTORY_REFRESH_PAYLOAD)])
+    rows.append([MaxButton(text="🔄 Обновить", payload=CLIENTS_DIRECTORY_REFRESH_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=CLIENTS_DIRECTORY_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def clients_directory_card_keyboard() -> MaxInlineKeyboard:
+    """Build client card navigation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=CLIENTS_DIRECTORY_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def _mask_clients_directory_phone(phone: str | None) -> str:
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if not digits:
+        return "—"
+    return f"+{'*' * max(1, len(digits) - 4)}{digits[-4:]}"
 
 
 def settings_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
