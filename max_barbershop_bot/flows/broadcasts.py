@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from os import getenv
 from uuid import uuid4
 
 from max_barbershop_bot.core import state
+from max_barbershop_bot.core.action_locks import DEFAULT_ACTION_LOCK_TTL_SECONDS, acquire_action_lock, is_action_locked, release_action_lock
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.permissions import can_view_broadcasts
 from max_barbershop_bot.core.router import Router, RouterContext
@@ -66,7 +66,7 @@ _BROADCAST_SKIPPED_MISSING_KEY = "broadcast_skipped_missing"
 _BROADCAST_RETURN_SCREEN_KEY = "broadcast_return_screen"
 
 logger = logging.getLogger(__name__)
-_BROADCAST_SEND_LOCK = asyncio.Lock()
+_BROADCAST_SEND_LOCK_KEY = "broadcast:send"
 
 
 def register_broadcast_routes(router: Router) -> None:
@@ -103,7 +103,7 @@ async def handle_one_time_start(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
+    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
     await _answer_callback_if_needed(context, "Введите текст рассылки ✉️")
@@ -118,7 +118,7 @@ async def handle_text_input(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
+    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
     validation = validate_broadcast_text(context.event.text)
@@ -140,7 +140,7 @@ async def handle_preview_next(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
+    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
     text = _broadcast_text(context)
@@ -158,7 +158,7 @@ async def handle_preview_edit(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
+    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
     await _answer_callback_if_needed(context, "Изменим текст ✏️")
@@ -182,7 +182,7 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
+    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
     text = _broadcast_text(context)
@@ -261,7 +261,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
+    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
 
@@ -282,37 +282,47 @@ async def handle_confirm_send(context: RouterContext) -> None:
     await _answer_callback_if_needed(context, "Отправляем рассылку 🚀")
     await context.send_text(BROADCAST_SENDING_TEXT)
 
-    if _BROADCAST_SEND_LOCK.locked():
+    if is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_IN_PROGRESS_KEY, False)
         await _send_sending_in_progress(context)
         return
 
+    if not acquire_action_lock(_BROADCAST_SEND_LOCK_KEY, ttl_seconds=DEFAULT_ACTION_LOCK_TTL_SECONDS):
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_IN_PROGRESS_KEY, False)
+        logger.info(
+            "MAX antiflood/action lock diagnostic: event_type=%s platform_user_id_present=%s chat_id_present=%s action=%s lock_key_type=%s lock_acquired=%s lock_active=%s ttl_seconds=%s payload_present=%s",
+            context.event.update_type, bool(_user_id(context)), bool(_chat_id(context)), "broadcast_send", "broadcast:send", False, True, DEFAULT_ACTION_LOCK_TTL_SECONDS, bool(context.event.callback_payload),
+        )
+        await _send_sending_in_progress(context)
+        return
+
     try:
-        async with _BROADCAST_SEND_LOCK:
-            if state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SEND_TOKEN_KEY) != send_token:
-                await context.send_text("⚠️ Эта рассылка уже отправляется или была отправлена.")
-                return
-            audience = _broadcast_audience(context)
-            report = await send_one_time_broadcast(
-                sender=context.sender,
-                users_repository=_users_repository(),
-                database_path=_database_path(),
-                text=text,
-                recipients=recipients,
-                audience=audience,
-                actor_platform_user_id=context.event.platform_user_id,
-            )
+        if state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SEND_TOKEN_KEY) != send_token:
+            await context.send_text("⚠️ Эта рассылка уже отправляется или была отправлена.")
+            release_action_lock(_BROADCAST_SEND_LOCK_KEY)
+            return
+        audience = _broadcast_audience(context)
+        report = await send_one_time_broadcast(
+            sender=context.sender,
+            users_repository=_users_repository(),
+            database_path=_database_path(),
+            text=text,
+            recipients=recipients,
+            audience=audience,
+            actor_platform_user_id=context.event.platform_user_id,
+        )
     except Exception as exc:
         logger.warning(
             "MAX broadcast diagnostic: send_failed actor_platform_user_id_present=%s audience=%s recipients_count=%s lock_active=%s error_class=%s",
             bool(context.event.platform_user_id),
             _broadcast_audience(context).key,
             len(recipients),
-            _BROADCAST_SEND_LOCK.locked(),
+            is_action_locked(_BROADCAST_SEND_LOCK_KEY),
             type(exc).__name__,
             exc_info=True,
         )
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_IN_PROGRESS_KEY, False)
+        release_action_lock(_BROADCAST_SEND_LOCK_KEY)
         await context.send_text("⚠️ Не удалось завершить рассылку. Попробуйте позже.", keyboard=broadcast_report_keyboard())
         return
 
@@ -335,7 +345,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
 async def handle_broadcast_back(context: RouterContext) -> None:
     """Handle Back inside broadcast wizard."""
 
-    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
+    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
     await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
@@ -368,7 +378,7 @@ async def handle_broadcast_back(context: RouterContext) -> None:
 async def handle_broadcast_home(context: RouterContext) -> None:
     """Return to main menu and clear unsent broadcast state."""
 
-    if _is_sending(context) or _BROADCAST_SEND_LOCK.locked():
+    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
     await _answer_callback_if_needed(context, "Открываем главное меню 🏠")

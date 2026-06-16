@@ -8,6 +8,7 @@ from os import getenv
 from typing import Any
 
 from max_barbershop_bot.core import state
+from max_barbershop_bot.core.action_locks import DEFAULT_ACTION_LOCK_TTL_SECONDS, acquire_action_lock, release_action_lock
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
@@ -171,6 +172,8 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
         return
 
+    lock_key = f"booking:cancel:{platform_user_id or 'unknown'}:{record_id}"
+
     if _cancel_completed(context, record_id):
         logger.info(
             "MAX booking cancel diagnostic: platform_user_id_present=%s yclients_record_id_present=%s cancel_already_completed=%s",
@@ -192,6 +195,13 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
         await context.answer_callback(MY_BOOKING_CANCEL_IN_PROGRESS_TEXT)
         return
 
+    if not acquire_action_lock(lock_key, ttl_seconds=DEFAULT_ACTION_LOCK_TTL_SECONDS):
+        logger.info(
+            "MAX antiflood/action lock diagnostic: event_type=%s platform_user_id_present=%s chat_id_present=%s action=%s lock_key_type=%s lock_acquired=%s lock_active=%s ttl_seconds=%s payload_present=%s",
+            context.event.update_type, bool(platform_user_id), bool(chat_id), "cancel_booking", "booking:cancel", False, True, DEFAULT_ACTION_LOCK_TTL_SECONDS, bool(context.event.callback_payload),
+        )
+        await context.answer_callback(MY_BOOKING_CANCEL_IN_PROGRESS_TEXT)
+        return
     _set_cancel_in_progress(context, record_id)
     await context.answer_callback("Отменяем запись ⏳")
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
@@ -212,6 +222,7 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
             type(exc).__name__,
         )
         _clear_cancel_in_progress(context)
+        release_action_lock(lock_key)
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_CANCEL_ERROR_SCREEN)
         await context.send_text(exc.user_message, keyboard=my_booking_cancel_result_keyboard())
         return
@@ -448,6 +459,14 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
         await context.send_text(_format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)), keyboard=my_booking_reschedule_result_keyboard())
         return
 
+    lock_key = f"booking:reschedule:{platform_user_id or 'unknown'}:{record_id}"
+    if not acquire_action_lock(lock_key, ttl_seconds=DEFAULT_ACTION_LOCK_TTL_SECONDS):
+        logger.info(
+            "MAX antiflood/action lock diagnostic: event_type=%s platform_user_id_present=%s chat_id_present=%s action=%s lock_key_type=%s lock_acquired=%s lock_active=%s ttl_seconds=%s payload_present=%s",
+            context.event.update_type, bool(platform_user_id), bool(chat_id), "reschedule_booking", "booking:reschedule", False, True, DEFAULT_ACTION_LOCK_TTL_SECONDS, bool(context.event.callback_payload),
+        )
+        await context.answer_callback(MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT)
+        return
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, True)
     await context.answer_callback("Переносим запись ⏳")
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
@@ -468,6 +487,7 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
             type(exc).__name__,
         )
         state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
+        release_action_lock(lock_key)
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_ERROR_SCREEN)
         await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
         return
