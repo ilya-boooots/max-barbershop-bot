@@ -36,7 +36,7 @@ MY_BOOKINGS_LOAD_ERROR_TEXT = "Не удалось загрузить ваши �
 MY_BOOKINGS_EMPTY_TEXT = "📭 У вас пока нет активных записей."
 MY_BOOKINGS_TITLE_TEXT = "📅 Ваши записи"
 MY_BOOKING_NOT_FOUND_TEXT = "Эта запись уже неактуальна 🙏\n\nОткройте список записей заново."
-MY_BOOKING_CANCEL_IN_PROGRESS_TEXT = "Отмена уже выполняется, подождите немного ⏳"
+MY_BOOKING_CANCEL_IN_PROGRESS_TEXT = "⏳ Уже выполняем действие, секундочку 🙂"
 MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT = "Эту запись нельзя отменить через бота 🙏\n\nПожалуйста, напишите администратору."
 MY_BOOKING_CANCEL_ALREADY_TEXT = "Эта запись уже отменена."
 MY_BOOKING_CANCEL_ERROR_TEXT = "Не удалось отменить запись 🙏\n\nПожалуйста, попробуйте позже или напишите администратору."
@@ -48,7 +48,7 @@ MY_BOOKING_RESCHEDULE_CANCEL_OLD_FAILED_TEXT = (
     "Новая запись создана, но старую не удалось отменить автоматически 🙏\n\n"
     "Администратор уже получит информацию для проверки."
 )
-MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT = "Перенос уже выполняется, подождите немного ⏳"
+MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT = "⏳ Уже выполняем действие, секундочку 🙂"
 MY_BOOKING_RESCHEDULE_DATES_TEXT = "🔁 Перенос записи\n\nВыберите новую дату:"
 MY_BOOKING_RESCHEDULE_SLOTS_TEXT = "🔁 Перенос записи\n\nВыберите новое время:"
 MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT = "На эту дату свободного времени нет 🙏\n\nВыберите другой день."

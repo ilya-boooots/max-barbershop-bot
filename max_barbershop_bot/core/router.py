@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from max_barbershop_bot.core import state
+from max_barbershop_bot.core.action_locks import ACTION_IN_PROGRESS_TEXT
+from max_barbershop_bot.core.antiflood import is_callback_allowed, is_text_allowed
 from max_barbershop_bot.core.config import Config
 from max_barbershop_bot.core.error_handler import ErrorDiagnostics
 from max_barbershop_bot.core.events import NormalizedEvent
@@ -114,6 +116,9 @@ class Router:
         event = self._recover_phone_contact_chat(event)
 
         self._log_contact_diagnostic(event)
+        if await self._is_throttled(event, sender):
+            return
+
         handler = self._resolve_handler(event)
         if handler is None:
             logger.debug("No MAX route for update_type=%s", event.update_type)
@@ -130,6 +135,37 @@ class Router:
                 sender=sender,
                 handler_name=_handler_name(handler),
             )
+
+
+    async def _is_throttled(self, event: NormalizedEvent, sender: MaxMessageSender) -> bool:
+        if event.update_type == "message_created":
+            if event.text == "/start" or _looks_like_contact_event(event):
+                return False
+            if is_text_allowed(event.platform_user_id, event.chat_id):
+                return False
+            logger.info(
+                "MAX antiflood/action lock diagnostic: event_type=%s platform_user_id_present=%s chat_id_present=%s throttle_hit=%s",
+                event.update_type,
+                event.platform_user_id is not None,
+                event.chat_id is not None,
+                True,
+            )
+            return True
+        if event.update_type == "message_callback":
+            if is_callback_allowed(event.platform_user_id, event.chat_id, event.callback_payload):
+                return False
+            logger.info(
+                "MAX antiflood/action lock diagnostic: event_type=%s platform_user_id_present=%s chat_id_present=%s throttle_hit=%s payload_present=%s",
+                event.update_type,
+                event.platform_user_id is not None,
+                event.chat_id is not None,
+                True,
+                event.callback_payload is not None,
+            )
+            context = RouterContext(event=event, sender=sender)
+            await context.answer_callback(ACTION_IN_PROGRESS_TEXT)
+            return True
+        return False
 
     def _resolve_handler(self, event: NormalizedEvent) -> EventHandler | None:
         if event.update_type == "message_created":

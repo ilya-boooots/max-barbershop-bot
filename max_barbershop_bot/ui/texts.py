@@ -164,7 +164,7 @@ BOOKING_REGISTERED_PHONE_MISSING_TEXT = "📱 Чтобы записать вас
 BOOKING_CREATE_ERROR_TEXT = """Не удалось создать запись 🙏
 
 Возможно, это время уже заняли. Попробуйте выбрать другой слот."""
-BOOKING_CREATE_IN_PROGRESS_TEXT = "⏳ Уже создаём запись, секундочку 🙂"
+BOOKING_CREATE_IN_PROGRESS_TEXT = "⏳ Уже выполняем действие, секундочку 🙂"
 
 
 STAFF_MENU_TEXT = """👥 Управление персоналом
