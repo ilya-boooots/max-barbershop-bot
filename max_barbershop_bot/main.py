@@ -18,6 +18,7 @@ from max_barbershop_bot.flows import create_router
 from max_barbershop_bot.max_api.client import MaxApiClient, MaxApiError
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.services.birthday_funnel import run_birthday_loop
+from max_barbershop_bot.services.cancellation_recovery import run_cancellation_recovery_loop
 from max_barbershop_bot.services.reminders import run_reminder_loop
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
     polling_task = asyncio.create_task(_poll_dev_updates(client, sender, router, stop_event, diagnostics))
     reminder_task: asyncio.Task | None = None
     birthday_task: asyncio.Task | None = None
+    cancellation_recovery_task: asyncio.Task | None = None
     if config.reminders_enabled:
         reminder_task = asyncio.create_task(
             run_reminder_loop(
@@ -67,6 +69,23 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
         )
     else:
         logger.info("Booking reminders disabled by REMINDERS_ENABLED")
+    if config.cancellation_recovery_enabled:
+        cancellation_recovery_task = asyncio.create_task(
+            run_cancellation_recovery_loop(
+                sender,
+                database_path=config.database_path,
+                stop_event=stop_event,
+                interval_seconds=config.cancellation_recovery_poll_interval_seconds,
+                error_callback=lambda error: diagnostics.handle_runtime_exception(
+                    exception=error,
+                    sender=sender,
+                    location="cancellation_recovery_loop",
+                ),
+            ),
+            name="cancellation-recovery",
+        )
+    else:
+        logger.info("Cancellation recovery disabled by CANCELLATION_RECOVERY_ENABLED")
     if config.birthday_funnel_enabled:
         birthday_task = asyncio.create_task(
             run_birthday_loop(
@@ -95,6 +114,9 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
         if birthday_task is not None:
             birthday_task.cancel()
             tasks.append(birthday_task)
+        if cancellation_recovery_task is not None:
+            cancellation_recovery_task.cancel()
+            tasks.append(cancellation_recovery_task)
         for task in tasks:
             try:
                 await task

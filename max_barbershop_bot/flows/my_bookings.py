@@ -14,6 +14,7 @@ from max_barbershop_bot.repositories.platform_attribution import PlatformAttribu
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
+from max_barbershop_bot.services.cancellation_recovery import create_cancellation_recovery_event
 from max_barbershop_bot.services.booking import (
     BookingService,
     BookingServiceError,
@@ -216,6 +217,12 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
         return
 
     _log_local_cancellation(platform_user_id=platform_user_id, yclients_record_id=record_id, user=user, marker=marker)
+    create_cancellation_recovery_event(
+        database_path=_database_path(),
+        platform_user_id=platform_user_id,
+        yclients_record_id=record_id,
+        user=user,
+    )
     _mark_cancel_completed(context, record_id)
     _clear_cancel_in_progress(context)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, None)
