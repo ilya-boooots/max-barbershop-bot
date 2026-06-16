@@ -77,6 +77,26 @@ class DueReminder:
     record: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ReminderLoopStatus:
+    """In-memory diagnostics for the running reminder loop."""
+
+    last_started_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_error_at: datetime | None = None
+    last_error_class: str | None = None
+    is_running: bool = False
+
+
+_reminder_loop_status = ReminderLoopStatus()
+
+
+def get_reminder_loop_status() -> ReminderLoopStatus:
+    """Return the current in-memory reminder loop status."""
+
+    return _reminder_loop_status
+
+
 def build_reminder_schedule(booking_datetime: datetime, timezone_name: str, *, now: datetime | None = None) -> dict[str, datetime]:
     """Return Telegram-aligned scheduled moments in the branch timezone."""
 
@@ -384,29 +404,54 @@ async def run_reminder_loop(
 ) -> None:
     """Run a small reminder loop alongside polling."""
 
+    global _reminder_loop_status
     interval = max(30, int(interval_seconds))
+    _reminder_loop_status = ReminderLoopStatus(last_started_at=datetime.now(UTC), is_running=True)
     logger.info("booking_reminder_loop_started interval_seconds=%s", interval)
-    while not stop_event.is_set():
-        try:
-            count = await send_due_reminders(sender, database_path=database_path)
-            feedback_count = await send_due_feedback_requests(sender, database_path=database_path)
-            repeat_visit_count = await process_due_repeat_visit_events(sender, database_path=database_path)
-            if count or feedback_count or repeat_visit_count:
-                logger.info("booking_reminder_loop_processed count=%s feedback_count=%s repeat_visit_count=%s", count, feedback_count, repeat_visit_count)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            if error_callback is None:
-                logger.exception("booking_reminder_loop_failed_safely")
-            else:
-                try:
-                    await error_callback(error)
-                except Exception:
-                    logger.exception("booking_reminder_loop_diagnostics_failed_safely")
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
-        except TimeoutError:
-            continue
+    try:
+        while not stop_event.is_set():
+            try:
+                count = await send_due_reminders(sender, database_path=database_path)
+                feedback_count = await send_due_feedback_requests(sender, database_path=database_path)
+                repeat_visit_count = await process_due_repeat_visit_events(sender, database_path=database_path)
+                _reminder_loop_status = ReminderLoopStatus(
+                    last_started_at=_reminder_loop_status.last_started_at,
+                    last_success_at=datetime.now(UTC),
+                    last_error_at=_reminder_loop_status.last_error_at,
+                    last_error_class=_reminder_loop_status.last_error_class,
+                    is_running=True,
+                )
+                if count or feedback_count or repeat_visit_count:
+                    logger.info("booking_reminder_loop_processed count=%s feedback_count=%s repeat_visit_count=%s", count, feedback_count, repeat_visit_count)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                _reminder_loop_status = ReminderLoopStatus(
+                    last_started_at=_reminder_loop_status.last_started_at,
+                    last_success_at=_reminder_loop_status.last_success_at,
+                    last_error_at=datetime.now(UTC),
+                    last_error_class=type(error).__name__,
+                    is_running=True,
+                )
+                if error_callback is None:
+                    logger.exception("booking_reminder_loop_failed_safely")
+                else:
+                    try:
+                        await error_callback(error)
+                    except Exception:
+                        logger.exception("booking_reminder_loop_diagnostics_failed_safely")
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except TimeoutError:
+                continue
+    finally:
+        _reminder_loop_status = ReminderLoopStatus(
+            last_started_at=_reminder_loop_status.last_started_at,
+            last_success_at=_reminder_loop_status.last_success_at,
+            last_error_at=_reminder_loop_status.last_error_at,
+            last_error_class=_reminder_loop_status.last_error_class,
+            is_running=False,
+        )
     logger.info("booking_reminder_loop_stopped")
 
 
