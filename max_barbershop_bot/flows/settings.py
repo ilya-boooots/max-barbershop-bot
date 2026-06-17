@@ -164,7 +164,7 @@ async def handle_settings_contacts_preview(context: RouterContext) -> None:
         return
     await _answer_callback_if_needed(context)
     contacts = await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_CONTACTS_SCREEN)
+    state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), state.SETTINGS_CONTACTS_SCREEN)
     await context.send_text(_render_contacts_preview(contacts), keyboard=settings_contacts_keyboard())
 
 
@@ -366,7 +366,7 @@ async def handle_settings_back(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context)
-    current = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
+    current = state.get_current_screen(context.event.platform_user_id, _settings_state_chat_id(context))
     if current in {state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN}:
         await _show_contacts_editor(context)
         return
@@ -402,7 +402,7 @@ async def _show_contacts_editor(context: RouterContext) -> None:
         f"📞 Телефон: {contacts.phone or '—'}\n"
         f"⏰ Режим работы: {contacts.schedule or '—'}"
     )
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_CONTACTS_SCREEN)
+    state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), state.SETTINGS_CONTACTS_SCREEN)
     await context.send_text(text, keyboard=settings_contacts_keyboard())
 
 
@@ -480,7 +480,7 @@ async def _start_contacts_edit(context: RouterContext, screen_id: str, prompt: s
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context)
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, screen_id)
+    state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), screen_id)
     await context.send_text(prompt, keyboard=settings_contacts_input_keyboard())
 
 
@@ -554,10 +554,29 @@ def _actor_role(context: RouterContext) -> str:
 
 
 def _push_current_screen(context: RouterContext, screen_id: str) -> None:
-    current = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
+    chat_id = _settings_state_chat_id(context)
+    current = state.get_current_screen(context.event.platform_user_id, chat_id)
     if current != screen_id:
-        state.push_screen(context.event.platform_user_id, context.event.chat_id, current)
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, screen_id)
+        state.push_screen(context.event.platform_user_id, chat_id, current)
+    state.set_current_screen(context.event.platform_user_id, chat_id, screen_id)
+
+
+def _settings_state_chat_id(context: RouterContext) -> str | None:
+    if context.event.chat_id is not None:
+        return context.event.chat_id
+
+    candidate_screens = (
+        state.SETTINGS_CONTACTS_SCREEN,
+        state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN,
+        state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN,
+        state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN,
+        state.SETTINGS_MENU_SCREEN,
+    )
+    for screen_id in candidate_screens:
+        chat_id = state.find_chat_id_for_current_screen(context.event.platform_user_id, screen_id)
+        if chat_id is not None:
+            return chat_id
+    return None
 
 
 def _audit(context: RouterContext, actor_role: str, *, action: str, section: str, target_platform_user_id: str | None = None, metadata: dict[str, object] | None = None) -> None:

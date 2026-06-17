@@ -244,7 +244,11 @@ class Router:
         return event
 
     def _recover_contacts_settings_text_chat(self, event: NormalizedEvent) -> NormalizedEvent:
-        if event.update_type != "message_created" or event.chat_id is not None or event.text is None:
+        if event.update_type != "message_created" or event.text is None:
+            return event
+
+        current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
+        if current_screen in _CONTACTS_SETTINGS_INPUT_SCREENS:
             return event
 
         for screen_id in _CONTACTS_SETTINGS_INPUT_SCREENS:
@@ -252,11 +256,16 @@ class Router:
             if recovered_chat_id is not None:
                 logger.info(
                     "MAX contacts settings text route recovery: "
-                    "platform_user_id_present=%s recovered_chat_id_present=%s screen_id=%s",
+                    "platform_user_id_present=%s original_chat_id_present=%s "
+                    "recovered_chat_id_present=%s screen_id=%s",
                     event.platform_user_id is not None,
+                    event.chat_id is not None,
                     True,
                     screen_id,
                 )
+                if event.chat_id is not None:
+                    state.set_current_screen(event.platform_user_id, event.chat_id, screen_id)
+                    return event
                 return replace(event, chat_id=recovered_chat_id)
         return event
 
