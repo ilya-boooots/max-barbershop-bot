@@ -22,13 +22,6 @@ logger = logging.getLogger(__name__)
 HandlerResult = Awaitable[None] | None
 EventHandler = Callable[["RouterContext"], HandlerResult]
 
-_CONTACTS_SETTINGS_INPUT_SCREENS = (
-    state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN,
-    state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN,
-    state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN,
-)
-
-
 @dataclass(frozen=True)
 class RouterContext:
     """Data and helpers available to flow handlers."""
@@ -126,7 +119,7 @@ class Router:
                 event = replace(event, attachments=raw_attachments)
 
         event = self._recover_phone_contact_chat(event)
-        event = self._recover_contacts_settings_text_chat(event)
+        event = self._recover_screen_text_chat(event)
 
         self._log_contact_diagnostic(event)
         if await self._is_throttled(event, sender):
@@ -202,6 +195,7 @@ class Router:
             return None
 
         handler = self._screen_text_handlers.get(current_screen)
+        self._log_text_input_routing_diagnostic(event, current_screen, handler is not None)
         self._log_yclients_setup_text_diagnostic(event, current_screen, handler is not None)
         return handler or self._unknown_text_handler
 
@@ -243,30 +237,37 @@ class Router:
         )
         return event
 
-    def _recover_contacts_settings_text_chat(self, event: NormalizedEvent) -> NormalizedEvent:
+    def _recover_screen_text_chat(self, event: NormalizedEvent) -> NormalizedEvent:
         if event.update_type != "message_created" or event.text is None:
             return event
 
         current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
-        if current_screen in _CONTACTS_SETTINGS_INPUT_SCREENS:
+        if current_screen in self._screen_text_handlers:
             return event
 
-        for screen_id in _CONTACTS_SETTINGS_INPUT_SCREENS:
+        for screen_id in self._screen_text_handlers:
             recovered_chat_id = state.find_chat_id_for_current_screen(event.platform_user_id, screen_id)
-            if recovered_chat_id is not None:
-                logger.info(
-                    "MAX contacts settings text route recovery: "
-                    "platform_user_id_present=%s original_chat_id_present=%s "
-                    "recovered_chat_id_present=%s screen_id=%s",
-                    event.platform_user_id is not None,
-                    event.chat_id is not None,
-                    True,
-                    screen_id,
-                )
-                if event.chat_id is not None:
-                    state.set_current_screen(event.platform_user_id, event.chat_id, screen_id)
-                    return event
-                return replace(event, chat_id=recovered_chat_id)
+            if recovered_chat_id is None:
+                continue
+            logger.info(
+                "MAX text input routing diagnostic: "
+                "platform_user_id_present=%s chat_id_present=%s current_screen=%s "
+                "expected_input_type=%s handler_found=%s routed_to_handler=%s fallback_used=%s "
+                "input_type=%s flow_name=%s",
+                event.platform_user_id is not None,
+                event.chat_id is not None,
+                current_screen,
+                "text",
+                True,
+                True,
+                False,
+                "text",
+                _flow_name_from_screen(screen_id),
+            )
+            if event.chat_id is not None:
+                state.set_current_screen(event.platform_user_id, event.chat_id, screen_id)
+                return event
+            return replace(event, chat_id=recovered_chat_id)
         return event
 
     def _log_contact_diagnostic(self, event: NormalizedEvent) -> None:
@@ -307,6 +308,25 @@ class Router:
         handler = self._callback_handlers.get(payload)
         self._log_yclients_setup_callback_diagnostic(event, route_matched=handler is not None)
         return handler or self._unknown_callback_handler
+
+    def _log_text_input_routing_diagnostic(self, event: NormalizedEvent, screen_id: str, handler_found: bool) -> None:
+        if event.text is None:
+            return
+        logger.info(
+            "MAX text input routing diagnostic: "
+            "platform_user_id_present=%s chat_id_present=%s current_screen=%s "
+            "expected_input_type=%s handler_found=%s routed_to_handler=%s fallback_used=%s "
+            "input_type=%s flow_name=%s",
+            event.platform_user_id is not None,
+            event.chat_id is not None,
+            screen_id,
+            "text" if handler_found else None,
+            handler_found,
+            handler_found,
+            not handler_found,
+            "text",
+            _flow_name_from_screen(screen_id),
+        )
 
     def _safe_log_text(self, event: NormalizedEvent) -> str | None:
         screen_id = state.get_current_screen(event.platform_user_id, event.chat_id)
@@ -505,3 +525,9 @@ def _yclients_setup_step(screen_id: str) -> str | None:
 
 def _handler_name(handler: EventHandler) -> str:
     return getattr(handler, "__qualname__", None) or getattr(handler, "__name__", None) or type(handler).__name__
+
+
+def _flow_name_from_screen(screen_id: str | None) -> str | None:
+    if not screen_id:
+        return None
+    return screen_id.split("_", 1)[0]

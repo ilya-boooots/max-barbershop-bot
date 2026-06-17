@@ -443,12 +443,19 @@ async def _save_support_settings(
 
     repository = SupportSettingsRepository(_database_path())
     current = _support_settings()
-    username = support_username if support_username is not None else current.support_username
-    description = support_description if support_description is not None else current.support_description
+    if support_username is not None and not support_username.strip():
+        await context.send_text("Введите username в формате @username 🙏", keyboard=settings_support_input_keyboard())
+        return
+    if support_description is not None and not support_description.strip():
+        await context.send_text("📝 Текст поддержки не может быть пустым. Введите текст поддержки:", keyboard=settings_support_input_keyboard())
+        return
+
+    username = support_username.strip() if support_username is not None else current.support_username
+    description = support_description.strip() if support_description is not None else current.support_description
     try:
         repository.upsert_active(username, description)
     except ValueError:
-        await context.send_text("⛔️ Username поддержки выглядит неверно. Введите @username или ссылку t.me/username.", keyboard=settings_support_input_keyboard())
+        await context.send_text("Введите username в формате @username 🙏", keyboard=settings_support_input_keyboard())
         return
     _audit(
         context,
