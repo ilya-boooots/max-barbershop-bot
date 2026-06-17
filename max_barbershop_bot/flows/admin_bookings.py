@@ -73,7 +73,7 @@ async def handle_admin_bookings_open(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем записи 📋")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.ADMIN_BOOKINGS_LIST_SCREEN)
     _set_filter(context, AdminBookingsFilter())
     await _show_list(context)
@@ -86,7 +86,7 @@ async def handle_admin_bookings_day(context: RouterContext) -> None:
     current = _get_filter(context)
     day = "tomorrow" if context.event.callback_payload == ADMIN_BOOKINGS_TOMORROW_PAYLOAD else "today"
     _set_filter(context, AdminBookingsFilter(day=day, master_id=current.master_id, status=current.status))
-    await _answer_callback_if_needed(context, "Обновляем день 📅")
+    await _answer_callback_if_needed(context)
     await _show_list(context)
 
 
@@ -94,7 +94,7 @@ async def handle_admin_bookings_refresh(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Обновляем записи 🔄")
+    await _answer_callback_if_needed(context)
     await _show_list(context)
 
 
@@ -113,7 +113,7 @@ async def handle_admin_bookings_master_picker(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Выбираем мастера 👤")
+    await _answer_callback_if_needed(context)
     try:
         masters = await load_master_options()
     except Exception:
@@ -128,7 +128,7 @@ async def handle_admin_bookings_status_picker(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Выбираем статус 🧾")
+    await _answer_callback_if_needed(context)
     statuses = _get_statuses(context)
     state.set_current_screen(_user_id(context), _chat_id(context), state.ADMIN_BOOKINGS_FILTER_SCREEN)
     await context.send_text("🧾 Выберите статус для фильтра", keyboard=admin_bookings_status_keyboard(statuses))
@@ -174,10 +174,10 @@ async def handle_admin_bookings_detail(context: RouterContext) -> None:
     rows = _get_rows(context)
     index = int(payload.rsplit(":", 1)[-1])
     if not 0 <= index < len(rows):
-        await _answer_callback_if_needed(context, "Список устарел 🙏")
+        await _answer_callback_if_needed(context)
         await context.send_text(STALE_LIST_TEXT, keyboard=admin_booking_detail_keyboard())
         return
-    await _answer_callback_if_needed(context, "Открываем запись 📋")
+    await _answer_callback_if_needed(context)
     try:
         item = await load_admin_booking_detail(rows[index])
     except (AdminBookingsSettingsMissingError, AdminBookingsLoadError, Exception):
@@ -187,7 +187,7 @@ async def handle_admin_bookings_detail(context: RouterContext) -> None:
 
 
 async def handle_admin_bookings_back(context: RouterContext) -> None:
-    await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
+    await _answer_callback_if_needed(context)
     current = state.get_current_screen(_user_id(context), _chat_id(context))
     if current == state.ADMIN_BOOKING_DETAIL_SCREEN:
         await _show_list(context)
@@ -205,7 +205,7 @@ async def handle_admin_bookings_back(context: RouterContext) -> None:
 
 
 async def handle_admin_bookings_home(context: RouterContext) -> None:
-    await _answer_callback_if_needed(context, "Открываем главное меню 🏠")
+    await _answer_callback_if_needed(context)
     state.clear_state_data(_user_id(context), _chat_id(context))
     await show_home(context)
 
@@ -277,9 +277,9 @@ async def _send_no_access(context: RouterContext) -> None:
     await context.send_text(STATISTICS_NO_ACCESS_TEXT)
 
 
-async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
+async def _answer_callback_if_needed(context: RouterContext, notification: str | None = None) -> None:
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()
 
 
 def _user_id(context: RouterContext) -> str | None:

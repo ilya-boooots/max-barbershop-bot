@@ -118,14 +118,14 @@ def register_my_bookings_routes(router: Router) -> None:
 async def handle_my_bookings_open(context: RouterContext) -> None:
     """Open the real My bookings screen instead of the placeholder."""
 
-    await context.answer_callback("Открываем ваши записи 📅")
+    await context.answer_callback()
     await _show_my_bookings(context)
 
 
 async def handle_my_booking_details(context: RouterContext) -> None:
     """Show selected booking details and cancellation action."""
 
-    await context.answer_callback("Открываем запись 📋")
+    await context.answer_callback()
     booking = _booking_by_payload(context)
     if booking is None:
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_booking_cancel_result_keyboard())
@@ -142,7 +142,7 @@ async def handle_my_booking_details(context: RouterContext) -> None:
 async def handle_my_booking_cancel_start(context: RouterContext) -> None:
     """Ask confirmation before cancelling selected booking."""
 
-    await context.answer_callback("Подтвердите отмену ❌")
+    await context.answer_callback()
     booking = _selected_booking(context)
     if booking is None:
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
@@ -162,13 +162,13 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
     chat_id = _chat_id(context)
     booking = _selected_booking(context)
     if booking is None:
-        await context.answer_callback(MY_BOOKING_NOT_FOUND_TEXT)
+        await context.answer_callback()
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
         return
 
     record_id = _booking_record_id(booking)
     if not record_id:
-        await context.answer_callback(MY_BOOKING_NOT_FOUND_TEXT)
+        await context.answer_callback()
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
         return
 
@@ -181,7 +181,7 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
             True,
             True,
         )
-        await context.answer_callback(MY_BOOKING_NOT_FOUND_TEXT)
+        await context.answer_callback()
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_booking_cancel_result_keyboard())
         return
 
@@ -192,7 +192,8 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
             True,
             True,
         )
-        await context.answer_callback(MY_BOOKING_CANCEL_IN_PROGRESS_TEXT)
+        await context.answer_callback()
+        await context.send_text(MY_BOOKING_CANCEL_IN_PROGRESS_TEXT)
         return
 
     if not acquire_action_lock(lock_key, ttl_seconds=DEFAULT_ACTION_LOCK_TTL_SECONDS):
@@ -200,10 +201,11 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
             "MAX antiflood/action lock diagnostic: event_type=%s platform_user_id_present=%s chat_id_present=%s action=%s lock_key_type=%s lock_acquired=%s lock_active=%s ttl_seconds=%s payload_present=%s",
             context.event.update_type, bool(platform_user_id), bool(chat_id), "cancel_booking", "booking:cancel", False, True, DEFAULT_ACTION_LOCK_TTL_SECONDS, bool(context.event.callback_payload),
         )
-        await context.answer_callback(MY_BOOKING_CANCEL_IN_PROGRESS_TEXT)
+        await context.answer_callback()
+        await context.send_text(MY_BOOKING_CANCEL_IN_PROGRESS_TEXT)
         return
     _set_cancel_in_progress(context, record_id)
-    await context.answer_callback("Отменяем запись ⏳")
+    await context.answer_callback()
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
     user = _current_user(context)
     marker = _build_cancellation_marker(_timezone_from_state(context))
@@ -246,7 +248,7 @@ async def handle_my_booking_cancel_confirm(context: RouterContext) -> None:
 async def handle_my_booking_repeat_start(context: RouterContext) -> None:
     """Start repeat booking for the selected YClients record."""
 
-    await context.answer_callback("Готовим повтор записи 🔁")
+    await context.answer_callback()
     booking = _selected_booking(context)
     if booking is None:
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
@@ -309,7 +311,7 @@ async def handle_my_booking_repeat_start(context: RouterContext) -> None:
 async def handle_my_booking_reschedule_start(context: RouterContext) -> None:
     """Start selected future booking reschedule by loading authoritative YClients details."""
 
-    await context.answer_callback("Готовим перенос 🔁")
+    await context.answer_callback()
     booking = _selected_booking(context)
     if booking is None:
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
@@ -362,18 +364,18 @@ async def handle_my_booking_reschedule_date(context: RouterContext) -> None:
     index = _payload_index(context, MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX)
     dates = _reschedule_dates(context)
     if index is None or index < 0 or index >= len(dates):
-        await context.answer_callback("Дата не найдена")
+        await context.answer_callback()
         return
     new_booking_date = dates[index]
     reschedule_context = _reschedule_context(context)
     service_id = _clean_state_text(reschedule_context.get("service_id"))
     staff_id = _clean_state_text(reschedule_context.get("staff_id"))
     if not service_id or not staff_id:
-        await context.answer_callback("Не удалось подготовить перенос 🙏")
+        await context.answer_callback()
         await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
 
-    await context.answer_callback("Ищем свободное время 🕒")
+    await context.answer_callback()
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     try:
         slots = await booking_service.get_available_slots(
@@ -411,12 +413,12 @@ async def handle_my_booking_reschedule_slot(context: RouterContext) -> None:
     index = _payload_index(context, MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX)
     slots = _reschedule_slots(context)
     if index is None or index < 0 or index >= len(slots):
-        await context.answer_callback("Время не найдено")
+        await context.answer_callback()
         return
     selected_slot = slots[index]
     slot_time = _clean_state_text(getattr(selected_slot, "time", None))
     if not slot_time:
-        await context.answer_callback("Время не найдено")
+        await context.answer_callback()
         return
 
     reschedule_context = _reschedule_context(context)
@@ -432,7 +434,7 @@ async def handle_my_booking_reschedule_slot(context: RouterContext) -> None:
     }
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, confirmation_data)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_CONFIRM_SCREEN)
-    await context.answer_callback("Проверьте перенос 🔁")
+    await context.answer_callback()
     await context.send_text(format_reschedule_confirmation_text(confirmation_data), keyboard=my_booking_reschedule_confirmation_keyboard())
 
 
@@ -442,7 +444,8 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
     platform_user_id = _user_id(context)
     chat_id = _chat_id(context)
     if state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY) is True:
-        await context.answer_callback(MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT)
+        await context.answer_callback()
+        await context.send_text(MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT)
         return
     reschedule_context = _reschedule_context(context)
     slot_data = _reschedule_new_slot_data(context)
@@ -450,12 +453,12 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
     record_id = _clean_state_text(reschedule_context.get("yclients_record_id"))
     new_datetime = _clean_state_text(slot_data.get("new_datetime"))
     if not record_id or not new_datetime:
-        await context.answer_callback("Не удалось подготовить перенос 🙏")
+        await context.answer_callback()
         await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
     completed_old_id = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY))
     if completed_old_id == record_id:
-        await context.answer_callback("Запись уже перенесена ✅")
+        await context.answer_callback()
         await context.send_text(_format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)), keyboard=my_booking_reschedule_result_keyboard())
         return
 
@@ -465,10 +468,11 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
             "MAX antiflood/action lock diagnostic: event_type=%s platform_user_id_present=%s chat_id_present=%s action=%s lock_key_type=%s lock_acquired=%s lock_active=%s ttl_seconds=%s payload_present=%s",
             context.event.update_type, bool(platform_user_id), bool(chat_id), "reschedule_booking", "booking:reschedule", False, True, DEFAULT_ACTION_LOCK_TTL_SECONDS, bool(context.event.callback_payload),
         )
-        await context.answer_callback(MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT)
+        await context.answer_callback()
+        await context.send_text(MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT)
         return
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, True)
-    await context.answer_callback("Переносим запись ⏳")
+    await context.answer_callback()
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
     try:
         result = await service.reschedule_booking_for_user(
@@ -507,7 +511,7 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
 async def handle_my_bookings_back(context: RouterContext) -> None:
     """Return from cancellation confirmation to details, or from details to the list."""
 
-    await context.answer_callback("Назад ⬅️")
+    await context.answer_callback()
     current_screen = state.get_current_screen(_user_id(context), _chat_id(context))
     if current_screen in {state.MY_BOOKING_CANCEL_CONFIRM_SCREEN, state.MY_BOOKING_RESCHEDULE_DATES_SCREEN}:
         booking = _selected_booking(context)

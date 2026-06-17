@@ -103,7 +103,7 @@ async def handle_staff_menu(context: RouterContext) -> None:
     if not can_view_staff(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем раздел персонала 👥")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.STAFF_MENU_SCREEN)
     state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
     await _show_staff_menu(context)
@@ -116,7 +116,7 @@ async def handle_staff_list(context: RouterContext) -> None:
     if not can_view_staff(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Показываем список сотрудников 📋")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.STAFF_LIST_SCREEN)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.STAFF_LIST_SCREEN)
     await context.send_text(_build_staff_list_text(), keyboard=navigation_keyboard())
@@ -129,7 +129,7 @@ async def handle_assign_start(context: RouterContext) -> None:
     if not can_manage_roles(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Введите пользователя 👇")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.STAFF_ASSIGN_IDENTIFIER_SCREEN)
     state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
     await context.send_text(STAFF_ASSIGN_IDENTIFIER_TEXT, keyboard=navigation_keyboard())
@@ -171,7 +171,7 @@ async def handle_assign_role(context: RouterContext) -> None:
     actor_role = _actor_role(context)
     target = _target_from_state(context)
     if target is None:
-        await _answer_callback_if_needed(context, "Данные потеряны")
+        await _answer_callback_if_needed(context)
         await context.send_text(STAFF_USER_NOT_FOUND_TEXT, keyboard=navigation_keyboard())
         return
     protected_target = _is_protected_target(target)
@@ -222,7 +222,7 @@ async def handle_remove_start(context: RouterContext) -> None:
     if not can_manage_roles(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Введите пользователя 👇")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.STAFF_REMOVE_IDENTIFIER_SCREEN)
     state.clear_state_data(context.event.platform_user_id, context.event.chat_id)
     await context.send_text(STAFF_REMOVE_IDENTIFIER_TEXT, keyboard=navigation_keyboard())
@@ -271,7 +271,7 @@ async def handle_remove_role(context: RouterContext) -> None:
     actor_role = _actor_role(context)
     target = _target_from_state(context)
     if target is None:
-        await _answer_callback_if_needed(context, "Данные потеряны")
+        await _answer_callback_if_needed(context)
         await context.send_text(STAFF_USER_NOT_FOUND_TEXT, keyboard=navigation_keyboard())
         return
     if _is_protected_target(target):
@@ -453,9 +453,9 @@ def _log_role_change_blocked(
     )
 
 
-async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
+async def _answer_callback_if_needed(context: RouterContext, notification: str | None = None) -> None:
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()
 
 
 def _staff_repository() -> StaffRolesRepository:

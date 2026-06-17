@@ -71,7 +71,7 @@ async def handle_clients_directory_menu(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer(context, "Открываем клиентов 👥")
+    await _answer(context)
     _push(context, state.CLIENTS_DIRECTORY_MENU_SCREEN)
     _clear(context)
     await _show_menu(context)
@@ -108,7 +108,7 @@ async def handle_refresh(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer(context, "Обновляем список 🔄")
+    await _answer(context)
     await _load_and_show_results(context, force_refresh=True)
 
 
@@ -119,7 +119,7 @@ async def handle_result(context: RouterContext) -> None:
     index = _payload_index(context.event.callback_payload)
     rows = state.get_state_data_value(_uid(context), _chat(context), _RESULTS_KEY)
     if index is None or not isinstance(rows, list) or index >= len(rows):
-        await _answer(context, "Список устарел 🙏")
+        await _answer(context)
         await context.send_text(STALE_RESULTS_TEXT, keyboard=clients_directory_menu_keyboard())
         return
     row = rows[index]
@@ -128,12 +128,12 @@ async def handle_result(context: RouterContext) -> None:
         await context.send_text(STALE_RESULTS_TEXT, keyboard=clients_directory_menu_keyboard())
         return
     state.set_state_data_value(_uid(context), _chat(context), _SELECTED_KEY, yclients_client_id)
-    await _answer(context, "Открываем карточку клиента 👤")
+    await _answer(context)
     await _show_card(context, yclients_client_id)
 
 
 async def handle_back(context: RouterContext) -> None:
-    await _answer(context, "Возвращаемся назад ⬅️")
+    await _answer(context)
     current = state.get_current_screen(_uid(context), _chat(context))
     if current == state.CLIENTS_DIRECTORY_CARD_SCREEN:
         await _show_results_from_state(context)
@@ -148,7 +148,7 @@ async def handle_back(context: RouterContext) -> None:
 
 
 async def handle_home(context: RouterContext) -> None:
-    await _answer(context, "Открываем главное меню 🏠")
+    await _answer(context)
     _clear(context)
     await show_home(context)
 
@@ -163,7 +163,7 @@ async def _show_search(context: RouterContext, mode: str, *, answer: bool = True
         await _send_no_access(context)
         return
     if answer:
-        await _answer(context, "Введите запрос 👇")
+        await _answer(context)
     _push(context, state.CLIENTS_DIRECTORY_SEARCH_SCREEN)
     state.set_state_data_value(_uid(context), _chat(context), _MODE_KEY, mode)
     text = "✍️ Введите телефон клиента в чат, я сразу найду клиента 🙂" if mode == "phone" else "✍️ Введите имя клиента в чат, я сразу найду клиента 🙂"
@@ -325,9 +325,9 @@ def _uid(context: RouterContext) -> str | None: return context.event.platform_us
 
 def _chat(context: RouterContext) -> str | None: return context.event.chat_id
 
-async def _answer(context: RouterContext, text: str) -> None:
+async def _answer(context: RouterContext, text: str | None = None) -> None:
     if context.event.callback_id:
-        await context.answer_callback(text)
+        await context.answer_callback()
 
 def _database_path() -> str:
     return getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH

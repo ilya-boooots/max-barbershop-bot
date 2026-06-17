@@ -82,7 +82,7 @@ async def handle_segments_menu(context: RouterContext) -> None:
     if not _can_open_segments(context):
         await _send_no_access(context)
         return
-    await _answer_callback(context, "Открываем сегменты клиентов 🎯")
+    await _answer_callback(context)
     _clear_segment_state(context)
     state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENTS_MENU_SCREEN)
     await context.send_text(CLIENT_SEGMENTS_MENU_TEXT, keyboard=client_segments_menu_keyboard())
@@ -110,7 +110,7 @@ async def handle_segment_refresh(context: RouterContext) -> None:
     if not isinstance(payload, str) or payload not in _SEGMENT_CALLBACKS:
         await handle_segments_menu(context)
         return
-    await _show_segment(context, payload, notification="Обновляем сегмент 🔄")
+    await _show_segment(context, payload)
 
 
 async def handle_segment_broadcast(context: RouterContext) -> None:
@@ -124,7 +124,7 @@ async def handle_segment_broadcast(context: RouterContext) -> None:
     if result is None:
         await handle_segments_menu(context)
         return
-    await _answer_callback(context, "Готовим рассылку по сегменту 📣")
+    await _answer_callback(context)
     if result.count > len(recipients):
         await context.send_text(
             f"{CLIENT_SEGMENTS_BROADCAST_LIMIT_TEXT}\n\nДоступно для рассылки: {len(recipients)} из {result.count}.",
@@ -143,7 +143,7 @@ async def handle_segment_broadcast(context: RouterContext) -> None:
 async def handle_segments_back(context: RouterContext) -> None:
     """Navigate back from segments screens."""
 
-    await _answer_callback(context, "Возвращаемся назад ⬅️")
+    await _answer_callback(context)
     current = state.get_current_screen(_user_id(context), _chat_id(context))
     if current == state.CLIENT_SEGMENT_RESULT_SCREEN:
         state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENTS_MENU_SCREEN)
@@ -156,12 +156,12 @@ async def handle_segments_back(context: RouterContext) -> None:
 async def handle_segments_home(context: RouterContext) -> None:
     """Return to role-based main menu."""
 
-    await _answer_callback(context, "Открываем главное меню 🏠")
+    await _answer_callback(context)
     _clear_segment_state(context)
     await show_home(context)
 
 
-async def _show_segment(context: RouterContext, payload: str, *, notification: str = "Загружаем сегмент 🎯") -> None:
+async def _show_segment(context: RouterContext, payload: str, *, notification: str | None = None) -> None:
     await _answer_callback(context, notification)
     try:
         result = await _load_segment(payload)
@@ -267,9 +267,10 @@ async def _send_no_access(context: RouterContext) -> None:
     await context.send_text(BROADCAST_NO_ACCESS_TEXT)
 
 
-async def _answer_callback(context: RouterContext, notification: str) -> None:
+async def _answer_callback(context: RouterContext, notification: str | None = None) -> None:
+    del notification
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()
 
 
 def _clear_segment_state(context: RouterContext) -> None:

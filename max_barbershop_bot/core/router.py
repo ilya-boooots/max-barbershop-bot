@@ -54,13 +54,19 @@ class RouterContext:
             self.event.update_type,
         )
 
-    async def answer_callback(self, notification: str) -> None:
-        """Answer a callback event when MAX callback_id is available."""
+    async def answer_callback(self, notification: str | None = None) -> None:
+        """Answer a callback event silently when MAX callback_id is available."""
+
+        del notification
+        await self.answer_callback_silent()
+
+    async def answer_callback_silent(self) -> None:
+        """Acknowledge a MAX callback without showing a user-visible toast."""
 
         if not self.event.callback_id:
             logger.warning("Cannot answer MAX callback: callback_id is missing")
             return
-        await self.sender.answer_callback(self.event.callback_id, notification=notification)
+        await self.sender.answer_callback(self.event.callback_id)
 
 
 class Router:
@@ -163,7 +169,8 @@ class Router:
                 event.callback_payload is not None,
             )
             context = RouterContext(event=event, sender=sender)
-            await context.answer_callback(ACTION_IN_PROGRESS_TEXT)
+            await context.answer_callback()
+            await context.send_text(ACTION_IN_PROGRESS_TEXT)
             return True
         return False
 

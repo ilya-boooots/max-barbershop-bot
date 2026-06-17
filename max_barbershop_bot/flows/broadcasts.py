@@ -91,7 +91,7 @@ async def handle_broadcast_menu(context: RouterContext) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем рассылку 📣")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_MENU_SCREEN)
     _clear_broadcast_state(context)
     await context.send_text(BROADCAST_MENU_TEXT, keyboard=broadcast_menu_keyboard())
@@ -106,7 +106,7 @@ async def handle_one_time_start(context: RouterContext) -> None:
     if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
-    await _answer_callback_if_needed(context, "Введите текст рассылки ✉️")
+    await _answer_callback_if_needed(context)
     _clear_broadcast_state(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
     await context.send_text(BROADCAST_TEXT_INPUT_TEXT, keyboard=broadcast_text_keyboard())
@@ -147,7 +147,7 @@ async def handle_preview_next(context: RouterContext) -> None:
     if not text:
         await _open_text_step(context)
         return
-    await _answer_callback_if_needed(context, "Выберите аудиторию 👥")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
     await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
 
@@ -161,7 +161,7 @@ async def handle_preview_edit(context: RouterContext) -> None:
     if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
-    await _answer_callback_if_needed(context, "Изменим текст ✏️")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
     await context.send_text(BROADCAST_TEXT_INPUT_TEXT, keyboard=broadcast_text_keyboard())
 
@@ -198,7 +198,7 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_DISABLED_KEY, skipped_disabled)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_MISSING_KEY, skipped_missing)
 
-    await _answer_callback_if_needed(context, "Аудитория выбрана ✅")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
     if not recipients:
         await context.send_text(BROADCAST_NO_RECIPIENTS_TEXT, keyboard=broadcast_confirm_keyboard(can_send=False))
@@ -279,7 +279,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_IN_PROGRESS_KEY, True)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SEND_TOKEN_KEY, send_token)
     state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_SENDING_SCREEN)
-    await _answer_callback_if_needed(context, "Отправляем рассылку 🚀")
+    await _answer_callback_if_needed(context)
     await context.send_text(BROADCAST_SENDING_TEXT)
 
     if is_action_locked(_BROADCAST_SEND_LOCK_KEY):
@@ -348,7 +348,7 @@ async def handle_broadcast_back(context: RouterContext) -> None:
     if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
-    await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
+    await _answer_callback_if_needed(context)
     current = state.get_current_screen(_user_id(context), _chat_id(context))
     if current == state.BROADCAST_ONE_TIME_TEXT_SCREEN:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_MENU_SCREEN)
@@ -381,7 +381,7 @@ async def handle_broadcast_home(context: RouterContext) -> None:
     if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
-    await _answer_callback_if_needed(context, "Открываем главное меню 🏠")
+    await _answer_callback_if_needed(context)
     _clear_broadcast_state(context)
     await show_home(context)
 
@@ -464,9 +464,9 @@ async def _send_sending_in_progress(context: RouterContext) -> None:
     await context.send_text(BROADCAST_ALREADY_SENDING_TEXT)
 
 
-async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
+async def _answer_callback_if_needed(context: RouterContext, notification: str | None = None) -> None:
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()
 
 
 def _broadcast_text(context: RouterContext) -> str | None:

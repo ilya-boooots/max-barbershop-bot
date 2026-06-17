@@ -105,7 +105,7 @@ async def handle_yclients_menu(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем YClients 🧩")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
     state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
     await _show_settings_menu(context)
@@ -117,7 +117,7 @@ async def handle_setup_start(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Настраиваем подключение ⚙️")
+    await _answer_callback_if_needed(context)
     _log_audit(context, "yclients_settings_started", {"source": "settings_menu"})
     chat_id = _state_chat_id(context)
     state.clear_state_data(context.event.platform_user_id, chat_id)
@@ -248,7 +248,7 @@ async def handle_skip_branch_title(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Пропускаем название филиала ⏭️")
+    await _answer_callback_if_needed(context)
     state.set_state_data_value(context.event.platform_user_id, _state_chat_id(context), _BRANCH_TITLE_KEY, None)
     await _show_confirm(context)
 
@@ -261,7 +261,7 @@ async def handle_save_settings(context: RouterContext) -> None:
         return
     draft = _draft_from_state(context)
     if draft is None:
-        await _answer_callback_if_needed(context, "Не хватает данных 🙏")
+        await _answer_callback_if_needed(context)
         state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
         _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
         await context.send_text("Не хватает данных подключения 🙏\n\nНачните настройку заново.", keyboard=yclients_settings_keyboard())
@@ -308,7 +308,7 @@ async def handle_connection_check(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Проверяем подключение 🔍")
+    await _answer_callback_if_needed(context)
     settings = load_active_yclients_settings(_settings_repository(), operation="check_yclients_connection")
     if not is_configured(settings):
         _log_health_audit(context, success=False, settings=settings, category=YCLIENTS_ERROR_CREDENTIALS)
@@ -341,7 +341,7 @@ async def handle_connection_check(context: RouterContext) -> None:
 async def handle_yclients_back(context: RouterContext) -> None:
     """Navigate backward inside the YClients settings flow."""
 
-    await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
+    await _answer_callback_if_needed(context)
     current = state.get_current_screen(context.event.platform_user_id, _state_chat_id(context))
     if current in _SETUP_PREVIOUS_SCREEN:
         previous = _SETUP_PREVIOUS_SCREEN[current]
@@ -366,7 +366,7 @@ async def handle_yclients_back(context: RouterContext) -> None:
 async def handle_yclients_home(context: RouterContext) -> None:
     """Discard temporary setup data and return to the role-based main menu."""
 
-    await _answer_callback_if_needed(context, "Открываем главное меню 🏠")
+    await _answer_callback_if_needed(context)
     state.reset_to_home(context.event.platform_user_id, _state_chat_id(context))
     await show_home(context)
 
@@ -594,11 +594,11 @@ async def _send_no_access(context: RouterContext) -> None:
     await context.send_text(YCLIENTS_NO_ACCESS_TEXT)
 
 
-async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
+async def _answer_callback_if_needed(context: RouterContext, notification: str | None = None) -> None:
     if not context.event.callback_id:
         return
     try:
-        await context.answer_callback(notification)
+        await context.answer_callback()
     except Exception as exc:  # noqa: BLE001 - callback answer must not block the screen.
         logger.warning(
             "YClients callback answer failed safely: operation=answer_callback error_class=%s",
