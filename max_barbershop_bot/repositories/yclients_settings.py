@@ -283,6 +283,13 @@ class YClientsSettingsRepository:
             return None
         return self.update_settings(active.id, contacts_override_json=override_json)
 
+    def update_contacts_override_field(self, field: str, value: str) -> YClientsSettings | None:
+        """Update one contacts override field without touching other settings or override fields."""
+
+        override = self.get_contacts_override()
+        override[field] = value
+        return self.set_contacts_override(override)
+
     def _connect(self) -> sqlite3.Connection:
         """Open a sqlite connection for one repository operation."""
 

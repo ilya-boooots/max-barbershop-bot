@@ -80,8 +80,16 @@ class ContactsService:
             )
             return fallback_contact_info()
 
+        yclients_info = await self._get_yclients_contacts()
         if has_useful_override(override):
-            return contact_info_from_override(override)
+            return merge_contact_info(
+                override=contact_info_from_override(override),
+                fallback=yclients_info,
+            )
+        return yclients_info
+
+    async def _get_yclients_contacts(self) -> ContactInfo:
+        """Return contacts from YClients or a friendly fallback marker."""
 
         try:
             settings = load_active_yclients_settings(self._settings_repository, operation="get_contacts")
@@ -162,6 +170,28 @@ def contact_info_from_override(override: dict[str, Any]) -> ContactInfo:
         instagram=_first_text(override, "instagram"),
         source="override",
         raw=_safe_raw_subset(override),
+    )
+
+
+def merge_contact_info(*, override: ContactInfo, fallback: ContactInfo) -> ContactInfo:
+    """Merge manual override fields with YClients/fallback values field by field."""
+
+    raw: dict[str, Any] = {}
+    if fallback.raw:
+        raw.update(fallback.raw)
+    if override.raw:
+        raw.update(override.raw)
+    return ContactInfo(
+        title=override.title or fallback.title,
+        address=override.address or fallback.address,
+        phone=override.phone or fallback.phone,
+        schedule=override.schedule or fallback.schedule,
+        website=override.website or fallback.website,
+        map_url=override.map_url or fallback.map_url,
+        telegram=override.telegram or fallback.telegram,
+        instagram=override.instagram or fallback.instagram,
+        source="override",
+        raw=raw or None,
     )
 
 
