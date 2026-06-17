@@ -84,6 +84,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS support_settings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             support_username TEXT,
+            support_max_username TEXT,
             support_description TEXT,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -401,6 +402,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "yclients_settings", "created_at", "TEXT")
     _ensure_column(connection, "yclients_settings", "updated_at", "TEXT")
     _ensure_column(connection, "support_settings", "support_username", "TEXT")
+    _ensure_column(connection, "support_settings", "support_max_username", "TEXT")
     _ensure_column(connection, "support_settings", "support_description", "TEXT")
     _ensure_column(connection, "support_settings", "is_active", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(connection, "support_settings", "created_at", "TEXT")

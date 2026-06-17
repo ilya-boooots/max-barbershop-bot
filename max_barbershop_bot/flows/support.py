@@ -10,7 +10,7 @@ from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.support_settings import (
     SupportSettings,
     SupportSettingsRepository,
-    build_support_url,
+    build_max_support_url,
     display_support_username,
     effective_support_settings,
 )
@@ -37,21 +37,21 @@ async def handle_support(context: RouterContext) -> None:
 
 
 def render_support_message(settings: SupportSettings) -> str:
-    """Render Telegram-style support screen text with MAX fallback hints."""
+    """Render support screen text with MAX link-button fallback hints."""
 
     description = (settings.support_description or "").strip()
     username = display_support_username(settings.support_username)
-    support_url = build_support_url(settings.support_username)
+    support_url = build_max_support_url(settings.support_max_username)
     if not username or not support_url:
         body = description or SUPPORT_MISSING_USERNAME_TEXT
         return f"🆘 Поддержка\n\n{body}"
 
     body = description or SUPPORT_MISSING_USERNAME_TEXT
-    return f"🆘 Поддержка\n\n{body}\n\nКонтакт: {username}\nСсылка: {support_url}\n\n{SUPPORT_LINK_FALLBACK_TEXT}"
+    return f"🆘 Поддержка\n\n{body}\n\nКонтакт: {username}\n\n{SUPPORT_LINK_FALLBACK_TEXT}"
 
 
 def _support_keyboard(settings: SupportSettings) -> MaxInlineKeyboard:
-    support_url = build_support_url(settings.support_username)
+    support_url = build_max_support_url(settings.support_max_username)
     if support_url:
         return support_screen_keyboard(support_url=support_url)
     return navigation_keyboard()

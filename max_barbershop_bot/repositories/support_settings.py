@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 DEFAULT_SUPPORT_DESCRIPTION = "Если у вас возникли вопросы, напишите нам — с удовольствием поможем! 🙂"
 DEFAULT_SUPPORT_USERNAME = "flowbots1sup"
+DEFAULT_SUPPORT_MAX_USERNAME = "flowbots1sup"
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class SupportSettings:
 
     id: int | None = None
     support_username: str | None = None
+    support_max_username: str | None = None
     support_description: str = DEFAULT_SUPPORT_DESCRIPTION
     is_active: bool = True
     created_at: str | None = None
@@ -54,10 +56,12 @@ class SupportSettingsRepository:
             if current is None:
                 cursor = connection.execute(
                     """
-                    INSERT INTO support_settings (support_username, support_description, is_active)
-                    VALUES (?, ?, 1)
+                    INSERT INTO support_settings (
+                        support_username, support_max_username, support_description, is_active
+                    )
+                    VALUES (?, ?, ?, 1)
                     """,
-                    (username, description),
+                    (username, username, description),
                 )
                 settings_id = int(cursor.lastrowid)
             else:
@@ -74,6 +78,7 @@ class SupportSettingsRepository:
             return self._get_by_id(connection, settings_id) or SupportSettings(
                 id=settings_id,
                 support_username=username,
+                support_max_username=username,
                 support_description=description,
             )
 
@@ -137,14 +142,28 @@ def build_support_url(username: str | None) -> str | None:
     return f"https://t.me/{normalized}" if normalized else None
 
 
+def build_max_support_url(username: str | None) -> str | None:
+    """Build an official MAX bot/chat deeplink for support."""
+
+    normalized = normalize_support_username(username)
+    return f"https://max.ru/{normalized}" if normalized else None
+
+
 def effective_support_settings(settings: SupportSettings | None) -> SupportSettings:
     """Apply Telegram defaults when DB settings are missing."""
 
     if settings is None:
-        return SupportSettings(support_username=DEFAULT_SUPPORT_USERNAME, support_description=DEFAULT_SUPPORT_DESCRIPTION)
+        return SupportSettings(
+            support_username=DEFAULT_SUPPORT_USERNAME,
+            support_max_username=DEFAULT_SUPPORT_MAX_USERNAME,
+            support_description=DEFAULT_SUPPORT_DESCRIPTION,
+        )
     return SupportSettings(
         id=settings.id,
         support_username=normalize_support_username(settings.support_username) or DEFAULT_SUPPORT_USERNAME,
+        support_max_username=normalize_support_username(settings.support_max_username)
+        or normalize_support_username(settings.support_username)
+        or DEFAULT_SUPPORT_MAX_USERNAME,
         support_description=_support_description_or_default(settings.support_description),
         is_active=settings.is_active,
         created_at=settings.created_at,
@@ -162,8 +181,15 @@ def _row_to_settings(row: sqlite3.Row | None) -> SupportSettings | None:
     return SupportSettings(
         id=row["id"],
         support_username=normalize_support_username(row["support_username"]),
+        support_max_username=normalize_support_username(
+            _optional_row_value(row, "support_max_username")
+        ),
         support_description=_support_description_or_default(row["support_description"]),
         is_active=bool(row["is_active"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _optional_row_value(row: sqlite3.Row, key: str) -> str | None:
+    return row[key] if key in row.keys() else None

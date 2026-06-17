@@ -22,7 +22,12 @@ from max_barbershop_bot.flows.staff import handle_staff_menu
 from max_barbershop_bot.flows.yclients_settings import handle_connection_check, handle_yclients_menu
 from max_barbershop_bot.flows.support import render_support_message
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
-from max_barbershop_bot.repositories.support_settings import SupportSettingsRepository, build_support_url, display_support_username, effective_support_settings
+from max_barbershop_bot.repositories.support_settings import (
+    SupportSettingsRepository,
+    build_max_support_url,
+    display_support_username,
+    effective_support_settings,
+)
 from max_barbershop_bot.repositories.users import PLATFORM_MAX
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactInfo, ContactsService
@@ -409,11 +414,11 @@ async def _show_contacts_editor(context: RouterContext) -> None:
 async def _show_support_editor(context: RouterContext) -> None:
     settings = _support_settings()
     username = display_support_username(settings.support_username) or "—"
-    support_url = build_support_url(settings.support_username) or "—"
+    support_url = build_max_support_url(settings.support_max_username) or "—"
     text = (
         "🆘 Редактирование поддержки\n\n"
         f"👤 Username: {username}\n"
-        f"🔗 Ссылка: {support_url}\n"
+        f"🔗 MAX-кнопка: {support_url}\n"
         f"📝 Текст: {settings.support_description or '—'}"
     )
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_SUPPORT_SCREEN)
