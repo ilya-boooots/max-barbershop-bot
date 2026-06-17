@@ -54,6 +54,13 @@ SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD = "settings:contacts:phone"
 SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD = "settings:contacts:schedule"
 SETTINGS_CONTACTS_RESET_PAYLOAD = "settings:contacts:reset"
 SETTINGS_CONTACTS_PREVIEW_PAYLOAD = "settings:contacts:preview"
+SETTINGS_CONTACTS_MAP_YANDEX_PAYLOAD = "settings:contacts:map:yandex"
+SETTINGS_CONTACTS_MAP_TWOGIS_PAYLOAD = "settings:contacts:map:twogis"
+SETTINGS_CONTACTS_MAP_GOOGLE_PAYLOAD = "settings:contacts:map:google"
+SETTINGS_CONTACTS_MAP_EDIT_PREFIX = "settings:contacts:map:edit:"
+SETTINGS_CONTACTS_MAP_HIDE_PREFIX = "settings:contacts:map:hide:"
+SETTINGS_CONTACTS_MAP_SHOW_PREFIX = "settings:contacts:map:show:"
+SETTINGS_CONTACTS_MAP_DELETE_PREFIX = "settings:contacts:map:delete:"
 SETTINGS_SUPPORT_PAYLOAD = "settings:support"
 SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD = "settings:support:username"
 SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD = "settings:support:description"
@@ -390,6 +397,9 @@ def settings_contacts_keyboard() -> MaxInlineKeyboard:
             [MaxButton(text="🏠 Изменить адрес", payload=SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD)],
             [MaxButton(text="📞 Изменить телефон", payload=SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD)],
             [MaxButton(text="⏰ Изменить режим работы", payload=SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD)],
+            [MaxButton(text="🗺 Яндекс Карты", payload=SETTINGS_CONTACTS_MAP_YANDEX_PAYLOAD)],
+            [MaxButton(text="🗺 2GIS", payload=SETTINGS_CONTACTS_MAP_TWOGIS_PAYLOAD)],
+            [MaxButton(text="🗺 Google Maps", payload=SETTINGS_CONTACTS_MAP_GOOGLE_PAYLOAD)],
             [MaxButton(text="♻️ Сбросить к данным YClients", payload=SETTINGS_CONTACTS_RESET_PAYLOAD)],
             [MaxButton(text="👁️ Предпросмотр", payload=SETTINGS_CONTACTS_PREVIEW_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
@@ -397,6 +407,28 @@ def settings_contacts_keyboard() -> MaxInlineKeyboard:
         ]
     )
 
+
+
+def settings_contacts_map_keyboard(*, map_key: str, enabled: bool) -> MaxInlineKeyboard:
+    """Build one map-link settings submenu keyboard."""
+
+    visibility_button = MaxButton(
+        text="🙈 Скрыть кнопку" if enabled else "👁 Показать кнопку",
+        payload=(
+            f"{SETTINGS_CONTACTS_MAP_HIDE_PREFIX}{map_key}"
+            if enabled
+            else f"{SETTINGS_CONTACTS_MAP_SHOW_PREFIX}{map_key}"
+        ),
+    )
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✏️ Изменить ссылку", payload=f"{SETTINGS_CONTACTS_MAP_EDIT_PREFIX}{map_key}")],
+            [visibility_button],
+            [MaxButton(text="🗑 Удалить ссылку", payload=f"{SETTINGS_CONTACTS_MAP_DELETE_PREFIX}{map_key}")],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
 
 def support_screen_keyboard(*, support_url: str | None) -> MaxInlineKeyboard:
     """Build public support keyboard with Telegram-style action and navigation."""
