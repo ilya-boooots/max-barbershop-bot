@@ -496,9 +496,7 @@ async def _save_contact_field(context: RouterContext, *, field: str, value: str)
         return
 
     settings_repository = YClientsSettingsRepository(_database_path())
-    override = settings_repository.get_contacts_override()
-    override[field] = cleaned_value
-    settings_repository.set_contacts_override(override)
+    settings_repository.update_contacts_override_field(field, cleaned_value)
     _audit(
         context,
         actor_role,
