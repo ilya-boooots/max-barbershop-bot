@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 HandlerResult = Awaitable[None] | None
 EventHandler = Callable[["RouterContext"], HandlerResult]
 
+_CONTACTS_SETTINGS_INPUT_SCREENS = (
+    state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN,
+    state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN,
+    state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN,
+)
+
 
 @dataclass(frozen=True)
 class RouterContext:
@@ -120,6 +126,7 @@ class Router:
                 event = replace(event, attachments=raw_attachments)
 
         event = self._recover_phone_contact_chat(event)
+        event = self._recover_contacts_settings_text_chat(event)
 
         self._log_contact_diagnostic(event)
         if await self._is_throttled(event, sender):
@@ -234,6 +241,32 @@ class Router:
             _attachment_types(diagnostic_attachments),
             route_recovered,
         )
+        return event
+
+    def _recover_contacts_settings_text_chat(self, event: NormalizedEvent) -> NormalizedEvent:
+        if event.update_type != "message_created" or event.text is None:
+            return event
+
+        current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
+        if current_screen in _CONTACTS_SETTINGS_INPUT_SCREENS:
+            return event
+
+        for screen_id in _CONTACTS_SETTINGS_INPUT_SCREENS:
+            recovered_chat_id = state.find_chat_id_for_current_screen(event.platform_user_id, screen_id)
+            if recovered_chat_id is not None:
+                logger.info(
+                    "MAX contacts settings text route recovery: "
+                    "platform_user_id_present=%s original_chat_id_present=%s "
+                    "recovered_chat_id_present=%s screen_id=%s",
+                    event.platform_user_id is not None,
+                    event.chat_id is not None,
+                    True,
+                    screen_id,
+                )
+                if event.chat_id is not None:
+                    state.set_current_screen(event.platform_user_id, event.chat_id, screen_id)
+                    return event
+                return replace(event, chat_id=recovered_chat_id)
         return event
 
     def _log_contact_diagnostic(self, event: NormalizedEvent) -> None:
