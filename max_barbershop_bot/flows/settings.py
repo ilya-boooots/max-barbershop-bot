@@ -490,9 +490,14 @@ async def _save_contact_field(context: RouterContext, *, field: str, value: str)
         await _send_no_access(context)
         return
 
+    cleaned_value = value.strip()
+    if not cleaned_value:
+        await context.send_text(_contacts_field_empty_text(field), keyboard=settings_contacts_input_keyboard())
+        return
+
     settings_repository = YClientsSettingsRepository(_database_path())
     override = settings_repository.get_contacts_override()
-    override[field] = value.strip()
+    override[field] = cleaned_value
     settings_repository.set_contacts_override(override)
     _audit(
         context,
@@ -501,7 +506,7 @@ async def _save_contact_field(context: RouterContext, *, field: str, value: str)
         section="contacts",
         metadata={"field": field},
     )
-    await context.send_text("✅ Контакты обновлены")
+    await context.send_text(_contacts_field_success_text(field))
     await _show_contacts_editor(context)
 
 
@@ -513,6 +518,26 @@ def _contacts_field_audit_action(field: str) -> str:
     if field == "schedule":
         return "contacts_override_schedule_updated"
     return "contacts_override_updated"
+
+
+def _contacts_field_empty_text(field: str) -> str:
+    if field == "address":
+        return "🏠 Адрес не может быть пустым. Введите новый адрес:"
+    if field == "phone":
+        return "📞 Телефон не может быть пустым. Введите новый телефон:"
+    if field == "schedule":
+        return "⏰ Режим работы не может быть пустым. Введите новый режим работы:"
+    return "✍️ Значение не может быть пустым. Введите текст:"
+
+
+def _contacts_field_success_text(field: str) -> str:
+    if field == "address":
+        return "✅ Адрес обновлён"
+    if field == "phone":
+        return "✅ Телефон обновлён"
+    if field == "schedule":
+        return "✅ Режим работы обновлён"
+    return "✅ Контакты обновлены"
 
 
 def _actor_role(context: RouterContext) -> str:
