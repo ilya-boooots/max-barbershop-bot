@@ -108,7 +108,7 @@ async def handle_settings_menu(context: RouterContext) -> None:
     if not can_view_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем настройки ⚙️")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.SETTINGS_MENU_SCREEN)
     _audit(context, actor_role, action="settings_opened", section="settings")
     await _show_settings_menu(context, actor_role)
@@ -132,7 +132,7 @@ async def handle_settings_contacts(context: RouterContext) -> None:
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем контакты 📍")
+    await _answer_callback_if_needed(context)
     _audit(context, actor_role, action="settings_section_opened", section="contacts")
     await _show_contacts_editor(context)
 
@@ -162,7 +162,7 @@ async def handle_settings_contacts_preview(context: RouterContext) -> None:
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Показываем предпросмотр 👁️")
+    await _answer_callback_if_needed(context)
     contacts = await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_CONTACTS_SCREEN)
     await context.send_text(_render_contacts_preview(contacts), keyboard=settings_contacts_keyboard())
@@ -175,7 +175,7 @@ async def handle_settings_contacts_reset(context: RouterContext) -> None:
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Сбрасываем контакты ♻️")
+    await _answer_callback_if_needed(context)
     YClientsSettingsRepository(_database_path()).set_contacts_override({})
     _audit(
         context,
@@ -213,7 +213,7 @@ async def handle_settings_support(context: RouterContext) -> None:
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем поддержку 🆘")
+    await _answer_callback_if_needed(context)
     _audit(context, actor_role, action="settings_section_opened", section="support")
     await _show_support_editor(context)
 
@@ -237,7 +237,7 @@ async def handle_settings_support_preview(context: RouterContext) -> None:
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Показываем предпросмотр 👁️")
+    await _answer_callback_if_needed(context)
     settings = _support_settings()
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_SUPPORT_SCREEN)
     await context.send_text(render_support_message(settings), keyboard=settings_support_keyboard())
@@ -262,7 +262,7 @@ async def handle_settings_notifications(context: RouterContext) -> None:
     if not can_view_notification_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем уведомления 🔔")
+    await _answer_callback_if_needed(context)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_NOTIFICATIONS_SCREEN)
     reminders_enabled = _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED)
     poll_interval_seconds = _int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30)
@@ -306,7 +306,7 @@ async def handle_settings_diagnostics(context: RouterContext) -> None:
     if not _is_protected_developer(context):
         await _send_dev_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем диагностику 🛠")
+    await _answer_callback_if_needed(context)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
     text = await build_developer_diagnostics_text(database_path=_database_path())
     _audit(context, actor_role, action="settings_section_opened", section="diagnostics")
@@ -319,7 +319,7 @@ async def handle_settings_diagnostics_refresh(context: RouterContext) -> None:
     if not _is_protected_developer(context):
         await _send_dev_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Обновляем диагностику 🔄")
+    await _answer_callback_if_needed(context)
     text = await build_developer_diagnostics_text(database_path=_database_path())
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
     _audit(context, _actor_role(context), action="settings_section_refreshed", section="diagnostics")
@@ -365,7 +365,7 @@ async def handle_settings_back(context: RouterContext) -> None:
     if not can_view_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
+    await _answer_callback_if_needed(context)
     current = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
     if current in {state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN}:
         await _show_contacts_editor(context)
@@ -382,7 +382,7 @@ async def handle_settings_back(context: RouterContext) -> None:
 async def handle_settings_home(context: RouterContext) -> None:
     """Return to role-based home menu."""
 
-    await _answer_callback_if_needed(context, "Открываем главное меню 🏠")
+    await _answer_callback_if_needed(context)
     await show_home(context)
 
 
@@ -425,7 +425,7 @@ async def _start_support_edit(context: RouterContext, screen_id: str, prompt: st
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Введите значение ✏️")
+    await _answer_callback_if_needed(context)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, screen_id)
     await context.send_text(prompt, keyboard=settings_support_input_keyboard())
 
@@ -479,7 +479,7 @@ async def _start_contacts_edit(context: RouterContext, screen_id: str, prompt: s
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Введите значение ✏️")
+    await _answer_callback_if_needed(context)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, screen_id)
     await context.send_text(prompt, keyboard=settings_contacts_input_keyboard())
 
@@ -556,9 +556,9 @@ async def _send_dev_no_access(context: RouterContext) -> None:
     await context.send_text(DEV_DIAGNOSTICS_NO_ACCESS_TEXT)
 
 
-async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
+async def _answer_callback_if_needed(context: RouterContext, notification: str | None = None) -> None:
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()
 
 
 def _bool_env(name: str, default: bool) -> bool:

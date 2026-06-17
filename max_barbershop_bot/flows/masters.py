@@ -54,14 +54,14 @@ def register_masters_routes(router: Router) -> None:
 async def handle_masters_start(context: RouterContext) -> None:
     """Open a real YClients-backed masters list."""
 
-    await context.answer_callback("Открываем мастеров 💈")
+    await context.answer_callback()
     await _open_masters_list(context)
 
 
 async def handle_masters_item(context: RouterContext) -> None:
     """Open selected master detail by short index payload."""
 
-    await context.answer_callback("Открываем карточку мастера 💈")
+    await context.answer_callback()
     index = _payload_index(context.event.callback_payload)
     masters = _masters(context)
     if index is None or masters is None or index < 0 or index >= len(masters):
@@ -74,7 +74,7 @@ async def handle_masters_item(context: RouterContext) -> None:
 async def handle_masters_book(context: RouterContext) -> None:
     """Start staff-first booking with the selected master."""
 
-    await context.answer_callback("Записываемся к мастеру ✂️")
+    await context.answer_callback()
     index = state.get_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_INDEX_STATE_KEY)
     masters = _masters(context)
     if not isinstance(index, int) or masters is None or index < 0 or index >= len(masters):
@@ -86,7 +86,7 @@ async def handle_masters_book(context: RouterContext) -> None:
 async def handle_masters_back(context: RouterContext) -> None:
     """Back from detail to list, or from list to main menu."""
 
-    await context.answer_callback("Возвращаемся назад ⬅️")
+    await context.answer_callback()
     current = state.get_current_screen(_user_id(context), _chat_id(context))
     if current == state.MASTER_DETAILS_SCREEN:
         masters = _masters(context)
@@ -99,7 +99,7 @@ async def handle_masters_back(context: RouterContext) -> None:
 async def handle_masters_home(context: RouterContext) -> None:
     """Return to role-aware main menu."""
 
-    await context.answer_callback("Открываем главное меню 🏠")
+    await context.answer_callback()
     await show_home(context)
 
 

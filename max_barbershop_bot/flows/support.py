@@ -30,7 +30,7 @@ def register_support_routes(router: Router) -> None:
 async def handle_support(context: RouterContext) -> None:
     """Open the support screen from the main menu."""
 
-    await context.answer_callback("Открываем поддержку 🆘")
+    await context.answer_callback()
     _open_support_state(context)
     settings = _resolve_support_settings()
     await context.send_text(render_support_message(settings), keyboard=_support_keyboard(settings))

@@ -85,7 +85,7 @@ async def handle_notification_history(context: RouterContext) -> None:
     if not _can_view(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем историю уведомлений 📜")
+    await _answer_callback_if_needed(context)
     await _send_recent_history(context)
 
 
@@ -95,7 +95,7 @@ async def handle_notification_history_failed(context: RouterContext) -> None:
     if not _can_view(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Показываем ошибки уведомлений ❌")
+    await _answer_callback_if_needed(context)
     records = _repository().list_recent_failed(limit=11)
     _save_history_state(context, records, "failed")
     _set_screen(context, state.NOTIFICATION_HISTORY_FAILED_SCREEN)
@@ -116,7 +116,7 @@ async def handle_notification_history_detail(context: RouterContext) -> None:
     if record is None:
         await _send_stale_history(context)
         return
-    await _answer_callback_if_needed(context, f"Открываем уведомление #{record.id}")
+    await _answer_callback_if_needed(context)
     state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _HISTORY_SELECTED_ID_KEY, record.id)
     _set_screen(context, state.NOTIFICATION_HISTORY_DETAIL_SCREEN)
     await context.send_text(_format_history_detail(record), keyboard=notification_history_detail_keyboard())
@@ -128,7 +128,7 @@ async def handle_notification_history_back(context: RouterContext) -> None:
     if not _can_view(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
+    await _answer_callback_if_needed(context)
     filter_key = state.get_state_data_value(context.event.platform_user_id, context.event.chat_id, _HISTORY_FILTER_KEY)
     if filter_key == "failed":
         await handle_notification_history_failed(context)
@@ -152,7 +152,7 @@ async def handle_notification_history_diagnostics(context: RouterContext) -> Non
     if record is None:
         await _send_stale_history(context)
         return
-    await _answer_callback_if_needed(context, "Обновляем диагностику 🔎")
+    await _answer_callback_if_needed(context)
     await context.send_text(_format_diagnostics(record), keyboard=notification_history_detail_keyboard())
 
 
@@ -367,7 +367,7 @@ def _database_path() -> str:
 
 
 async def _send_stale_history(context: RouterContext) -> None:
-    await _answer_callback_if_needed(context, "Запись неактуальна 🙏")
+    await _answer_callback_if_needed(context)
     await context.send_text(_STALE_TEXT, keyboard=notification_history_keyboard([], back_payload=ADMIN_NOTIFICATION_HISTORY_PAYLOAD))
 
 
@@ -473,9 +473,9 @@ async def _send_no_access(context: RouterContext) -> None:
     await context.send_text(_NO_ACCESS_TEXT)
 
 
-async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
+async def _answer_callback_if_needed(context: RouterContext, notification: str | None = None) -> None:
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()
 
 
 def _safe_value(value: object | None) -> str:

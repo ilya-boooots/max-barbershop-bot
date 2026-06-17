@@ -34,12 +34,12 @@ async def _handle_rating(context: RouterContext) -> None:
     try:
         rating = int(payload.rsplit(":", 1)[-1])
     except ValueError:
-        await context.answer_callback("Некорректная оценка")
+        await context.answer_callback()
         return
     database_path = _database_path_from_context()
     response, negative = save_rating(database_path, platform_user_id=context.event.platform_user_id or "", rating=rating)
     if response is None:
-        await context.answer_callback("⚠️ Эта оценка уже обработана или устарела.")
+        await context.answer_callback()
         await context.send_text(STALE_TEXT)
         return
     if negative:
@@ -48,7 +48,7 @@ async def _handle_rating(context: RouterContext) -> None:
     else:
         state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
         await context.send_text(POSITIVE_TEXT)
-    await context.answer_callback("Спасибо за оценку!")
+    await context.answer_callback()
 
 
 async def _handle_comment(context: RouterContext) -> None:

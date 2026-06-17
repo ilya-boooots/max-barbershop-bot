@@ -67,7 +67,7 @@ async def handle_master_photos_menu(context: RouterContext) -> None:
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем фото мастеров 🖼️")
+    await _answer_callback_if_needed(context)
     await _show_master_photos_list(context, push_current=True)
 
 
@@ -78,7 +78,7 @@ async def handle_master_photo_select(context: RouterContext) -> None:
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем мастера 🖼️")
+    await _answer_callback_if_needed(context)
     index = _payload_index(context.event.callback_payload)
     masters = _masters_from_state(context)
     if index is None or index >= len(masters):
@@ -102,7 +102,7 @@ async def handle_master_photo_upload_start(context: RouterContext) -> None:
     if master is None:
         await _show_master_photos_list(context, push_current=False)
         return
-    await _answer_callback_if_needed(context, "Ждём фото 📸")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.SETTINGS_MASTER_PHOTO_WAIT_PHOTO_SCREEN)
     await context.send_text(f"📸 Отправьте одно фото для мастера {master.name} 😊", keyboard=master_photo_wait_keyboard())
 
@@ -160,7 +160,7 @@ async def handle_master_photo_delete_start(context: RouterContext) -> None:
     if master is None:
         await _show_master_photos_list(context, push_current=False)
         return
-    await _answer_callback_if_needed(context, "Подтвердите удаление 🗑️")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.SETTINGS_MASTER_PHOTO_DELETE_CONFIRM_SCREEN)
     await context.send_text(
         f"🗑️ Удалить фото мастера {master.name}?",
@@ -187,7 +187,7 @@ async def handle_master_photo_delete_confirm(context: RouterContext) -> None:
         section="master_photos",
         metadata={"yclients_staff_id": master.yclients_staff_id, "master_name": master.name},
     )
-    await _answer_callback_if_needed(context, "Фото удалено 🗑️")
+    await _answer_callback_if_needed(context)
     await context.send_text("🗑️ Фото мастера удалено")
     updated = MasterPhotoStaff(master.yclients_staff_id, master.name, master.specialization, has_photo=False)
     _replace_master_in_state(context, updated)
@@ -204,7 +204,7 @@ async def handle_master_photos_back(context: RouterContext) -> None:
 
         await handle_settings_menu(context)
         return
-    await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
+    await _answer_callback_if_needed(context)
     if current_screen in {state.SETTINGS_MASTER_PHOTO_WAIT_PHOTO_SCREEN, state.SETTINGS_MASTER_PHOTO_DELETE_CONFIRM_SCREEN}:
         master = _selected_master(context)
         if master is not None:
@@ -221,7 +221,7 @@ async def handle_master_photos_back(context: RouterContext) -> None:
 async def handle_master_photos_home(context: RouterContext) -> None:
     """Return to role-based home menu."""
 
-    await _answer_callback_if_needed(context, "Главное меню 🏠")
+    await _answer_callback_if_needed(context)
     await show_home(context)
 
 
@@ -341,6 +341,6 @@ async def _send_no_access(context: RouterContext) -> None:
     await context.send_text(SETTINGS_NO_ACCESS_TEXT)
 
 
-async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
+async def _answer_callback_if_needed(context: RouterContext, notification: str | None = None) -> None:
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()

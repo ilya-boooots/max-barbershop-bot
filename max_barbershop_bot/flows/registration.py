@@ -91,7 +91,7 @@ async def start_registration(context: RouterContext) -> None:
 async def handle_name_confirmed(context: RouterContext) -> None:
     """Save suggested MAX profile name and continue to phone."""
 
-    await context.answer_callback("✅ Да")
+    await context.answer_callback()
     name = state.get_state_data_value(context.event.platform_user_id, context.event.chat_id, _SUGGESTED_NAME_KEY)
     name = validate_name(str(name or "")) or _suggested_name(context) or "Пользователь"
     state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _NAME_KEY, name)
@@ -101,7 +101,7 @@ async def handle_name_confirmed(context: RouterContext) -> None:
 async def handle_name_declined(context: RouterContext) -> None:
     """Ask for manual name input."""
 
-    await context.answer_callback("❌ Нет")
+    await context.answer_callback()
     await _show_manual_name(context)
 
 
@@ -175,7 +175,7 @@ async def handle_birthdate_input(context: RouterContext) -> None:
 async def handle_registration_back(context: RouterContext) -> None:
     """Navigate backward inside the registration flow without falling into main menu."""
 
-    await context.answer_callback("Возвращаемся назад ⬅️")
+    await context.answer_callback()
     current_screen = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
     if current_screen == state.REGISTRATION_NAME_SCREEN:
         await _show_name_confirm(context)
@@ -192,7 +192,7 @@ async def handle_registration_back(context: RouterContext) -> None:
 async def handle_registration_home(context: RouterContext) -> None:
     """Keep unregistered users inside registration when they press Home."""
 
-    await context.answer_callback(REGISTRATION_REQUIRED_TEXT)
+    await context.answer_callback()
     await context.send_text(REGISTRATION_REQUIRED_TEXT)
     await start_registration(context)
 

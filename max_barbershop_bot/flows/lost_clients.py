@@ -70,7 +70,7 @@ async def handle_lost_clients_refresh(context: RouterContext) -> None:
     if not _can_open_lost_clients(context):
         await _send_no_access(context)
         return
-    await _show_lost_clients(context, notification="Обновляем потерянных клиентов 🔄")
+    await _show_lost_clients(context)
 
 
 async def handle_lost_clients_broadcast(context: RouterContext) -> None:
@@ -81,13 +81,13 @@ async def handle_lost_clients_broadcast(context: RouterContext) -> None:
         return
     result = _stored_result(context)
     if result is None:
-        await _show_lost_clients(context, notification="Загружаем потерянных клиентов 😔")
+        await _show_lost_clients(context)
         result = _stored_result(context)
         if result is None:
             return
 
     recipients = lost_clients_to_broadcast_recipients(result.clients)
-    await _answer_callback(context, "Готовим рассылку по потерянным клиентам 📣")
+    await _answer_callback(context)
     if not recipients:
         await context.send_text(LOST_CLIENTS_ZERO_RECIPIENTS_TEXT, keyboard=lost_clients_result_keyboard(can_broadcast=False))
         return
@@ -110,7 +110,7 @@ async def handle_lost_clients_broadcast(context: RouterContext) -> None:
 async def handle_lost_clients_back(context: RouterContext) -> None:
     """Return from lost clients screen to client segments menu."""
 
-    await _answer_callback(context, "Возвращаемся назад ⬅️")
+    await _answer_callback(context)
     _clear_lost_clients_state(context)
     state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENTS_MENU_SCREEN)
     await context.send_text("🎯 Сегменты клиентов\n\nВыберите сегмент:", keyboard=client_segments_menu_keyboard())
@@ -119,12 +119,12 @@ async def handle_lost_clients_back(context: RouterContext) -> None:
 async def handle_lost_clients_home(context: RouterContext) -> None:
     """Return to role-based main menu."""
 
-    await _answer_callback(context, "Открываем главное меню 🏠")
+    await _answer_callback(context)
     _clear_lost_clients_state(context)
     await show_home(context)
 
 
-async def _show_lost_clients(context: RouterContext, *, notification: str = "Загружаем потерянных клиентов 😔") -> None:
+async def _show_lost_clients(context: RouterContext, *, notification: str | None = None) -> None:
     await _answer_callback(context, notification)
     try:
         result = await LostClientsService(_yclients_settings_repository(), _users_repository()).get_lost_clients()
@@ -174,9 +174,10 @@ async def _send_no_access(context: RouterContext) -> None:
     await context.send_text(BROADCAST_NO_ACCESS_TEXT)
 
 
-async def _answer_callback(context: RouterContext, notification: str) -> None:
+async def _answer_callback(context: RouterContext, notification: str | None = None) -> None:
+    del notification
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()
 
 
 def _clear_lost_clients_state(context: RouterContext) -> None:

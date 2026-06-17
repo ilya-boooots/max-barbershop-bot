@@ -25,12 +25,12 @@ async def show_main_menu(context: RouterContext) -> None:
 async def handle_nav_back(context: RouterContext) -> None:
     """Handle the Back navigation callback."""
 
-    await context.answer_callback("Возвращаемся назад ⬅️")
+    await context.answer_callback()
     await go_back(context)
 
 
 async def handle_nav_home(context: RouterContext) -> None:
     """Handle the Home navigation callback."""
 
-    await context.answer_callback("Открываем главное меню 🏠")
+    await context.answer_callback()
     await show_home(context)

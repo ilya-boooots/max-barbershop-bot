@@ -21,7 +21,7 @@ def register_contacts_routes(router: Router) -> None:
 async def handle_contacts(context: RouterContext) -> None:
     """Open the contacts screen from the main menu."""
 
-    await context.answer_callback("Открываем контакты 📍")
+    await context.answer_callback()
     _open_contacts_state(context)
 
     service = ContactsService(YClientsSettingsRepository(_database_path()))

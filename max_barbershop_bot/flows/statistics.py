@@ -59,7 +59,7 @@ async def handle_statistics_menu(context: RouterContext) -> None:
     if not _can_access(context):
         await _send_no_access(context)
         return
-    await _answer_callback_if_needed(context, "Открываем статистику 📊")
+    await _answer_callback_if_needed(context)
     _push_current_screen(context, state.STATISTICS_PERIOD_SCREEN)
     await _show_period_selection(context)
 
@@ -75,7 +75,7 @@ async def handle_statistics_period(context: RouterContext) -> None:
     if period is None:
         return
 
-    await _answer_callback_if_needed(context, "Загружаем статистику 📊")
+    await _answer_callback_if_needed(context)
     days, label = period
     try:
         result = await get_statistics_for_period(days, label)
@@ -93,7 +93,7 @@ async def handle_statistics_period(context: RouterContext) -> None:
 async def handle_statistics_back(context: RouterContext) -> None:
     """Navigate back inside statistics screens."""
 
-    await _answer_callback_if_needed(context, "Возвращаемся назад ⬅️")
+    await _answer_callback_if_needed(context)
     current = state.get_current_screen(_user_id(context), _chat_id(context))
     if current == state.STATISTICS_RESULT_SCREEN:
         state.set_current_screen(_user_id(context), _chat_id(context), state.STATISTICS_PERIOD_SCREEN)
@@ -111,7 +111,7 @@ async def handle_statistics_back(context: RouterContext) -> None:
 async def handle_statistics_home(context: RouterContext) -> None:
     """Return from statistics to the role-based main menu."""
 
-    await _answer_callback_if_needed(context, "Открываем главное меню 🏠")
+    await _answer_callback_if_needed(context)
     await show_home(context)
 
 
@@ -143,9 +143,9 @@ async def _send_no_access(context: RouterContext) -> None:
     await context.send_text(STATISTICS_NO_ACCESS_TEXT)
 
 
-async def _answer_callback_if_needed(context: RouterContext, notification: str) -> None:
+async def _answer_callback_if_needed(context: RouterContext, notification: str | None = None) -> None:
     if context.event.callback_id:
-        await context.answer_callback(notification)
+        await context.answer_callback()
 
 
 def _user_id(context: RouterContext) -> str | None:
