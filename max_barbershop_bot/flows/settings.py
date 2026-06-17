@@ -42,6 +42,13 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD,
     SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD,
     SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD,
+    SETTINGS_CONTACTS_MAP_DELETE_PREFIX,
+    SETTINGS_CONTACTS_MAP_EDIT_PREFIX,
+    SETTINGS_CONTACTS_MAP_GOOGLE_PAYLOAD,
+    SETTINGS_CONTACTS_MAP_HIDE_PREFIX,
+    SETTINGS_CONTACTS_MAP_SHOW_PREFIX,
+    SETTINGS_CONTACTS_MAP_TWOGIS_PAYLOAD,
+    SETTINGS_CONTACTS_MAP_YANDEX_PAYLOAD,
     SETTINGS_CONTACTS_PREVIEW_PAYLOAD,
     SETTINGS_CONTACTS_RESET_PAYLOAD,
     SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD,
@@ -57,6 +64,7 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_YCLIENTS_PAYLOAD,
     settings_contacts_input_keyboard,
     settings_contacts_keyboard,
+    settings_contacts_map_keyboard,
     settings_diagnostics_keyboard,
     settings_menu_keyboard,
     settings_notifications_keyboard,
@@ -85,6 +93,13 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD, handle_settings_contacts_edit_phone)
     router.on_callback(SETTINGS_CONTACTS_EDIT_SCHEDULE_PAYLOAD, handle_settings_contacts_edit_schedule)
     router.on_callback(SETTINGS_CONTACTS_PREVIEW_PAYLOAD, handle_settings_contacts_preview)
+    router.on_callback(SETTINGS_CONTACTS_MAP_YANDEX_PAYLOAD, handle_settings_contacts_map_yandex)
+    router.on_callback(SETTINGS_CONTACTS_MAP_TWOGIS_PAYLOAD, handle_settings_contacts_map_twogis)
+    router.on_callback(SETTINGS_CONTACTS_MAP_GOOGLE_PAYLOAD, handle_settings_contacts_map_google)
+    router.on_callback_prefix(SETTINGS_CONTACTS_MAP_EDIT_PREFIX, handle_settings_contacts_map_edit)
+    router.on_callback_prefix(SETTINGS_CONTACTS_MAP_HIDE_PREFIX, handle_settings_contacts_map_hide)
+    router.on_callback_prefix(SETTINGS_CONTACTS_MAP_SHOW_PREFIX, handle_settings_contacts_map_show)
+    router.on_callback_prefix(SETTINGS_CONTACTS_MAP_DELETE_PREFIX, handle_settings_contacts_map_delete)
     router.on_callback(SETTINGS_CONTACTS_RESET_PAYLOAD, handle_settings_contacts_reset)
     router.on_callback(SETTINGS_SUPPORT_PAYLOAD, handle_settings_support)
     router.on_callback(SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD, handle_settings_support_edit_username)
@@ -102,6 +117,9 @@ def register_settings_routes(router: Router) -> None:
     router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, handle_settings_contacts_address_input)
     router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, handle_settings_contacts_phone_input)
     router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN, handle_settings_contacts_schedule_input)
+    router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_YANDEX_MAPS_SCREEN, handle_settings_contacts_yandex_input)
+    router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_TWOGIS_SCREEN, handle_settings_contacts_twogis_input)
+    router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_GOOGLE_MAPS_SCREEN, handle_settings_contacts_google_input)
     router.on_screen_text(state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, handle_settings_support_username_input)
     router.on_screen_text(state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN, handle_settings_support_description_input)
 
@@ -209,6 +227,71 @@ async def handle_settings_contacts_schedule_input(context: RouterContext) -> Non
     """Save contacts schedule text input."""
 
     await _save_contact_field(context, field="schedule", value=context.event.text or "")
+
+
+async def handle_settings_contacts_map_yandex(context: RouterContext) -> None:
+    await _show_contacts_map_editor(context, "yandex")
+
+
+async def handle_settings_contacts_map_twogis(context: RouterContext) -> None:
+    await _show_contacts_map_editor(context, "twogis")
+
+
+async def handle_settings_contacts_map_google(context: RouterContext) -> None:
+    await _show_contacts_map_editor(context, "google")
+
+
+async def handle_settings_contacts_map_edit(context: RouterContext) -> None:
+    map_key = _payload_suffix(context, SETTINGS_CONTACTS_MAP_EDIT_PREFIX)
+    meta = _map_meta(map_key)
+    if meta is None:
+        await _show_contacts_editor(context)
+        return
+    await _start_contacts_edit(context, meta["screen"], f"🗺 Введите ссылку для {meta['prompt_name']}:")
+
+
+async def handle_settings_contacts_map_hide(context: RouterContext) -> None:
+    await _set_contacts_map_enabled(context, _payload_suffix(context, SETTINGS_CONTACTS_MAP_HIDE_PREFIX), enabled=False)
+
+
+async def handle_settings_contacts_map_show(context: RouterContext) -> None:
+    map_key = _payload_suffix(context, SETTINGS_CONTACTS_MAP_SHOW_PREFIX)
+    meta = _map_meta(map_key)
+    if meta is None:
+        await _show_contacts_editor(context)
+        return
+    override = YClientsSettingsRepository(_database_path()).get_contacts_override()
+    if not str(override.get(meta["url_field"]) or "").strip():
+        await context.send_text("Сначала добавьте ссылку 🙏")
+        await _show_contacts_map_editor(context, map_key)
+        return
+    await _set_contacts_map_enabled(context, map_key, enabled=True)
+
+
+async def handle_settings_contacts_map_delete(context: RouterContext) -> None:
+    map_key = _payload_suffix(context, SETTINGS_CONTACTS_MAP_DELETE_PREFIX)
+    meta = _map_meta(map_key)
+    if meta is None:
+        await _show_contacts_editor(context)
+        return
+    repo = YClientsSettingsRepository(_database_path())
+    override = repo.get_contacts_override()
+    override[meta["url_field"]] = ""
+    override[meta["enabled_field"]] = False
+    repo.set_contacts_override(override)
+    await _show_contacts_map_editor(context, map_key)
+
+
+async def handle_settings_contacts_yandex_input(context: RouterContext) -> None:
+    await _save_contact_map_url(context, "yandex", context.event.text or "")
+
+
+async def handle_settings_contacts_twogis_input(context: RouterContext) -> None:
+    await _save_contact_map_url(context, "twogis", context.event.text or "")
+
+
+async def handle_settings_contacts_google_input(context: RouterContext) -> None:
+    await _save_contact_map_url(context, "google", context.event.text or "")
 
 
 async def handle_settings_support(context: RouterContext) -> None:
@@ -372,7 +455,7 @@ async def handle_settings_back(context: RouterContext) -> None:
         return
     await _answer_callback_if_needed(context)
     current = state.get_current_screen(context.event.platform_user_id, _settings_state_chat_id(context))
-    if current in {state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN}:
+    if current in {state.SETTINGS_CONTACTS_MAP_SCREEN, state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN, state.SETTINGS_CONTACTS_EDIT_YANDEX_MAPS_SCREEN, state.SETTINGS_CONTACTS_EDIT_TWOGIS_SCREEN, state.SETTINGS_CONTACTS_EDIT_GOOGLE_MAPS_SCREEN}:
         await _show_contacts_editor(context)
         return
     if current in {state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN}:
@@ -405,7 +488,11 @@ async def _show_contacts_editor(context: RouterContext) -> None:
         "✏️ Редактирование контактов\n\n"
         f"🏠 Адрес: {contacts.address or '—'}\n"
         f"📞 Телефон: {contacts.phone or '—'}\n"
-        f"⏰ Режим работы: {contacts.schedule or '—'}"
+        f"⏰ Режим работы: {contacts.schedule or '—'}\n\n"
+        "🗺 Карты:\n"
+        f"Яндекс Карты: {_map_status(contacts.raw, 'yandex')}\n"
+        f"2GIS: {_map_status(contacts.raw, 'twogis')}\n"
+        f"Google Maps: {_map_status(contacts.raw, 'google')}"
     )
     state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), state.SETTINGS_CONTACTS_SCREEN)
     await context.send_text(text, keyboard=settings_contacts_keyboard())
@@ -477,12 +564,123 @@ def _support_settings():
     return effective_support_settings(SupportSettingsRepository(_database_path()).get_active())
 
 
+def _payload_suffix(context: RouterContext, prefix: str) -> str:
+    payload = context.event.callback_payload or ""
+    return payload[len(prefix):] if payload.startswith(prefix) else ""
+
+
+def _map_meta(map_key: str) -> dict[str, str] | None:
+    return {
+        "yandex": {
+            "label": "Яндекс Карты",
+            "prompt_name": "Яндекс Карт",
+            "url_field": "yandex_maps_url",
+            "enabled_field": "yandex_maps_enabled",
+            "screen": state.SETTINGS_CONTACTS_EDIT_YANDEX_MAPS_SCREEN,
+        },
+        "twogis": {
+            "label": "2GIS",
+            "prompt_name": "2GIS",
+            "url_field": "twogis_url",
+            "enabled_field": "twogis_enabled",
+            "screen": state.SETTINGS_CONTACTS_EDIT_TWOGIS_SCREEN,
+        },
+        "google": {
+            "label": "Google Maps",
+            "prompt_name": "Google Maps",
+            "url_field": "google_maps_url",
+            "enabled_field": "google_maps_enabled",
+            "screen": state.SETTINGS_CONTACTS_EDIT_GOOGLE_MAPS_SCREEN,
+        },
+    }.get(map_key)
+
+
+def _map_enabled(raw: dict[str, object] | None, map_key: str) -> bool:
+    meta = _map_meta(map_key)
+    if meta is None:
+        return True
+    value = (raw or {}).get(meta["enabled_field"])
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _map_status(raw: dict[str, object] | None, map_key: str) -> str:
+    return "включено" if _map_enabled(raw, map_key) else "выключено"
+
+
+async def _show_contacts_map_editor(context: RouterContext, map_key: str) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    meta = _map_meta(map_key)
+    if meta is None:
+        await _show_contacts_editor(context)
+        return
+    await _answer_callback_if_needed(context)
+    override = YClientsSettingsRepository(_database_path()).get_contacts_override()
+    enabled = _map_enabled(override, map_key)
+    url = str(override.get(meta["url_field"]) or "").strip() or "—"
+    text = (
+        f"🗺 {meta['label']}\n\n"
+        f"Ссылка: {url}\n"
+        f"Статус: {'включено' if enabled else 'выключено'}"
+    )
+    state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), state.SETTINGS_CONTACTS_MAP_SCREEN)
+    await context.send_text(text, keyboard=settings_contacts_map_keyboard(map_key=map_key, enabled=enabled))
+
+
+async def _set_contacts_map_enabled(context: RouterContext, map_key: str, *, enabled: bool) -> None:
+    meta = _map_meta(map_key)
+    if meta is None:
+        await _show_contacts_editor(context)
+        return
+    repo = YClientsSettingsRepository(_database_path())
+    override = repo.get_contacts_override()
+    override[meta["enabled_field"]] = enabled
+    repo.set_contacts_override(override)
+    await _show_contacts_map_editor(context, map_key)
+
+
+async def _save_contact_map_url(context: RouterContext, map_key: str, value: str) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    meta = _map_meta(map_key)
+    if meta is None:
+        await _show_contacts_editor(context)
+        return
+    cleaned_value = value.strip()
+    if not cleaned_value or not cleaned_value.startswith(("http://", "https://")):
+        await context.send_text(
+            "Введите корректную ссылку, которая начинается с http:// или https:// 🙏",
+            keyboard=settings_contacts_input_keyboard(),
+        )
+        return
+    repo = YClientsSettingsRepository(_database_path())
+    override = repo.get_contacts_override()
+    override[meta["url_field"]] = cleaned_value
+    override[meta["enabled_field"]] = True
+    repo.set_contacts_override(override)
+    await _show_contacts_map_editor(context, map_key)
+
+
 def _render_contacts_preview(contacts: ContactInfo) -> str:
     return (
         "📍 Контакты Барбершоп\n\n"
         f"🏠 Адрес: {contacts.address or '—'}\n"
         f"📞 Телефон: {contacts.phone or '—'}\n"
-        f"⏰ Режим работы: {contacts.schedule or '—'}"
+        f"⏰ Режим работы: {contacts.schedule or '—'}\n\n"
+        "🗺 Карты:\n"
+        f"Яндекс Карты: {_map_status(contacts.raw, 'yandex')}\n"
+        f"2GIS: {_map_status(contacts.raw, 'twogis')}\n"
+        f"Google Maps: {_map_status(contacts.raw, 'google')}"
     )
 
 
@@ -577,9 +775,13 @@ def _settings_state_chat_id(context: RouterContext) -> str | None:
 
     candidate_screens = (
         state.SETTINGS_CONTACTS_SCREEN,
+        state.SETTINGS_CONTACTS_MAP_SCREEN,
         state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN,
         state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN,
         state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN,
+        state.SETTINGS_CONTACTS_EDIT_YANDEX_MAPS_SCREEN,
+        state.SETTINGS_CONTACTS_EDIT_TWOGIS_SCREEN,
+        state.SETTINGS_CONTACTS_EDIT_GOOGLE_MAPS_SCREEN,
         state.SETTINGS_MENU_SCREEN,
     )
     for screen_id in candidate_screens:

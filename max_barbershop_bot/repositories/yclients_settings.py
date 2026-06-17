@@ -26,6 +26,12 @@ class YClientsSettings:
     branch_timezone: str = DEFAULT_BRANCH_TIMEZONE
     branch_title: str | None = None
     contacts_override_json: str | None = None
+    yandex_maps_url: str | None = None
+    yandex_maps_enabled: bool = True
+    twogis_url: str | None = None
+    twogis_enabled: bool = True
+    google_maps_url: str | None = None
+    google_maps_enabled: bool = True
     is_active: bool = True
     created_at: str | None = None
     updated_at: str | None = None
@@ -41,6 +47,12 @@ class YClientsSettings:
             "branch_timezone": self.branch_timezone,
             "branch_title": self.branch_title,
             "contacts_override_json": self.contacts_override_json,
+            "yandex_maps_url": self.yandex_maps_url,
+            "yandex_maps_enabled": self.yandex_maps_enabled,
+            "twogis_url": self.twogis_url,
+            "twogis_enabled": self.twogis_enabled,
+            "google_maps_url": self.google_maps_url,
+            "google_maps_enabled": self.google_maps_enabled,
             "is_active": self.is_active,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -94,6 +106,12 @@ class YClientsSettingsRepository:
         branch_timezone: str = DEFAULT_BRANCH_TIMEZONE,
         branch_title: str | None = None,
         contacts_override_json: str | None = None,
+        yandex_maps_url: str | None = None,
+        yandex_maps_enabled: bool = True,
+        twogis_url: str | None = None,
+        twogis_enabled: bool = True,
+        google_maps_url: str | None = None,
+        google_maps_enabled: bool = True,
         is_active: bool = True,
     ) -> YClientsSettings:
         """Insert a new YClients settings row and return it."""
@@ -108,9 +126,15 @@ class YClientsSettingsRepository:
                     branch_timezone,
                     branch_title,
                     contacts_override_json,
+                    yandex_maps_url,
+                    yandex_maps_enabled,
+                    twogis_url,
+                    twogis_enabled,
+                    google_maps_url,
+                    google_maps_enabled,
                     is_active
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _optional_text(company_id),
@@ -119,6 +143,12 @@ class YClientsSettingsRepository:
                     _timezone_or_default(branch_timezone),
                     _optional_text(branch_title),
                     _optional_text(contacts_override_json),
+                    _optional_text(yandex_maps_url),
+                    _bool_to_int(yandex_maps_enabled),
+                    _optional_text(twogis_url),
+                    _bool_to_int(twogis_enabled),
+                    _optional_text(google_maps_url),
+                    _bool_to_int(google_maps_enabled),
                     _bool_to_int(is_active),
                 ),
             )
@@ -139,6 +169,12 @@ class YClientsSettingsRepository:
         branch_title: str | None | object = _UNSET,
         contacts_override_json: str | None | object = _UNSET,
         is_active: bool | object = _UNSET,
+        yandex_maps_url: str | None | object = _UNSET,
+        yandex_maps_enabled: bool | object = _UNSET,
+        twogis_url: str | None | object = _UNSET,
+        twogis_enabled: bool | object = _UNSET,
+        google_maps_url: str | None | object = _UNSET,
+        google_maps_enabled: bool | object = _UNSET,
     ) -> YClientsSettings | None:
         """Update only provided settings fields and return the updated row."""
 
@@ -151,6 +187,9 @@ class YClientsSettingsRepository:
             "user_token": user_token,
             "branch_title": branch_title,
             "contacts_override_json": contacts_override_json,
+            "yandex_maps_url": yandex_maps_url,
+            "twogis_url": twogis_url,
+            "google_maps_url": google_maps_url,
         }
         for column, value in text_updates.items():
             if value is not _UNSET:
@@ -164,6 +203,15 @@ class YClientsSettingsRepository:
         if is_active is not _UNSET:
             assignments.append("is_active = ?")
             values.append(_bool_to_int(is_active))
+        bool_updates = {
+            "yandex_maps_enabled": yandex_maps_enabled,
+            "twogis_enabled": twogis_enabled,
+            "google_maps_enabled": google_maps_enabled,
+        }
+        for column, value in bool_updates.items():
+            if value is not _UNSET:
+                assignments.append(f"{column} = ?")
+                values.append(_bool_to_int(value))
 
         if not assignments:
             return self.get_by_id(settings_id)
@@ -246,26 +294,39 @@ class YClientsSettingsRepository:
         """Return parsed active contacts override JSON, or an empty dict."""
 
         active = self.get_active()
-        if active is None or not active.contacts_override_json:
+        if active is None:
             return {}
+        if not active.contacts_override_json:
+            parsed: dict[str, Any] = {}
+        else:
+            try:
+                parsed = json.loads(active.contacts_override_json)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Invalid contacts override JSON in YClients settings id=%s",
+                    active.id,
+                )
+                parsed = {}
 
-        try:
-            parsed = json.loads(active.contacts_override_json)
-        except json.JSONDecodeError:
-            logger.warning(
-                "Invalid contacts override JSON in YClients settings id=%s",
-                active.id,
-            )
-            return {}
+            if not isinstance(parsed, dict):
+                logger.warning(
+                    "Contacts override JSON must be an object in YClients settings id=%s",
+                    active.id,
+                )
+                parsed = {}
 
-        if isinstance(parsed, dict):
-            return parsed
-
-        logger.warning(
-            "Contacts override JSON must be an object in YClients settings id=%s",
-            active.id,
-        )
-        return {}
+        column_values = {
+            "yandex_maps_url": active.yandex_maps_url,
+            "yandex_maps_enabled": active.yandex_maps_enabled,
+            "twogis_url": active.twogis_url,
+            "twogis_enabled": active.twogis_enabled,
+            "google_maps_url": active.google_maps_url,
+            "google_maps_enabled": active.google_maps_enabled,
+        }
+        for key, value in column_values.items():
+            if value is not None:
+                parsed.setdefault(key, value)
+        return parsed
 
     def set_contacts_override(self, override: dict[str, Any]) -> YClientsSettings | None:
         """Save contacts override JSON into active settings, creating defaults if needed."""
@@ -324,11 +385,20 @@ def _row_to_settings(row: sqlite3.Row | None) -> YClientsSettings | None:
         branch_timezone=row["branch_timezone"] or DEFAULT_BRANCH_TIMEZONE,
         branch_title=row["branch_title"],
         contacts_override_json=row["contacts_override_json"],
+        yandex_maps_url=_row_value(row, "yandex_maps_url"),
+        yandex_maps_enabled=_bool_from_db(_row_value(row, "yandex_maps_enabled")),
+        twogis_url=_row_value(row, "twogis_url"),
+        twogis_enabled=_bool_from_db(_row_value(row, "twogis_enabled")),
+        google_maps_url=_row_value(row, "google_maps_url"),
+        google_maps_enabled=_bool_from_db(_row_value(row, "google_maps_enabled")),
         is_active=_bool_from_db(row["is_active"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
 
+
+def _row_value(row: sqlite3.Row, key: str) -> Any:
+    return row[key] if key in row.keys() else None
 
 def _bool_from_db(value: Any) -> bool:
     if isinstance(value, bool):

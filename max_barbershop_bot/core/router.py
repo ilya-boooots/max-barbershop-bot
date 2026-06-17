@@ -75,6 +75,7 @@ class Router:
         self._update_handlers: dict[str, EventHandler] = {}
         self._text_handlers: dict[str, EventHandler] = {}
         self._callback_handlers: dict[str, EventHandler] = {}
+        self._callback_prefix_handlers: list[tuple[str, EventHandler]] = []
         self._screen_text_handlers: dict[str, EventHandler] = {}
         self._unknown_text_handler: EventHandler | None = None
         self._unknown_callback_handler: EventHandler | None = None
@@ -94,6 +95,11 @@ class Router:
         """Register a handler for an exact callback payload."""
 
         self._callback_handlers[payload] = handler
+
+    def on_callback_prefix(self, payload_prefix: str, handler: EventHandler) -> None:
+        """Register a handler for callback payloads that start with a prefix."""
+
+        self._callback_prefix_handlers.append((payload_prefix, handler))
 
     def on_screen_text(self, screen_id: str, handler: EventHandler) -> None:
         """Register a text handler for the current in-memory screen."""
@@ -306,6 +312,11 @@ class Router:
             self._log_yclients_setup_callback_diagnostic(event, route_matched=False)
             return self._unknown_callback_handler
         handler = self._callback_handlers.get(payload)
+        if handler is None:
+            for prefix, prefix_handler in self._callback_prefix_handlers:
+                if payload.startswith(prefix):
+                    handler = prefix_handler
+                    break
         self._log_yclients_setup_callback_diagnostic(event, route_matched=handler is not None)
         return handler or self._unknown_callback_handler
 

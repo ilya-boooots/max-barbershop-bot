@@ -76,6 +76,12 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             branch_timezone TEXT NOT NULL DEFAULT '{DEFAULT_BRANCH_TIMEZONE}',
             branch_title TEXT,
             contacts_override_json TEXT,
+            yandex_maps_url TEXT,
+            yandex_maps_enabled INTEGER NOT NULL DEFAULT 1,
+            twogis_url TEXT,
+            twogis_enabled INTEGER NOT NULL DEFAULT 1,
+            google_maps_url TEXT,
+            google_maps_enabled INTEGER NOT NULL DEFAULT 1,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -398,6 +404,12 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     )
     _ensure_column(connection, "yclients_settings", "branch_title", "TEXT")
     _ensure_column(connection, "yclients_settings", "contacts_override_json", "TEXT")
+    _ensure_column(connection, "yclients_settings", "yandex_maps_url", "TEXT")
+    _ensure_column(connection, "yclients_settings", "yandex_maps_enabled", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(connection, "yclients_settings", "twogis_url", "TEXT")
+    _ensure_column(connection, "yclients_settings", "twogis_enabled", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(connection, "yclients_settings", "google_maps_url", "TEXT")
+    _ensure_column(connection, "yclients_settings", "google_maps_enabled", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(connection, "yclients_settings", "is_active", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(connection, "yclients_settings", "created_at", "TEXT")
     _ensure_column(connection, "yclients_settings", "updated_at", "TEXT")

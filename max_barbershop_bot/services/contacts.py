@@ -40,6 +40,12 @@ _USEFUL_OVERRIDE_FIELDS = frozenset(
         "maps_url",
         "telegram",
         "instagram",
+        "google_maps_enabled",
+        "google_maps_url",
+        "twogis_enabled",
+        "twogis_url",
+        "yandex_maps_enabled",
+        "yandex_maps_url",
     }
 )
 
@@ -237,9 +243,40 @@ def format_contacts_text(contact_info: ContactInfo) -> str:
 
 
 def build_route_links(contact_info: ContactInfo) -> dict[str, str]:
-    """Build Telegram-reference map links from the resolved address only."""
+    """Build route links from manual map settings or generated address links."""
 
-    address = _clean_value(contact_info.address)
+    generated_links = _generated_route_links(contact_info.address)
+    raw = contact_info.raw or {}
+    has_map_override = any(
+        key in raw
+        for key in (
+            "yandex_maps_url",
+            "yandex_maps_enabled",
+            "twogis_url",
+            "twogis_enabled",
+            "google_maps_url",
+            "google_maps_enabled",
+        )
+    )
+    if not has_map_override:
+        return generated_links
+
+    links: dict[str, str] = {}
+    for label, url_key, enabled_key in (
+        ("Яндекс Карты", "yandex_maps_url", "yandex_maps_enabled"),
+        ("2GIS", "twogis_url", "twogis_enabled"),
+        ("Google Maps", "google_maps_url", "google_maps_enabled"),
+    ):
+        if not _bool_value(raw.get(enabled_key), default=True):
+            continue
+        url = _clean_value(raw.get(url_key)) or generated_links.get(label)
+        if url:
+            links[label] = url
+    return links
+
+
+def _generated_route_links(address_value: str | None) -> dict[str, str]:
+    address = _clean_value(address_value)
     if not address or address == PLACEHOLDER:
         return {}
 
@@ -305,3 +342,13 @@ def _safe_raw_subset(data: dict[str, Any]) -> dict[str, Any]:
         for key in sorted(_SAFE_RAW_FIELDS)
         if key in data and _clean_value(data[key])
     }
+
+
+def _bool_value(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
