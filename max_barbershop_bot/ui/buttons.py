@@ -10,7 +10,6 @@ from max_barbershop_bot.core.permissions import (
     can_manage_roles,
     can_view_admin_bookings,
     can_view_broadcasts,
-    can_view_clients_directory,
     can_view_contacts_settings,
     can_view_notification_settings,
     can_view_settings,
@@ -217,8 +216,6 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="📊 Статистика", payload=ADMIN_STATISTICS_PAYLOAD)])
     if can_view_admin_bookings(normalized_role):
         rows.append([MaxButton(text="📋 Записи", payload=ADMIN_BOOKINGS_OPEN_PAYLOAD)])
-    if can_view_clients_directory(normalized_role):
-        rows.append([MaxButton(text="👥 Клиенты", payload=ADMIN_CLIENTS_DIRECTORY_PAYLOAD)])
     if can_view_staff(normalized_role):
         rows.append([MaxButton(text="👥 Персонал", payload=ADMIN_STAFF_PAYLOAD)])
     if can_view_settings(normalized_role):
