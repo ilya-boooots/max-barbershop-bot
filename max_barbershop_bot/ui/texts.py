@@ -114,7 +114,7 @@ REGISTRATION_PERSONAL_DATA_POLICY_TEXT = """Политика обработки 
 По всем вопросам, связанным с обработкой персональных данных, вы можете обратиться по
 адресу электронной почты: voyazhkorchma@yandex.ru
 """
-REGISTRATION_PHONE_TEXT = '📞 Для продолжения работы необходим ваш контакт. Нажмите на кнопку "📞 Поделиться контактом".'
+REGISTRATION_PHONE_TEXT = "📞 Для продолжения работы необходим ваш контакт.\n\nНажмите на кнопку «📞 Поделиться контактом» или введите номер телефона вручную."
 REGISTRATION_PHONE_INVALID_TEXT = "⚠️ Не удалось распознать номер телефона. Отправьте контакт ещё раз или введите номер вручную."
 REGISTRATION_CONTACT_PHONE_MISSING_TEXT = REGISTRATION_PHONE_INVALID_TEXT
 REGISTRATION_NAME_TEXT = "✍️ Введите ваше имя:"
