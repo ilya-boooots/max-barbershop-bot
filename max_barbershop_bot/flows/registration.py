@@ -60,12 +60,16 @@ def register_registration_routes(router: Router) -> None:
     router.on_screen_text(state.REGISTRATION_BIRTHDATE_SCREEN, handle_birthdate_input)
 
 
-async def start_registration(context: RouterContext) -> None:
-    """Continue a partial profile from the first missing Telegram-required field."""
+async def start_registration(context: RouterContext, *, force_first_step: bool = False) -> None:
+    """Continue a partial profile or force the first registration step for testing."""
 
     platform_user_id = context.event.platform_user_id
     chat_id = context.event.chat_id
     state.clear_state_data(platform_user_id, chat_id)
+
+    if force_first_step:
+        await _show_name_confirm(context)
+        return
 
     user = _find_current_user(platform_user_id)
     if user is not None:

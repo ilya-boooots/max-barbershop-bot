@@ -5,13 +5,12 @@ from __future__ import annotations
 from os import getenv
 
 from max_barbershop_bot.core import state
-from max_barbershop_bot.core.permissions import is_protected_developer
+from max_barbershop_bot.core.permissions import effective_role, is_developer, is_protected_developer
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.flows.registration import start_registration
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
-from max_barbershop_bot.services.registration import is_registered
 from max_barbershop_bot.ui.screens import main_menu_screen
 
 
@@ -49,12 +48,18 @@ async def _show_start_screen(context: RouterContext) -> None:
     staff_repository = StaffRolesRepository(_database_path())
     _ensure_protected_developer(context, staff_repository)
 
-    if not is_registered(user):
-        await start_registration(context)
+    role = effective_role(
+        staff_repository.get_highest_role(platform_user_id, platform=PLATFORM_MAX),
+        platform_user_id=platform_user_id,
+        dev_max_user_id=getenv("DEV_MAX_USER_ID"),
+        max_user_id=context.event.max_user_id,
+    )
+    if is_developer(role):
+        state.clear_user_state(context.event.platform_user_id, context.event.chat_id)
+        await start_registration(context, force_first_step=True)
         return
 
     state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
-    role = staff_repository.get_highest_role(platform_user_id, platform=PLATFORM_MAX)
     screen = main_menu_screen(role, display_name=_menu_display_name(user, context))
     await context.send_text(screen.text, keyboard=screen.keyboard)
 
