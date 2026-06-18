@@ -58,9 +58,9 @@ def can_view_staff(role: str) -> bool:
 
 
 def can_manage_roles(role: str) -> bool:
-    """Allow role management for admins and developers; managers may only view personnel."""
+    """Allow role management for managers and developers, like Telegram."""
 
-    return normalize_role(role) in {ROLE_ADMIN, ROLE_DEVELOPER}
+    return normalize_role(role) in {ROLE_MANAGER, ROLE_DEVELOPER}
 
 
 def can_view_settings(role: str) -> bool:
@@ -144,7 +144,7 @@ def can_assign_role(actor_role: str, target_role: str) -> bool:
     target = normalize_role(target_role)
     if actor == ROLE_DEVELOPER:
         return target in {ROLE_DEVELOPER, ROLE_ADMIN, ROLE_MANAGER}
-    if actor == ROLE_ADMIN:
+    if actor == ROLE_MANAGER:
         return target in {ROLE_ADMIN, ROLE_MANAGER}
     return False
 
@@ -156,7 +156,7 @@ def can_remove_role(actor_role: str, target_role: str) -> bool:
     target = normalize_role(target_role)
     if actor == ROLE_DEVELOPER:
         return target in {ROLE_DEVELOPER, ROLE_ADMIN, ROLE_MANAGER, ROLE_USER}
-    if actor == ROLE_ADMIN:
+    if actor == ROLE_MANAGER:
         return target in {ROLE_ADMIN, ROLE_MANAGER, ROLE_USER}
     return False
 

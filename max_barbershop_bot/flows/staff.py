@@ -328,7 +328,7 @@ def _build_staff_list_text() -> str:
     if not staff:
         return STAFF_LIST_EMPTY_TEXT
     users = _users_repository()
-    lines = ["👥 Персонал ресторана", f"Всего: {len(staff)}", ""]
+    lines = ["👥 Персонал", f"Всего: {len(staff)}", ""]
     for idx, staff_role in enumerate(staff, start=1):
         user = users.find_by_platform_user_id(staff_role.platform_user_id, platform=PLATFORM_MAX)
         lines.extend(_staff_role_lines(idx, staff_role, user))
