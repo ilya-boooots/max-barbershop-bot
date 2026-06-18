@@ -271,7 +271,7 @@ class Router:
                 _flow_name_from_screen(screen_id),
             )
             if event.chat_id is not None:
-                state.set_current_screen(event.platform_user_id, event.chat_id, screen_id)
+                state.move_user_state(event.platform_user_id, recovered_chat_id, event.chat_id)
                 return event
             return replace(event, chat_id=recovered_chat_id)
         return event

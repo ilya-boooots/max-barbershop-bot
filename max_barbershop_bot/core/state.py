@@ -239,6 +239,20 @@ def clear_user_state(platform_user_id: str | None, chat_id: str | None) -> None:
     _user_states.pop(build_state_key(platform_user_id, chat_id), None)
 
 
+def move_user_state(
+    platform_user_id: str | None,
+    source_chat_id: str | None,
+    target_chat_id: str | None,
+) -> None:
+    """Move saved navigation state between chat ids for the same platform user."""
+
+    source_key = build_state_key(platform_user_id, source_chat_id)
+    target_key = build_state_key(platform_user_id, target_chat_id)
+    if source_key == target_key or source_key not in _user_states:
+        return
+    _user_states[target_key] = _user_states.pop(source_key)
+
+
 def _get_state(platform_user_id: str | None, chat_id: str | None) -> UserNavigationState:
     key = build_state_key(platform_user_id, chat_id)
     if key not in _user_states:
