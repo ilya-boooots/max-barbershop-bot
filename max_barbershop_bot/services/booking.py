@@ -662,6 +662,208 @@ class BookingService:
             _raise_booking_yclients_error(operation="load dates", exc=exc, fallback_text=BOOKING_DATETIME_FIRST_YCLIENTS_ERROR_TEXT)
         return settings, timezone_name, resolved_catalog
 
+    async def get_valid_categories_for_entry_mode(
+        self,
+        *,
+        entry_mode: str,
+        selected_master_id: str | None = None,
+        selected_date: str | date | None = None,
+        selected_time: str | None = None,
+        catalog: BookingCatalog | None = None,
+    ) -> BookingCatalog:
+        """Return only categories/services with a complete currently bookable path."""
+
+        raw_catalog = catalog if catalog is not None else await self.get_service_categories_and_services()
+        services = await self.get_valid_services_for_constraints(
+            entry_mode=entry_mode,
+            selected_master_id=selected_master_id,
+            selected_date=selected_date,
+            selected_time=selected_time,
+            services=raw_catalog.services,
+        )
+        valid_category_ids = {service.yclients_category_id for service in services if service.yclients_category_id}
+        categories = [category for category in raw_catalog.categories if category.yclients_category_id in valid_category_ids]
+        if not categories:
+            categories = _categories_from_services(services)
+        self._log_availability_diagnostic(
+            entry_mode=entry_mode,
+            step="categories",
+            selected_master_id=selected_master_id,
+            selected_date=selected_date,
+            selected_time=selected_time,
+            raw_categories_count=len(raw_catalog.categories),
+            valid_categories_count=len(categories),
+            raw_services_count=len(raw_catalog.services),
+            valid_services_count=len(services),
+        )
+        return BookingCatalog(categories=categories, services=services)
+
+    async def get_valid_services_for_constraints(
+        self,
+        *,
+        entry_mode: str,
+        selected_master_id: str | None = None,
+        selected_date: str | date | None = None,
+        selected_time: str | None = None,
+        services: list[BookingServiceItem] | None = None,
+        category_id: str | None = None,
+    ) -> list[BookingServiceItem]:
+        """Filter service buttons to services that have an actual YClients slot path."""
+
+        catalog = None if services is not None else await self.get_service_categories_and_services()
+        candidates = list(services if services is not None else catalog.services if catalog else [])
+        category = _clean_text(category_id)
+        if category:
+            candidates = [service for service in candidates if service.yclients_category_id == category]
+        staff_id = _clean_text(selected_master_id) or None
+        booking_date_value = _booking_date_iso(selected_date) if selected_date is not None else ""
+        time_value = _clean_text(selected_time)
+
+        async def is_valid(service: BookingServiceItem) -> bool:
+            if staff_id and not await self._staff_can_book_service(service, staff_id):
+                return False
+            if booking_date_value and time_value:
+                return await self._service_has_exact_time(service.yclients_service_id, booking_date_value, time_value, staff_id=staff_id)
+            if staff_id:
+                return await self._service_has_future_slot(service.yclients_service_id, staff_id=staff_id)
+            masters = await self.get_valid_masters_for_constraints(
+                yclients_service_id=service.yclients_service_id,
+                entry_mode=entry_mode,
+                service=service,
+            )
+            return bool(masters)
+
+        results = await asyncio.gather(*(is_valid(service) for service in candidates))
+        valid = [service for service, ok in zip(candidates, results, strict=False) if ok]
+        self._log_availability_diagnostic(
+            entry_mode=entry_mode,
+            step="services",
+            selected_master_id=staff_id,
+            selected_date=booking_date_value,
+            selected_time=time_value,
+            raw_services_count=len(candidates),
+            valid_services_count=len(valid),
+        )
+        return valid
+
+    async def get_valid_masters_for_constraints(
+        self,
+        *,
+        yclients_service_id: str | None = None,
+        entry_mode: str,
+        selected_date: str | date | None = None,
+        selected_time: str | None = None,
+        service: BookingServiceItem | dict[str, Any] | None = None,
+        masters: list[BookingMasterItem] | None = None,
+    ) -> list[BookingMasterItem]:
+        """Filter master buttons to masters that have an actual YClients slot path."""
+
+        service_id = _clean_text(yclients_service_id)
+        raw_masters = masters if masters is not None else (await self.get_available_masters_for_service(service_id, service=service, entry_mode=entry_mode) if service_id else await self.get_available_masters())
+        booking_date_value = _booking_date_iso(selected_date) if selected_date is not None else ""
+        time_value = _clean_text(selected_time)
+
+        async def is_valid(master: BookingMasterItem) -> bool:
+            if service_id:
+                if not await self._staff_can_book_service(service or {}, master.yclients_master_id, service_id=service_id, master=master):
+                    return False
+                if booking_date_value and time_value:
+                    return await self._service_has_exact_time(service_id, booking_date_value, time_value, staff_id=master.yclients_master_id)
+                return await self._service_has_future_slot(service_id, staff_id=master.yclients_master_id)
+            services = await self.get_valid_services_for_constraints(entry_mode=entry_mode, selected_master_id=master.yclients_master_id)
+            return bool(services)
+
+        results = await asyncio.gather(*(is_valid(master) for master in raw_masters))
+        valid = [master for master, ok in zip(raw_masters, results, strict=False) if ok]
+        self._log_availability_diagnostic(
+            entry_mode=entry_mode,
+            step="masters",
+            service_id=service_id,
+            selected_date=booking_date_value,
+            selected_time=time_value,
+            raw_masters_count=len(raw_masters),
+            valid_masters_count=len(valid),
+        )
+        return valid
+
+    async def revalidate_selected_slot(self, *, yclients_service_id: str, yclients_master_id: str, booking_date: str | date, booking_time: str) -> bool:
+        """Final strict YClients slot recheck before confirmation/create."""
+
+        slots = await self.get_available_slots(yclients_service_id=yclients_service_id, yclients_master_id=yclients_master_id, booking_date=booking_date)
+        return any(slot.time == _clean_text(booking_time) for slot in slots)
+
+    async def _service_has_future_slot(self, service_id: str, *, staff_id: str | None = None) -> bool:
+        timezone_name = self.get_branch_timezone()
+        for day in build_booking_dates(days=DATE_LOOKAHEAD_DAYS, timezone_name=timezone_name):
+            try:
+                if staff_id:
+                    slots = await self.get_available_slots(yclients_service_id=service_id, yclients_master_id=staff_id, booking_date=day)
+                else:
+                    settings = self.load_active_settings_for_booking(operation="availability_service_slot")
+                    if not has_required_yclients_credentials(settings):
+                        return False
+                    async with build_yclients_client_from_active_settings(settings) as client:
+                        yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                        payload = await yclients.get_available_slots(company_id=settings.company_id, service_id=service_id, staff_id=None, date=day.isoformat())
+                    slots = filter_available_slots(payload, booking_date=day.isoformat(), timezone_name=timezone_name)
+            except BookingServiceError:
+                return False
+            except YClientsError:
+                return False
+            if slots:
+                return True
+        return False
+
+    async def _service_has_exact_time(self, service_id: str, booking_date: str, booking_time: str, *, staff_id: str | None = None) -> bool:
+        try:
+            if staff_id:
+                slots = await self.get_available_slots(yclients_service_id=service_id, yclients_master_id=staff_id, booking_date=booking_date)
+            else:
+                settings = self.load_active_settings_for_booking(operation="availability_exact_time")
+                timezone_name = normalize_branch_timezone(settings.branch_timezone if settings else None, flow="booking", operation="settings_timezone")
+                if not has_required_yclients_credentials(settings):
+                    return False
+                async with build_yclients_client_from_active_settings(settings) as client:
+                    yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                    payload = await yclients.get_available_slots(company_id=settings.company_id, service_id=service_id, staff_id=None, date=booking_date)
+                slots = filter_available_slots(payload, booking_date=booking_date, timezone_name=timezone_name)
+        except (BookingServiceError, YClientsError):
+            return False
+        return any(slot.time == booking_time for slot in slots)
+
+    async def _staff_can_book_service(
+        self,
+        service: BookingServiceItem | dict[str, Any],
+        staff_id: str,
+        *,
+        service_id: str | None = None,
+        master: BookingMasterItem | None = None,
+    ) -> bool:
+        resolved_service_id = _clean_text(service_id) or (service.yclients_service_id if isinstance(service, BookingServiceItem) else _clean_text(service.get("id") or service.get("service_id")))
+        assigned_ids = _extract_assigned_staff_ids_from_service(_service_raw_payload(service))
+        if assigned_ids is not None:
+            return _clean_text(staff_id) in assigned_ids
+        if master and master.service_ids is not None:
+            return resolved_service_id in master.service_ids
+        # Missing service_ids is not universal availability; concrete slot probes decide.
+        return bool(resolved_service_id and await self._service_has_future_slot(resolved_service_id, staff_id=_clean_text(staff_id)))
+
+    def _log_availability_diagnostic(self, **fields: Any) -> None:
+        logger.info(
+            "MAX booking availability diagnostic: entry_mode=%s step=%s category_id_present=%s service_id_present=%s "
+            "staff_id_present=%s selected_date_present=%s selected_time_present=%s raw_categories_count=%s "
+            "valid_categories_count=%s raw_services_count=%s valid_services_count=%s raw_masters_count=%s "
+            "valid_masters_count=%s raw_dates_count=%s valid_dates_count=%s raw_slots_count=%s valid_slots_count=%s "
+            "branch_timezone=%s yclients_error_category=%s http_status=%s trace_id=%s",
+            fields.get("entry_mode"), fields.get("step"), bool(fields.get("category_id")), bool(fields.get("service_id")),
+            bool(fields.get("selected_master_id")), bool(fields.get("selected_date")), bool(fields.get("selected_time")),
+            fields.get("raw_categories_count"), fields.get("valid_categories_count"), fields.get("raw_services_count"),
+            fields.get("valid_services_count"), fields.get("raw_masters_count"), fields.get("valid_masters_count"),
+            fields.get("raw_dates_count"), fields.get("valid_dates_count"), fields.get("raw_slots_count"),
+            fields.get("valid_slots_count"), self.get_branch_timezone(), fields.get("yclients_error_category"),
+            fields.get("http_status"), fields.get("trace_id"),
+        )
+
     async def create_booking(
         self,
         *,
@@ -940,20 +1142,20 @@ class BookingService:
         return BookingCatalog(categories=categories, services=services)
 
     async def get_available_masters(self) -> list[BookingMasterItem]:
-        """Return all bookable masters from YClients for staff-first booking."""
+        """Return YClients masters filtered later for staff-first booking."""
 
         try:
-            settings = self.load_active_settings_for_booking(operation="get_booking_all_masters")
+            settings = self.load_active_settings_for_booking(operation="get_booking_staff_first_masters")
         except Exception as exc:  # noqa: BLE001 - keep technical details away from users.
             logger.warning(
-                "Booking settings lookup failed: operation=get_booking_all_masters error_class=%s",
+                "Booking settings lookup failed: operation=get_booking_staff_first_masters error_class=%s",
                 type(exc).__name__,
             )
             raise _settings_missing_error(BOOKING_MASTERS_NOT_CONFIGURED_TEXT, operation="load masters", exc=exc) from exc
 
         if not has_required_yclients_credentials(settings):
             logger.info(
-                "Booking masters unavailable: operation=get_booking_all_masters settings_present=%s "
+                "Booking masters unavailable: operation=get_booking_staff_first_masters settings_present=%s "
                 "company_id_present=%s partner_token_present=%s user_token_present=%s",
                 settings is not None,
                 bool(settings and settings.company_id),
@@ -968,7 +1170,7 @@ class BookingService:
                 masters_payload = await yclients.get_available_masters(company_id=settings.company_id)
         except YClientsError as exc:
             logger.warning(
-                "Booking YClients error: operation=get_booking_all_masters error_class=%s status_code=%s "
+                "Booking YClients error: operation=get_booking_staff_first_masters error_class=%s status_code=%s "
                 "partner_token_present=%s user_token_present=%s",
                 type(exc).__name__,
                 exc.status_code,
@@ -978,7 +1180,7 @@ class BookingService:
             _raise_booking_yclients_error(operation="load masters", exc=exc, fallback_text=BOOKING_MASTERS_YCLIENTS_ERROR_TEXT)
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
             logger.warning(
-                "Booking unexpected YClients error: operation=get_booking_all_masters error_class=%s",
+                "Booking unexpected YClients error: operation=get_booking_staff_first_masters error_class=%s",
                 type(exc).__name__,
             )
             _raise_booking_yclients_error(operation="load masters", exc=exc, fallback_text=BOOKING_MASTERS_YCLIENTS_ERROR_TEXT)
@@ -989,7 +1191,7 @@ class BookingService:
             key=lambda item: item.title.lower(),
         )
         logger.info(
-            "Booking masters loaded: operation=get_booking_all_masters masters_count=%s",
+            "Booking masters loaded: operation=get_booking_staff_first_masters masters_count=%s",
             len(masters),
         )
         return masters
