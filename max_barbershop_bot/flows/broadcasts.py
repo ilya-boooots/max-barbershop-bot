@@ -44,6 +44,8 @@ from max_barbershop_bot.ui.buttons import (
     broadcast_preview_keyboard,
     broadcast_report_keyboard,
     broadcast_text_keyboard,
+    client_segment_result_keyboard,
+    lost_clients_result_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
     BROADCAST_ALREADY_SENDING_TEXT,
@@ -64,6 +66,15 @@ _BROADCAST_SEND_TOKEN_KEY = "broadcast_send_token"
 _BROADCAST_SKIPPED_DISABLED_KEY = "broadcast_skipped_disabled"
 _BROADCAST_SKIPPED_MISSING_KEY = "broadcast_skipped_missing"
 _BROADCAST_RETURN_SCREEN_KEY = "broadcast_return_screen"
+_BROADCAST_STATE_KEYS = (
+    _BROADCAST_TEXT_KEY,
+    _BROADCAST_AUDIENCE_KEY,
+    _BROADCAST_AUDIENCE_LABEL_KEY,
+    _BROADCAST_RECIPIENT_COUNT_KEY,
+    _BROADCAST_RECIPIENTS_KEY,
+    _BROADCAST_IN_PROGRESS_KEY,
+    _BROADCAST_RETURN_SCREEN_KEY,
+)
 
 logger = logging.getLogger(__name__)
 _BROADCAST_SEND_LOCK_KEY = "broadcast:send"
@@ -363,10 +374,16 @@ async def handle_broadcast_back(context: RouterContext) -> None:
         return_screen = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY)
         if return_screen == state.CLIENT_SEGMENT_RESULT_SCREEN:
             state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENT_RESULT_SCREEN)
-            await context.send_text("Вернитесь к сегменту через меню рассылки 🎯", keyboard=broadcast_menu_keyboard())
+            await context.send_text(
+                "Вернулись к выбранному сегменту 🎯\n\nМожно обновить расчёт или снова запустить рассылку.",
+                keyboard=client_segment_result_keyboard(can_broadcast=True),
+            )
         elif return_screen == state.LOST_CLIENTS_SCREEN:
             state.set_current_screen(_user_id(context), _chat_id(context), state.LOST_CLIENTS_SCREEN)
-            await context.send_text("Вернитесь к потерянным клиентам через меню сегментов 😔", keyboard=broadcast_menu_keyboard())
+            await context.send_text(
+                "Вернулись к потерянным клиентам 😔\n\nМожно обновить расчёт или снова запустить рассылку.",
+                keyboard=lost_clients_result_keyboard(can_broadcast=True),
+            )
         else:
             state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
             await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
@@ -492,7 +509,8 @@ def _is_sending(context: RouterContext) -> bool:
 
 
 def _clear_broadcast_state(context: RouterContext) -> None:
-    state.clear_state_data(_user_id(context), _chat_id(context))
+    for key in _BROADCAST_STATE_KEYS:
+        state.set_state_data_value(_user_id(context), _chat_id(context), key, None)
 
 
 def _user_id(context: RouterContext) -> str | None:
