@@ -11,6 +11,7 @@ from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.services.registration import is_registered
+from max_barbershop_bot.services.user_names import get_user_display_name, join_profile_name
 from max_barbershop_bot.ui.buttons import booking_stale_keyboard, stale_screen_keyboard
 from max_barbershop_bot.ui.screens import main_menu_screen, placeholder_screen, settings_menu_screen, staff_menu_screen
 from max_barbershop_bot.ui.texts import BOOKING_STALE_CALLBACK_TEXT, STALE_SCREEN_TEXT
@@ -76,7 +77,10 @@ async def render_screen(context: RouterContext, screen_id: str) -> None:
         user = _current_user(context)
         screen = main_menu_screen(
             _current_role(context, user),
-            display_name=_menu_display_name(context, user),
+            display_name=get_user_display_name(
+                user,
+                join_profile_name(context.event.first_name, context.event.last_name),
+            ),
         )
     elif screen_id == state.STAFF_MENU_SCREEN:
         screen = staff_menu_screen(_current_role(context))
@@ -131,33 +135,6 @@ def _current_user(context: RouterContext) -> object | None:
         platform_user_id,
         platform=PLATFORM_MAX,
     )
-
-
-def _menu_display_name(context: RouterContext, user: object | None) -> str:
-    for value in (
-        getattr(user, "display_name", None),
-        getattr(user, "first_name", None),
-        _profile_display_name(context),
-    ):
-        cleaned = _clean_menu_name(value)
-        if cleaned:
-            return cleaned
-    return "Пользователь"
-
-
-def _profile_display_name(context: RouterContext) -> str | None:
-    return " ".join(
-        part.strip()
-        for part in (context.event.first_name or "", context.event.last_name or "")
-        if part and part.strip()
-    )
-
-
-def _clean_menu_name(value: object) -> str | None:
-    cleaned = " ".join(str(value or "").split()).strip()
-    if not cleaned or cleaned == "Пользователь":
-        return None
-    return cleaned
 
 
 def _is_current_user_registered(context: RouterContext) -> bool:
