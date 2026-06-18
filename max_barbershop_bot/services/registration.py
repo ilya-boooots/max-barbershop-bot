@@ -96,9 +96,10 @@ def save_registration_profile(
 ) -> User:
     """Persist the collected registration data into the existing user row."""
 
+    saved_name = validate_name(first_name) or first_name.strip()
     user = repository.update_profile(
         platform_user_id,
-        UserProfileUpdate(first_name=first_name, display_name=first_name, phone=phone, birthdate=birthdate),
+        UserProfileUpdate(first_name=saved_name, display_name=saved_name, phone=phone, birthdate=birthdate),
     )
     if user is None:
         raise RuntimeError("Пользователь для завершения регистрации не найден")
