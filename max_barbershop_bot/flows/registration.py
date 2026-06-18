@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from max_barbershop_bot.core import state
@@ -275,6 +276,7 @@ async def _complete_registration(context: RouterContext, *, show_final_messages:
     state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
     if show_final_messages:
         await context.send_text(REGISTRATION_STARTED_TEXT)
+        await asyncio.sleep(2)
         await context.send_text(REGISTRATION_COMPLETE_TEXT)
     from max_barbershop_bot.flows.menu import show_main_menu
 
