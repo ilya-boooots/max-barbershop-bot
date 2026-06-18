@@ -197,7 +197,7 @@ async def start_repeat_booking_with_prefill(
     chat_id = _chat_id(context)
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     try:
-        catalog = await booking_service.get_service_categories_and_services()
+        catalog = await booking_service.get_valid_categories_for_entry_mode(entry_mode=_entry_mode(context))
     except BookingServiceError as exc:
         logger.warning(
             "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s "
@@ -306,7 +306,7 @@ async def handle_booking_hub_staff(context: RouterContext) -> None:
         return
     await context.answer_callback()
     state.set_state_data_value(_user_id(context), _chat_id(context), _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_STAFF_FIRST)
-    await _open_booking_all_masters(context)
+    await _open_staff_first_masters(context)
 
 
 async def handle_booking_hub_datetime(context: RouterContext) -> None:
@@ -428,7 +428,7 @@ async def handle_booking_master_page(context: RouterContext) -> None:
             await _open_booking_masters(context, service_id, push_current=False)
             return
         if _entry_mode(context) == _ENTRY_MODE_STAFF_FIRST:
-            await _open_booking_all_masters(context, push_current=False)
+            await _open_staff_first_masters(context, push_current=False)
             return
         await _open_booking_catalog(context, push_current=False)
         return
@@ -481,7 +481,7 @@ async def handle_booking_master(context: RouterContext) -> None:
             await _open_booking_masters(context, service_id, push_current=False)
             return
         if _entry_mode(context) == _ENTRY_MODE_STAFF_FIRST:
-            await _open_booking_all_masters(context, push_current=False)
+            await _open_staff_first_masters(context, push_current=False)
             return
         await _open_booking_catalog(context, push_current=False)
         return
@@ -702,10 +702,11 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
     await context.answer_callback()
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     try:
-        fresh_slots = await booking_service.get_available_slots(
+        slot_is_valid = await booking_service.revalidate_selected_slot(
             yclients_service_id=str(booking_data["selected_service_id"]),
             yclients_master_id=str(booking_data["selected_master_id"]),
             booking_date=str(booking_data["selected_date"]),
+            booking_time=str(booking_data.get("selected_slot_time") or ""),
         )
     except BookingServiceError as exc:
         logger.warning(
@@ -721,7 +722,7 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
         release_action_lock(lock_key)
         return
     selected_slot_time = str(booking_data.get("selected_slot_time") or "")
-    if not any(item.time == selected_slot_time for item in fresh_slots):
+    if not slot_is_valid:
         state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
         release_action_lock(lock_key)
         await context.send_text(BOOKING_STALE_SLOT_TEXT)
@@ -783,7 +784,7 @@ async def handle_booking_back(context: RouterContext) -> None:
             if masters is not None:
                 await _show_masters(context, masters, push_current=False)
                 return
-            await _open_booking_all_masters(context, push_current=False)
+            await _open_staff_first_masters(context, push_current=False)
             return
         if entry_mode == _ENTRY_MODE_DATETIME_FIRST:
             booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
@@ -967,15 +968,20 @@ def _clear_booking_state(context: RouterContext) -> None:
 
 async def _open_booking_catalog(context: RouterContext, *, push_current: bool = True) -> None:
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    entry_mode = _entry_mode(context)
     try:
-        catalog = await booking_service.get_service_categories_and_services()
+        catalog = await booking_service.get_valid_categories_for_entry_mode(
+            entry_mode=entry_mode,
+            selected_master_id=_optional_state_text(_state_value(context, _SELECTED_MASTER_STATE_KEY)),
+            selected_date=_optional_state_text(_state_value(context, _SELECTED_DATE_STATE_KEY)),
+            selected_time=_optional_state_text(_state_value(context, _SELECTED_SLOT_TIME_STATE_KEY)),
+        )
     except BookingServiceError as exc:
         if push_current:
             _push_current_screen(context, state.BOOKING_CATEGORIES_SCREEN)
         await _send_booking_service_error(context, exc, operation="load categories")
         return
 
-    entry_mode = _entry_mode(context)
     preserve_master = entry_mode == _ENTRY_MODE_STAFF_FIRST and bool(_state_value(context, _SELECTED_MASTER_STATE_KEY))
     preserve_datetime = entry_mode == _ENTRY_MODE_DATETIME_FIRST and bool(_state_value(context, _SELECTED_DATE_STATE_KEY)) and bool(_state_value(context, _SELECTED_SLOT_TIME_STATE_KEY))
     state.set_state_data_value(_user_id(context), _chat_id(context), _CATALOG_STATE_KEY, catalog)
@@ -1169,13 +1175,13 @@ async def _refresh_datetime_first_dates_after_stale_slot(
     await _open_datetime_first_dates(context, push_current=push_current)
 
 
-async def _open_booking_all_masters(context: RouterContext, *, push_current: bool = True) -> None:
+async def _open_staff_first_masters(context: RouterContext, *, push_current: bool = True) -> None:
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     try:
-        masters = await booking_service.get_available_masters()
+        masters = await booking_service.get_valid_masters_for_constraints(entry_mode=_ENTRY_MODE_STAFF_FIRST)
     except BookingServiceError as exc:
         logger.warning(
-            "Booking all masters screen failed: operation=show_booking_all_masters error_class=%s",
+            "Booking staff-first masters screen failed: operation=show_booking_staff_first_masters error_class=%s",
             type(exc).__name__,
         )
         if push_current:
@@ -1198,7 +1204,7 @@ async def _open_booking_all_masters(context: RouterContext, *, push_current: boo
 async def _open_booking_masters(context: RouterContext, yclients_service_id: str, *, push_current: bool = True) -> None:
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     try:
-        masters = await booking_service.get_available_masters_for_service(yclients_service_id, service=_selected_service(context))
+        masters = await booking_service.get_valid_masters_for_constraints(yclients_service_id=yclients_service_id, service=_selected_service(context), entry_mode=_entry_mode(context))
     except BookingServiceError as exc:
         logger.warning(
             "Booking masters screen failed: operation=show_booking_masters service_id=%s error_class=%s",
@@ -1356,6 +1362,20 @@ async def _show_booking_confirmation(context: RouterContext) -> None:
         return
 
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    try:
+        slot_is_valid = await booking_service.revalidate_selected_slot(
+            yclients_service_id=str(booking_data["selected_service_id"]),
+            yclients_master_id=str(booking_data["selected_master_id"]),
+            booking_date=str(booking_data["selected_date"]),
+            booking_time=str(booking_data.get("selected_slot_time") or ""),
+        )
+    except BookingServiceError as exc:
+        await _send_booking_service_error(context, exc, operation="load slots")
+        return
+    if not slot_is_valid:
+        await context.send_text("Это время уже недоступно 🙏\n\nПожалуйста, выберите другое время.")
+        await _open_booking_slots(context, str(booking_data["selected_date"]), push_current=False, stale_if_empty=True)
+        return
     timezone_name = booking_service.get_branch_timezone()
     contacts = await _booking_contacts_safely()
     _push_current_screen(context, state.BOOKING_CONFIRMATION_SCREEN)

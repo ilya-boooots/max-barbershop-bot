@@ -130,15 +130,14 @@ REGISTRATION_NAME_CONFIRM_TEXT = "👉 Хотите использовать и�
 BOOKING_HUB_TEXT = "✂️ Как начнём запись?"
 BOOKING_CATEGORY_TEXT = "✂️ Выберите категорию услуг 😊"
 BOOKING_SERVICE_TEXT = "Выберите услугу ✂️"
-BOOKING_EMPTY_TEXT = "😕 В этой категории пока нет доступных услуг."
-BOOKING_CATEGORY_SERVICES_EMPTY_TEXT = "😕 В этой категории пока нет доступных услуг."
+BOOKING_EMPTY_TEXT = "Сейчас нет доступных услуг для записи 🙏"
+BOOKING_CATEGORY_SERVICES_EMPTY_TEXT = "У этого мастера сейчас нет доступных услуг для записи 🙏"
 BOOKING_STAFF_FIRST_CATEGORY_TEXT = "💈 Отлично! Теперь выберите категорию услуг ✂️"
 BOOKING_DATETIME_FIRST_CATEGORY_TEXT = "🧾 Теперь выберите категорию услуг для выбранной даты/времени"
 BOOKING_DATETIME_FIRST_SERVICE_TEXT = "Выберите услугу для выбранной даты/времени ✂️"
-BOOKING_CATEGORY_EMPTY_TEXT = "😔 Пока нет доступных категорий услуг."
+BOOKING_CATEGORY_EMPTY_TEXT = "Сейчас нет доступных услуг для записи 🙏"
 BOOKING_MASTER_TEXT = "Выберите мастера 💈"
-BOOKING_MASTERS_EMPTY_TEXT = """😔 Для этой услуги пока нет мастеров со свободными окнами.
-Попробуйте выбрать другую услугу или загляните позже."""
+BOOKING_MASTERS_EMPTY_TEXT = "Для этой услуги сейчас нет доступных мастеров со свободными окнами 🙏"
 BOOKING_MASTER_SELECTED_TEXT = """Вы выбрали мастера: {master_name}
 
 Следующий шаг — выбор даты и времени. Скоро добавим 🔧"""
@@ -148,8 +147,8 @@ BOOKING_DATES_TEXT = """✂️ Запись
 BOOKING_SLOTS_TEXT = """✂️ Запись
 
 Выберите свободное время:"""
-BOOKING_STALE_DATE_TEXT = "😔 На эту дату свободных окон нет. Выберите другой день 🙂"
-BOOKING_STALE_SLOT_TEXT = "😔 Это окно уже неактуально. Обновляю список 🙂"
+BOOKING_STALE_DATE_TEXT = "На эту дату пока нет свободных окон 🙏"
+BOOKING_STALE_SLOT_TEXT = "Это время уже недоступно 🙏\n\nПожалуйста, выберите другое время."
 BOOKING_CONFIRMATION_MISSING_DATA_TEXT = """Не хватает данных для записи 🙏
 
 Нажмите /start и пройдите регистрацию заново."""
