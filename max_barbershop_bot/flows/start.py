@@ -65,21 +65,32 @@ async def _show_start_screen(context: RouterContext) -> None:
 
 
 def _menu_display_name(user: object, context: RouterContext) -> str:
-    """Return the display name used in the Telegram main menu prompt."""
+    """Return the personal name used in the MAX main menu prompt."""
 
     for value in (
         getattr(user, "display_name", None),
         getattr(user, "first_name", None),
-        " ".join(
-            part.strip()
-            for part in (context.event.first_name or "", context.event.last_name or "")
-            if part and part.strip()
-        ),
+        _profile_display_name(context),
     ):
-        cleaned = " ".join(str(value or "").split()).strip()
+        cleaned = _clean_menu_name(value)
         if cleaned:
             return cleaned
-    return "гость"
+    return "Пользователь"
+
+
+def _profile_display_name(context: RouterContext) -> str | None:
+    return " ".join(
+        part.strip()
+        for part in (context.event.first_name or "", context.event.last_name or "")
+        if part and part.strip()
+    )
+
+
+def _clean_menu_name(value: object) -> str | None:
+    cleaned = " ".join(str(value or "").split()).strip()
+    if not cleaned or cleaned == "Пользователь":
+        return None
+    return cleaned
 
 
 def _ensure_protected_developer(

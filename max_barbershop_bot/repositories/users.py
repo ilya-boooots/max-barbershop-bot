@@ -144,14 +144,16 @@ class UsersRepository:
 
         existing = self.find_by_platform_user_id(platform_user_id, platform=platform)
         if existing is not None:
+            profile_first_name = _clean_profile_name(first_name)
+            profile_display_name = _join_display_name(first_name, last_name)
             update = UserProfileUpdate(
                 max_user_id=max_user_id,
                 chat_id=chat_id,
-                first_name=first_name if existing.first_name is None else None,
+                first_name=profile_first_name if _should_fill_profile_name(existing.first_name) else None,
                 last_name=last_name if existing.last_name is None else None,
                 username=username if existing.username is None else None,
                 display_name=(
-                    _join_display_name(first_name, last_name) if existing.display_name is None else None
+                    profile_display_name if _should_fill_profile_name(existing.display_name) else None
                 ),
             )
             updated = self.update_profile(platform_user_id, update, platform=platform)
@@ -165,7 +167,7 @@ class UsersRepository:
                 platform_user_id=platform_user_id,
                 max_user_id=max_user_id,
                 chat_id=chat_id,
-                first_name=first_name,
+                first_name=_clean_profile_name(first_name),
                 last_name=last_name,
                 username=username,
                 display_name=_join_display_name(first_name, last_name),
@@ -439,7 +441,7 @@ def _row_to_user(row: sqlite3.Row | None) -> User | None:
 
 def _join_display_name(first_name: str | None, last_name: str | None) -> str | None:
     parts = [part.strip() for part in (first_name, last_name) if part and part.strip()]
-    return " ".join(parts) or None
+    return _clean_profile_name(" ".join(parts) or None)
 
 
 def _required_text(value: str, field_name: str) -> str:
@@ -477,3 +479,14 @@ def _load_settings(value: str | None) -> dict[str, Any]:
 def _row_optional_text(row: sqlite3.Row, column: str) -> str | None:
     value = row[column]
     return str(value) if value is not None else None
+
+
+def _clean_profile_name(value: str | None) -> str | None:
+    cleaned = _optional_text(value)
+    if cleaned == "Пользователь":
+        return None
+    return cleaned
+
+
+def _should_fill_profile_name(current: str | None) -> bool:
+    return _clean_profile_name(current) is None
