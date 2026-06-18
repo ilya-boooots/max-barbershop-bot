@@ -180,6 +180,8 @@ class BookingMasterItem:
     title: str
     specialization: str | None = None
     rating: str | None = None
+    service_ids: set[str] | None = None
+    raw: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -584,7 +586,7 @@ class BookingService:
         timezone_name = normalize_branch_timezone(settings.branch_timezone if settings else None, flow="booking", operation="settings_timezone")
         if not has_required_yclients_credentials(settings) or not service_id:
             raise _settings_missing_error(BOOKING_MASTERS_NOT_CONFIGURED_TEXT, operation="load masters")
-        masters = await self.get_available_masters_for_service(service_id)
+        masters = await self.get_available_masters_for_service(service_id, entry_mode="datetime_first")
         booking_date_value = _booking_date_iso(booking_date)
         selected_time = _clean_text(booking_time)
         semaphore = asyncio.Semaphore(YCLIENTS_SLOT_CONCURRENCY)
@@ -993,6 +995,7 @@ class BookingService:
         yclients_service_id: str,
         *,
         service: BookingServiceItem | dict[str, Any] | None = None,
+        entry_mode: str = "service_first",
     ) -> list[BookingMasterItem]:
         """Return masters safely filtered by the selected service id."""
 
@@ -1056,8 +1059,9 @@ class BookingService:
             "MAX booking staff resolution diagnostic: entry_mode=%s selected_service_id_present=%s "
             "selected_date_present=%s selected_time_present=%s staff_from_service_count=%s "
             "staff_endpoint_count=%s intersection_count=%s availability_filtered_count=%s "
-            "any_staff_selected=%s resolved_staff_id_present=%s",
-            "service_first",
+            "any_staff_selected=%s resolved_staff_id_present=%s masters_payload_type=%s "
+            "staff_item_type=%s service_id=%s callback_payload=%s",
+            entry_mode,
             bool(service_id),
             False,
             False,
@@ -1067,6 +1071,10 @@ class BookingService:
             0,
             False,
             False,
+            type(masters_payload).__name__,
+            type(masters_payload[0]).__name__ if masters_payload else None,
+            service_id,
+            None,
         )
         return masters
 
@@ -1571,7 +1579,7 @@ def resolve_safe_staff_for_service(
         source = "intersection" if resolved and any(staff_id in endpoint_by_id for staff_id in resolved) else "service_payload"
     else:
         for item in endpoint_masters:
-            staff_service_ids = _extract_staff_service_ids(item.raw or {})
+            staff_service_ids = _extract_staff_service_ids(item)
             if staff_service_ids and service_id not in staff_service_ids:
                 continue
             resolved[item.yclients_master_id] = item
@@ -1593,6 +1601,15 @@ def _service_raw_payload(service: BookingServiceItem | dict[str, Any] | None) ->
     return {}
 
 
+def _get_raw_payload(item: Any) -> dict[str, Any] | None:
+    if isinstance(item, dict):
+        return item
+    raw = getattr(item, "raw", None)
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
 def _extract_staff_id_from_payload(value: Any) -> str:
     if isinstance(value, dict):
         for key in ("id", "staff_id", "employee_id", "master_id", "specialist_id", "user_id"):
@@ -1611,7 +1628,7 @@ def _extract_staff_id_from_payload(value: Any) -> str:
 def _iter_list_or_scalar(raw: Any) -> list[Any]:
     if raw is None:
         return []
-    return raw if isinstance(raw, list) else [raw]
+    return list(raw) if isinstance(raw, (list, tuple, set)) else [raw]
 
 
 def _extract_assigned_staff_ids_from_service(service: dict[str, Any]) -> set[str] | None:
@@ -1649,10 +1666,18 @@ def _find_service_staff_row(service: dict[str, Any], staff_id: str) -> dict[str,
     return None
 
 
-def _extract_staff_service_ids(staff: dict[str, Any]) -> set[str]:
+def _extract_staff_service_ids(staff: Any) -> set[str]:
     service_ids: set[str] = set()
+    direct_service_ids = getattr(staff, "service_ids", None)
+    for item in _iter_list_or_scalar(direct_service_ids):
+        service_id = _extract_service_id_from_payload(item)
+        if service_id:
+            service_ids.add(service_id)
+    raw_staff = _get_raw_payload(staff)
+    if raw_staff is None:
+        return service_ids
     for key in ("service_id", "service_ids", "services", "service", "assigned_services"):
-        for item in _iter_list_or_scalar(staff.get(key)):
+        for item in _iter_list_or_scalar(raw_staff.get(key)):
             service_id = _extract_service_id_from_payload(item)
             if service_id:
                 service_ids.add(service_id)
@@ -1700,6 +1725,8 @@ def _normalize_master(item: BookingMasterItem | YClientsStaff | dict[str, Any]) 
             title=item.name or "",
             specialization=item.specialization,
             rating=_extract_staff_rating(item.raw),
+            service_ids=_extract_staff_service_ids(item),
+            raw=item.raw,
         )
     return BookingMasterItem(
         yclients_master_id=_clean_text(
@@ -1712,6 +1739,8 @@ def _normalize_master(item: BookingMasterItem | YClientsStaff | dict[str, Any]) 
         title=_clean_text(item.get("title") or item.get("name")),
         specialization=_clean_text(item.get("specialization") or item.get("position") or item.get("post") or item.get("profession")) or None,
         rating=_extract_staff_rating(item),
+        service_ids=_extract_staff_service_ids(item),
+        raw=item,
     )
 
 

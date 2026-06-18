@@ -361,6 +361,18 @@ async def handle_booking_service(context: RouterContext) -> None:
     if service is None:
         await _open_booking_catalog(context, push_current=False)
         return
+    eligible_service_ids = _state_value(context, _ELIGIBLE_SERVICE_IDS_STATE_KEY)
+    if (
+        _entry_mode(context) == _ENTRY_MODE_DATETIME_FIRST
+        and isinstance(eligible_service_ids, list)
+        and service.yclients_service_id not in eligible_service_ids
+    ):
+        await context.send_text(
+            "Это время уже недоступно 🙏\n\nПожалуйста, выберите другое время.",
+            keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
+        )
+        await _open_datetime_first_catalog(context, push_current=False)
+        return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_STATE_KEY, service.yclients_service_id)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_NAME_STATE_KEY, service.title)
@@ -478,6 +490,22 @@ async def handle_booking_master(context: RouterContext) -> None:
     if master is None:
         await _show_masters(context, masters, push_current=False)
         return
+    eligible_master_ids = _state_value(context, _ELIGIBLE_MASTER_IDS_STATE_KEY)
+    if (
+        _entry_mode(context) == _ENTRY_MODE_DATETIME_FIRST
+        and isinstance(eligible_master_ids, list)
+        and master.yclients_master_id not in eligible_master_ids
+    ):
+        await context.send_text(
+            "Для выбранного времени нет доступных мастеров 🙏\n\nПопробуйте выбрать другое время или услугу.",
+            keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD),
+        )
+        service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
+        if isinstance(service_id, str) and service_id:
+            await _open_datetime_first_masters(context, service_id, push_current=False)
+        else:
+            await _open_datetime_first_catalog(context, push_current=False)
+        return
 
     entry_mode = _entry_mode(context)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, master.yclients_master_id)
@@ -486,9 +514,9 @@ async def handle_booking_master(context: RouterContext) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_RATING_STATE_KEY, master.rating)
     if entry_mode != _ENTRY_MODE_DATETIME_FIRST:
         state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_DATE_STATE_KEY, None)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, None)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, None)
 
     if entry_mode == _ENTRY_MODE_STAFF_FIRST and not _state_value(context, _SELECTED_SERVICE_STATE_KEY):
         await _open_booking_catalog(context)
