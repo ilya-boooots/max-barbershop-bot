@@ -18,6 +18,7 @@ from max_barbershop_bot.services.registration import (
     validate_birthdate,
     validate_name,
 )
+from max_barbershop_bot.services.user_names import clean_display_name, join_profile_name
 from max_barbershop_bot.ui.buttons import (
     REGISTRATION_BACK_PAYLOAD,
     REGISTRATION_HOME_PAYLOAD,
@@ -98,7 +99,10 @@ async def handle_name_confirmed(context: RouterContext) -> None:
 
     await context.answer_callback()
     name = state.get_state_data_value(context.event.platform_user_id, context.event.chat_id, _SUGGESTED_NAME_KEY)
-    name = validate_name(str(name or "")) or _suggested_name(context) or "Пользователь"
+    name = validate_name(str(name or "")) or _suggested_name(context)
+    if name is None:
+        await _show_manual_name(context)
+        return
     state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _NAME_KEY, name)
     await _continue_after_name(context)
 
@@ -243,6 +247,9 @@ async def _persist_from_state_and_complete(context: RouterContext) -> None:
         first_name=name,
         birthdate=birthdate,
     )
+    reloaded_user = repository.find_by_platform_user_id(platform_user_id)
+    if reloaded_user is not None:
+        state.set_state_data_value(platform_user_id, chat_id, _NAME_KEY, reloaded_user.first_name)
     await _complete_registration(context)
 
 
@@ -284,13 +291,9 @@ async def _complete_registration(context: RouterContext, *, show_final_messages:
 
 
 def _suggested_name(context: RouterContext) -> str | None:
-    profile_name = " ".join(
-        part.strip()
-        for part in (context.event.first_name or "", context.event.last_name or "")
-        if part and part.strip()
-    )
+    profile_name = join_profile_name(context.event.first_name, context.event.last_name)
     if profile_name:
-        return validate_name(profile_name) or profile_name
+        return validate_name(profile_name) or clean_display_name(profile_name)
     return None
 
 

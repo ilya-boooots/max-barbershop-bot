@@ -5,12 +5,13 @@ from __future__ import annotations
 from os import getenv
 
 from max_barbershop_bot.core import state
-from max_barbershop_bot.core.permissions import effective_role, is_developer, is_protected_developer
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
+from max_barbershop_bot.core.permissions import effective_role, is_developer, is_protected_developer
 from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.flows.registration import start_registration
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
+from max_barbershop_bot.services.user_names import get_user_display_name, join_profile_name
 from max_barbershop_bot.ui.screens import main_menu_screen
 
 
@@ -60,37 +61,14 @@ async def _show_start_screen(context: RouterContext) -> None:
         return
 
     state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
-    screen = main_menu_screen(role, display_name=_menu_display_name(user, context))
-    await context.send_text(screen.text, keyboard=screen.keyboard)
-
-
-def _menu_display_name(user: object, context: RouterContext) -> str:
-    """Return the personal name used in the MAX main menu prompt."""
-
-    for value in (
-        getattr(user, "display_name", None),
-        getattr(user, "first_name", None),
-        _profile_display_name(context),
-    ):
-        cleaned = _clean_menu_name(value)
-        if cleaned:
-            return cleaned
-    return "Пользователь"
-
-
-def _profile_display_name(context: RouterContext) -> str | None:
-    return " ".join(
-        part.strip()
-        for part in (context.event.first_name or "", context.event.last_name or "")
-        if part and part.strip()
+    screen = main_menu_screen(
+        role,
+        display_name=get_user_display_name(
+            user,
+            join_profile_name(context.event.first_name, context.event.last_name),
+        ),
     )
-
-
-def _clean_menu_name(value: object) -> str | None:
-    cleaned = " ".join(str(value or "").split()).strip()
-    if not cleaned or cleaned == "Пользователь":
-        return None
-    return cleaned
+    await context.send_text(screen.text, keyboard=screen.keyboard)
 
 
 def _ensure_protected_developer(

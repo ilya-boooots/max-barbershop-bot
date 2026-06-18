@@ -8,6 +8,7 @@ from datetime import date, datetime
 from typing import Any
 
 from max_barbershop_bot.repositories.users import User, UsersRepository, UserProfileUpdate
+from max_barbershop_bot.services.user_names import clean_display_name
 
 _NON_DIGIT_PHONE_CHARS = re.compile(r"[\s()\-]")
 _MIN_PHONE_DIGITS = 10
@@ -96,7 +97,9 @@ def save_registration_profile(
 ) -> User:
     """Persist the collected registration data into the existing user row."""
 
-    saved_name = validate_name(first_name) or first_name.strip()
+    saved_name = validate_name(first_name) or clean_display_name(first_name)
+    if saved_name is None:
+        raise ValueError("Имя для регистрации не может быть пустым")
     user = repository.update_profile(
         platform_user_id,
         UserProfileUpdate(first_name=saved_name, display_name=saved_name, phone=phone, birthdate=birthdate),
