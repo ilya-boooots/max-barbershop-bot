@@ -455,14 +455,15 @@ class MyBookingsService:
             )
             raise MyBookingCancellationError(MY_BOOKING_CANCEL_ERROR_TEXT) from exc
 
+        result_status = getattr(result, "status", None)
         logger.info(
             "Booking cancelled in YClients: operation=cancel_booking platform_user_id=%s "
             "yclients_record_id=%s result_status=%s",
             platform_user_id,
             record_id,
-            result.status,
+            result_status,
         )
-        return result.status
+        return result_status
 
 
     async def prepare_reschedule_context(

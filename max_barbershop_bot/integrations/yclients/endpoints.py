@@ -244,27 +244,6 @@ async def create_booking(
     )
 
 
-async def cancel_booking(
-    client: YClientsClient,
-    *,
-    company_id: str,
-    record_id: str,
-) -> YClientsCancelBookingResult:
-    """Cancel a YClients record via DELETE /api/v1/record/{company_id}/{record_id}."""
-
-    response = await client.delete(f"/api/v1/record/{company_id}/{record_id}")
-    record = extract_first_record(response) or {}
-    normalized_record_id = safe_str(
-        record.get("record_id")
-        or record.get("id")
-        or record.get("booking_id")
-        or record.get("visit_id")
-        or record_id
-    )
-    status = safe_str(record.get("status") or record.get("record_status") or record.get("state")) or None
-    return YClientsCancelBookingResult(record_id=normalized_record_id, status=status, raw_payload=response)
-
-
 async def list_clients(
     client: YClientsClient,
     *,
@@ -590,18 +569,20 @@ async def cancel_booking(
     *,
     company_id: str,
     record_id: str,
-) -> YClientsBookingRecord:
+) -> YClientsCancelBookingResult:
     """Cancel/delete a YClients booking record."""
 
     response = await client.delete(f"/api/v1/record/{company_id}/{record_id}")
     record = extract_first_record(response) or {}
-    return YClientsBookingRecord(
-        record_id=safe_str(record.get("record_id") or record.get("id") or record_id),
-        datetime=safe_str(record.get("datetime")) or None,
-        staff_name=safe_str(record.get("staff_name") or record.get("staff")) or None,
-        service_name=safe_str(record.get("service_name") or record.get("service")) or None,
-        raw_payload=response,
+    normalized_record_id = safe_str(
+        record.get("record_id")
+        or record.get("id")
+        or record.get("booking_id")
+        or record.get("visit_id")
+        or record_id
     )
+    status = safe_str(record.get("status") or record.get("record_status") or record.get("state")) or None
+    return YClientsCancelBookingResult(record_id=normalized_record_id, status=status, raw_payload=response)
 
 
 async def confirm_booking(
