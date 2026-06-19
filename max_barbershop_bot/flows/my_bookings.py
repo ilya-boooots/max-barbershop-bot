@@ -26,6 +26,7 @@ from max_barbershop_bot.services.booking import (
 from max_barbershop_bot.flows.booking import start_repeat_booking_with_prefill
 from max_barbershop_bot.services.my_bookings import (
     MY_BOOKING_CANCEL_IN_PROGRESS_TEXT,
+    MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT,
     MY_BOOKING_NOT_FOUND_TEXT,
     MY_BOOKING_RESCHEDULE_DATES_TEXT,
     MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT,
@@ -198,8 +199,7 @@ async def handle_my_booking_cancel_start(context: RouterContext) -> None:
             None,
         )
     if not is_booking_cancelable(booking, timezone_name=timezone_name):
-        await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_booking_cancel_result_keyboard())
-        await _show_my_bookings(context, push_current=False)
+        await context.send_text(MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT, keyboard=my_booking_cancel_result_keyboard())
         return
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_CANCEL_CONFIRM_SCREEN)
     await context.send_text(format_cancel_confirmation_text(booking, timezone_name=timezone_name), keyboard=my_booking_cancel_confirmation_keyboard())

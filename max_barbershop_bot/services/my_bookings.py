@@ -37,7 +37,7 @@ MY_BOOKINGS_EMPTY_TEXT = "📭 У вас пока нет активных зап
 MY_BOOKINGS_TITLE_TEXT = "📅 Ваши записи"
 MY_BOOKING_NOT_FOUND_TEXT = "Эта запись уже неактуальна 🙏\n\nОткройте список записей заново."
 MY_BOOKING_CANCEL_IN_PROGRESS_TEXT = "⏳ Уже выполняем действие, секундочку 🙂"
-MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT = "Эту запись нельзя отменить через бота 🙏\n\nПожалуйста, напишите администратору."
+MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT = "Эту запись уже нельзя отменить через бота 🙏\n\nПожалуйста, напишите администратору."
 MY_BOOKING_CANCEL_ALREADY_TEXT = "Эта запись уже отменена."
 MY_BOOKING_CANCEL_ERROR_TEXT = "Не удалось отменить запись 🙏\n\nПожалуйста, попробуйте позже или напишите администратору."
 MY_BOOKING_RESCHEDULE_UNAVAILABLE_TEXT = "Перенос записи через бота пока недоступен 🙏\n\nПожалуйста, напишите администратору."
@@ -73,7 +73,7 @@ _STATUS_LABELS = {
     "no_show": "Неявка",
 }
 _CANCELLED_OR_PAST_STATUSES = {"cancelled", "canceled", "deleted", "done", "completed", "visit", "no_show", "noshow"}
-_ACTIVE_CANCELABLE_STATUSES = {"", "active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
+_ACTIVE_CANCELABLE_STATUSES = {"active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
 
 
 class MyBookingsError(RuntimeError):
@@ -373,22 +373,23 @@ class MyBookingsService:
                 current = _booking_from_payload(row, timezone_name=timezone_name) if row else None
                 current_status_raw = _clean_text(row.get("status") or row.get("record_status") or row.get("state")) if row else ""
                 current_status_mapped = format_booking_status(current_status_raw)
+                appointment_datetime = parse_booking_datetime(current, timezone_name=timezone_name) if current else None
                 is_future = bool(current and is_future_booking(current, timezone_name=timezone_name))
+                is_past = bool(appointment_datetime and not is_future)
                 is_cancelable = bool(current and is_booking_cancelable(current, timezone_name=timezone_name))
                 logger.info(
-                    "MAX my bookings cancellation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s "
-                    "current_status_raw=%s current_status_mapped=%s is_future=%s is_cancelable=%s cancel_endpoint_called=%s "
-                    "yclients_error_category=%s http_status=%s trace_id=%s",
-                    bool(platform_user_id),
+                    "MAX my bookings cancelability diagnostic: yclients_record_id_present=%s raw_status=%s "
+                    "mapped_status=%s appointment_datetime_present=%s branch_timezone=%s is_past=%s "
+                    "is_future=%s is_cancelable=%s cancel_button_visible=%s",
                     bool(record_id),
                     current_status_raw or None,
                     current_status_mapped,
+                    appointment_datetime is not None,
+                    timezone_name,
+                    is_past,
                     is_future,
                     is_cancelable,
-                    False,
-                    None,
-                    None,
-                    None,
+                    is_cancelable,
                 )
                 if not is_future or not is_cancelable:
                     raise MyBookingCancellationNotAllowedError(MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT)
@@ -398,19 +399,18 @@ class MyBookingsService:
                     cancellation_marker=cancellation_marker,
                 )
                 logger.info(
-                    "MAX my bookings cancellation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s "
-                    "current_status_raw=%s current_status_mapped=%s is_future=%s is_cancelable=%s cancel_endpoint_called=%s "
-                    "yclients_error_category=%s http_status=%s trace_id=%s",
-                    bool(platform_user_id),
+                    "MAX my bookings cancelability diagnostic: yclients_record_id_present=%s raw_status=%s "
+                    "mapped_status=%s appointment_datetime_present=%s branch_timezone=%s is_past=%s "
+                    "is_future=%s is_cancelable=%s cancel_button_visible=%s",
                     bool(record_id),
                     current_status_raw or None,
                     current_status_mapped,
+                    appointment_datetime is not None,
+                    timezone_name,
+                    is_past,
                     is_future,
                     is_cancelable,
-                    True,
-                    None,
-                    None,
-                    None,
+                    is_cancelable,
                 )
         except MyBookingCancellationNotAllowedError:
             raise
@@ -771,7 +771,7 @@ def is_future_booking(
     current = now or datetime.now(_zoneinfo(timezone_name))
     if current.tzinfo is None:
         current = current.replace(tzinfo=_zoneinfo(timezone_name))
-    return parsed >= current.astimezone(_zoneinfo(timezone_name))
+    return parsed > current.astimezone(_zoneinfo(timezone_name))
 
 
 def is_booking_cancelable(
@@ -787,7 +787,7 @@ def is_booking_cancelable(
     raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
     normalized = _clean_text(raw_status).lower()
     if normalized in {"неизвестен", "unknown", "—"}:
-        normalized = ""
+        return False
     return normalized in _ACTIVE_CANCELABLE_STATUSES
 
 
