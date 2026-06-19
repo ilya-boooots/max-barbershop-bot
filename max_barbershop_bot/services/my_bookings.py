@@ -74,6 +74,7 @@ _STATUS_LABELS = {
 }
 _CANCELLED_OR_PAST_STATUSES = {"cancelled", "canceled", "deleted", "done", "completed", "visit", "no_show", "noshow"}
 _ACTIVE_CANCELABLE_STATUSES = {"active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
+_CANCEL_CUTOFF_MINUTES = 10
 
 
 class MyBookingsError(RuntimeError):
@@ -783,6 +784,15 @@ def is_booking_cancelable(
     """Return whether the bot should show/call YClients cancellation for this record."""
 
     if not is_future_booking(item, timezone_name=timezone_name, now=now):
+        return False
+    parsed = parse_booking_datetime(item, timezone_name=timezone_name)
+    if parsed is None:
+        return False
+    current = now or datetime.now(_zoneinfo(timezone_name))
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_zoneinfo(timezone_name))
+    current = current.astimezone(_zoneinfo(timezone_name))
+    if parsed - current <= timedelta(minutes=_CANCEL_CUTOFF_MINUTES):
         return False
     raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
     normalized = _clean_text(raw_status).lower()
