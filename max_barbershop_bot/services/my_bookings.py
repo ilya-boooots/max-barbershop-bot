@@ -823,6 +823,23 @@ def format_booking_item(item: MyBookingItem, *, index: int, timezone_name: str) 
     )
 
 
+def format_booking_list_item(item: MyBookingItem, *, index: int, timezone_name: str) -> str:
+    """Format one compact booking row for a fast My bookings list."""
+
+    booking_datetime = item.booking_datetime.astimezone(_zoneinfo(timezone_name))
+    master = item.master_name or "Любой мастер"
+    return f"{index}. 📅 {booking_datetime.strftime('%d.%m.%Y')} в {booking_datetime.strftime('%H:%M')} — {item.service_name}, {master}"
+
+
+def format_bookings_list_screen(bookings: list[MyBookingItem], *, timezone_name: str) -> str:
+    """Format a compact bookings list that stays small even with many active records."""
+
+    if not bookings:
+        return MY_BOOKINGS_EMPTY_TEXT
+    rows = [format_booking_list_item(item, index=index, timezone_name=timezone_name) for index, item in enumerate(bookings, start=1)]
+    return f"{MY_BOOKINGS_TITLE_TEXT}\n\nВыберите запись, чтобы открыть детали 👇\n\n" + "\n".join(rows)
+
+
 def format_bookings_screen(bookings: list[MyBookingItem], *, timezone_name: str) -> str:
     """Format the full future bookings screen."""
 
