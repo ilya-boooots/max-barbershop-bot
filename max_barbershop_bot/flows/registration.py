@@ -18,7 +18,7 @@ from max_barbershop_bot.services.registration import (
     validate_birthdate,
     validate_name,
 )
-from max_barbershop_bot.services.user_names import clean_display_name, join_profile_name
+from max_barbershop_bot.services.user_names import clean_display_name, get_saved_user_display_name, join_profile_name
 from max_barbershop_bot.ui.buttons import (
     REGISTRATION_BACK_PAYLOAD,
     REGISTRATION_HOME_PAYLOAD,
@@ -79,16 +79,17 @@ async def start_registration(context: RouterContext, *, force_first_step: bool =
             state.set_state_data_value(platform_user_id, chat_id, _PHONE_KEY, user.phone)
         if user.birthdate:
             state.set_state_data_value(platform_user_id, chat_id, _BIRTHDATE_KEY, user.birthdate)
-        if user.first_name and (user.phone or user.birthdate):
-            state.set_state_data_value(platform_user_id, chat_id, _NAME_KEY, user.first_name)
+        saved_name = get_saved_user_display_name(user)
+        if saved_name and (user.phone or user.birthdate):
+            state.set_state_data_value(platform_user_id, chat_id, _NAME_KEY, saved_name)
 
     if user is not None and is_registered(user):
         await _complete_registration(context, show_final_messages=False)
         return
-    if user is not None and user.first_name and user.phone and not user.birthdate:
+    if user is not None and get_saved_user_display_name(user) and user.phone and not user.birthdate:
         await _show_birthdate(context)
         return
-    if user is not None and user.first_name and user.birthdate and not user.phone:
+    if user is not None and get_saved_user_display_name(user) and user.birthdate and not user.phone:
         await _show_phone(context)
         return
     await _show_name_confirm(context)
@@ -170,7 +171,7 @@ async def handle_birthdate_input(context: RouterContext) -> None:
     phone = state.get_state_data_value(platform_user_id, chat_id, _PHONE_KEY)
     user = _find_current_user(platform_user_id)
     if not isinstance(name, str) and user is not None:
-        name = user.first_name
+        name = get_saved_user_display_name(user)
     if not isinstance(phone, str) and user is not None:
         phone = user.phone
     if not isinstance(name, str) or not isinstance(phone, str):
@@ -249,13 +250,17 @@ async def _persist_from_state_and_complete(context: RouterContext) -> None:
     )
     reloaded_user = repository.find_by_platform_user_id(platform_user_id)
     if reloaded_user is not None:
-        state.set_state_data_value(platform_user_id, chat_id, _NAME_KEY, reloaded_user.first_name)
+        saved_name = get_saved_user_display_name(reloaded_user)
+        if saved_name:
+            state.set_state_data_value(platform_user_id, chat_id, _NAME_KEY, saved_name)
     await _complete_registration(context)
 
 
 async def _show_name_confirm(context: RouterContext) -> None:
-    name = _suggested_name(context) or "Пользователь"
-    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _SUGGESTED_NAME_KEY, name)
+    suggested_name = _suggested_name(context)
+    if suggested_name is not None:
+        state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, _SUGGESTED_NAME_KEY, suggested_name)
+    name = suggested_name or "Пользователь"
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.REGISTRATION_NAME_CONFIRM_SCREEN)
     screen = registration_name_confirm_screen(name)
     await context.send_text(screen.text, keyboard=screen.keyboard)

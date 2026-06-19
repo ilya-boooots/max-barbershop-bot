@@ -8,11 +8,19 @@ FALLBACK_DISPLAY_NAME = "Пользователь"
 def get_user_display_name(user: object | None, event_profile_name: str | None = None) -> str:
     """Return the visible profile name for menu greetings."""
 
-    return (
-        get_saved_user_display_name(user)
-        or clean_display_name(event_profile_name)
-        or FALLBACK_DISPLAY_NAME
-    )
+    return resolve_user_display_name(user, event_profile_name)
+
+
+def resolve_user_display_name(user: object | None, profile_name: str | None = None) -> str:
+    """Resolve one source of truth for user-facing display names.
+
+    Priority:
+    1. persisted non-placeholder registration name;
+    2. non-empty MAX profile name;
+    3. generic fallback.
+    """
+
+    return get_saved_user_display_name(user) or clean_display_name(profile_name) or FALLBACK_DISPLAY_NAME
 
 
 def get_saved_user_display_name(user: object | None) -> str | None:
