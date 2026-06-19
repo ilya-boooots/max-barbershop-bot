@@ -120,7 +120,17 @@ async def handle_my_bookings_open(context: RouterContext) -> None:
     """Open the real My bookings screen instead of the placeholder."""
 
     await context.answer_callback()
-    await _show_my_bookings(context)
+    try:
+        await _show_my_bookings(context)
+    except Exception as exc:  # noqa: BLE001 - never leave the user with a silent callback.
+        logger.exception(
+            "My bookings open failed unexpectedly: platform_user_id_present=%s chat_id_present=%s error_class=%s",
+            bool(_user_id(context)),
+            bool(_chat_id(context)),
+            type(exc).__name__,
+        )
+        state.set_current_screen(_user_id(context), _chat_id(context), state.MY_BOOKINGS_ERROR_SCREEN)
+        await context.send_text(MY_BOOKINGS_LOAD_ERROR_TEXT, keyboard=my_bookings_keyboard())
 
 
 async def handle_my_booking_details(context: RouterContext) -> None:

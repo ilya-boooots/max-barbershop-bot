@@ -234,13 +234,24 @@ class MyBookingsService:
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
 
-        contacts = await ContactsService(self._settings_repository).get_contacts()
-        bookings = [
-            _booking_from_payload(item, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone)
-            for item in _extract_record_rows(payload)
-        ]
-        future = [item for item in bookings if item is not None and is_future_booking(item, timezone_name=timezone_name, now=now)]
-        future = sort_bookings_by_datetime(future, timezone_name=timezone_name)
+        try:
+            contacts = await ContactsService(self._settings_repository).get_contacts()
+            bookings = [
+                _booking_from_payload(item, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone)
+                for item in _extract_record_rows(payload)
+            ]
+            future = [item for item in bookings if item is not None and is_future_booking(item, timezone_name=timezone_name, now=now)]
+            future = sort_bookings_by_datetime(future, timezone_name=timezone_name)
+        except Exception as exc:  # noqa: BLE001 - bad contact/settings/payload shape must not make the callback silent.
+            logger.warning(
+                "My bookings payload normalization failed: operation=get_my_bookings platform_user_id=%s "
+                "yclients_client_id_present=%s phone_present=%s error_class=%s",
+                platform_user_id,
+                bool(yclients_client_id),
+                bool(phone),
+                type(exc).__name__,
+            )
+            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
         logger.info(
             "My bookings loaded: operation=get_my_bookings platform_user_id=%s "
             "yclients_client_id_present=%s phone_present=%s future_bookings_count=%s branch_timezone=%s",
