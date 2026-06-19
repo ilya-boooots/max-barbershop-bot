@@ -53,6 +53,7 @@ from max_barbershop_bot.services.my_bookings import (
     format_reschedule_confirmation_text,
     build_new_datetime_iso,
     format_reschedule_success_text,
+    is_booking_cancelable,
 )
 from max_barbershop_bot.ui.buttons import (
     MENU_MY_BOOKINGS_PAYLOAD,
@@ -134,9 +135,24 @@ async def handle_my_booking_details(context: RouterContext) -> None:
     platform_user_id = _user_id(context)
     chat_id = _chat_id(context)
     timezone_name = _timezone_from_state(context)
+    try:
+        fresh_booking = await MyBookingsService(YClientsSettingsRepository(_database_path())).get_booking_for_user(
+            _current_user(context),
+            yclients_record_id=_booking_record_id(booking) or "",
+            platform_user_id=platform_user_id,
+        )
+        booking = fresh_booking
+    except (MyBookingsProfileMissingError, MyBookingsLoadError):
+        logger.info(
+            "MAX my bookings cancellation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s fresh_details_loaded=%s",
+            bool(platform_user_id),
+            bool(_booking_record_id(booking)),
+            False,
+        )
+    can_cancel = is_booking_cancelable(booking, timezone_name=timezone_name)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
-    await context.send_text(format_booking_details_text(booking, timezone_name=timezone_name), keyboard=my_booking_details_keyboard())
+    await context.send_text(format_booking_details_text(booking, timezone_name=timezone_name), keyboard=my_booking_details_keyboard(can_cancel=can_cancel))
 
 
 async def handle_my_booking_cancel_start(context: RouterContext) -> None:
@@ -151,6 +167,20 @@ async def handle_my_booking_cancel_start(context: RouterContext) -> None:
     platform_user_id = _user_id(context)
     chat_id = _chat_id(context)
     timezone_name = _timezone_from_state(context)
+    try:
+        fresh_booking = await MyBookingsService(YClientsSettingsRepository(_database_path())).get_booking_for_user(
+            _current_user(context),
+            yclients_record_id=_booking_record_id(booking) or "",
+            platform_user_id=platform_user_id,
+        )
+        booking = fresh_booking
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking)
+    except (MyBookingsProfileMissingError, MyBookingsLoadError):
+        pass
+    if not is_booking_cancelable(booking, timezone_name=timezone_name):
+        await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_booking_cancel_result_keyboard())
+        await _show_my_bookings(context, push_current=False)
+        return
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_CANCEL_CONFIRM_SCREEN)
     await context.send_text(format_cancel_confirmation_text(booking, timezone_name=timezone_name), keyboard=my_booking_cancel_confirmation_keyboard())
 
