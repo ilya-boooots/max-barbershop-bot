@@ -722,7 +722,7 @@ def parse_booking_datetime(item: dict[str, Any] | MyBookingItem, *, timezone_nam
         return None
 
     normalized = raw_value.replace("T", " ").replace("Z", "+00:00")
-    formats = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d")
+    formats = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y")
     parsed: datetime | None = None
     try:
         parsed = datetime.fromisoformat(normalized)
@@ -772,8 +772,10 @@ def is_booking_cancelable(
 
     if not is_future_booking(item, timezone_name=timezone_name, now=now):
         return False
-    raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("status") or item.get("record_status") or item.get("state"))
+    raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
     normalized = _clean_text(raw_status).lower()
+    if normalized in {"неизвестен", "unknown", "—"}:
+        normalized = ""
     return normalized in _ACTIVE_CANCELABLE_STATUSES
 
 
@@ -1019,6 +1021,8 @@ def _booking_from_payload(
     if not record_id or booking_datetime is None:
         return None
     raw_status = _clean_text(item.get("status") or item.get("record_status") or item.get("state")) or None
+    if raw_status is None and booking_datetime >= datetime.now(_zoneinfo(timezone_name)):
+        raw_status = "active"
     return MyBookingItem(
         yclients_record_id=record_id,
         booking_datetime=booking_datetime,
@@ -1138,8 +1142,16 @@ def _extract_client_data(row: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _normalize_duration_minutes(value: int | None) -> int | None:
+    if not value:
+        return None
+    if value >= 300 and value % 60 == 0:
+        return value // 60
+    return value
+
+
 def _extract_seance_length(row: dict[str, Any]) -> int | None:
-    value = _to_int(row.get("seance_length") or row.get("length") or row.get("duration"))
+    value = _normalize_duration_minutes(_to_int(row.get("seance_length") or row.get("length") or row.get("duration")))
     if value:
         return value
     services = row.get("services")
@@ -1147,7 +1159,7 @@ def _extract_seance_length(row: dict[str, Any]) -> int | None:
         total = 0
         for item in services:
             if isinstance(item, dict):
-                total += _to_int(item.get("seance_length") or item.get("duration")) or 0
+                total += _normalize_duration_minutes(_to_int(item.get("seance_length") or item.get("duration"))) or 0
         if total:
             return total
     return None

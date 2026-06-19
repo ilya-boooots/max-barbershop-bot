@@ -150,7 +150,7 @@ async def handle_my_booking_details(context: RouterContext) -> None:
             False,
         )
     can_cancel = is_booking_cancelable(booking, timezone_name=timezone_name)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking_display_data(booking, timezone_name=timezone_name))
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
     await context.send_text(format_booking_details_text(booking, timezone_name=timezone_name), keyboard=my_booking_details_keyboard(can_cancel=can_cancel))
 
@@ -174,9 +174,17 @@ async def handle_my_booking_cancel_start(context: RouterContext) -> None:
             platform_user_id=platform_user_id,
         )
         booking = fresh_booking
-        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking)
-    except (MyBookingsProfileMissingError, MyBookingsLoadError):
-        pass
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking_display_data(booking, timezone_name=timezone_name))
+    except (MyBookingsProfileMissingError, MyBookingsLoadError) as exc:
+        logger.warning(
+            "MAX my bookings cancellation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s fresh_details_loaded=%s yclients_error_category=%s http_status=%s trace_id=%s",
+            bool(platform_user_id),
+            bool(_booking_record_id(booking)),
+            False,
+            type(exc).__name__,
+            None,
+            None,
+        )
     if not is_booking_cancelable(booking, timezone_name=timezone_name):
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_booking_cancel_result_keyboard())
         await _show_my_bookings(context, push_current=False)
@@ -712,7 +720,7 @@ def _clean_state_text(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def _booking_by_payload(context: RouterContext) -> dict[str, Any] | None:
+def _booking_by_payload(context: RouterContext) -> Any | None:
     payload = context.event.callback_payload or ""
     raw_index = payload.removeprefix(MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX)
     if not raw_index.isdigit():
@@ -724,7 +732,7 @@ def _booking_by_payload(context: RouterContext) -> dict[str, Any] | None:
     return bookings[index]
 
 
-def _selected_booking(context: RouterContext) -> dict[str, Any] | None:
+def _selected_booking(context: RouterContext) -> Any | None:
     value = state.get_state_data_value(_user_id(context), _chat_id(context), _SELECTED_BOOKING_STATE_KEY)
     return value if isinstance(value, dict) else None
 
@@ -741,8 +749,13 @@ def _timezone_from_state(context: RouterContext) -> str:
     return normalize_branch_timezone(value if isinstance(value, str) else DEFAULT_BRANCH_TIMEZONE, flow="my_bookings", operation="timezone_from_state")
 
 
-def _booking_record_id(booking: dict[str, Any]) -> str | None:
-    value = booking.get("yclients_record_id")
+def _booking_record_id(booking: Any) -> str | None:
+    if hasattr(booking, "yclients_record_id"):
+        value = getattr(booking, "yclients_record_id", None)
+    elif isinstance(booking, dict):
+        value = booking.get("yclients_record_id") or booking.get("record_id") or booking.get("id")
+    else:
+        value = None
     return str(value).strip() if value is not None and str(value).strip() else None
 
 
