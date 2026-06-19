@@ -1055,18 +1055,20 @@ def my_bookings_list_keyboard(bookings_count: int, *, max_buttons: int = 20) -> 
     return MaxInlineKeyboard.from_rows(rows)
 
 
-def my_booking_details_keyboard() -> MaxInlineKeyboard:
+def my_booking_details_keyboard(*, can_cancel: bool = True) -> MaxInlineKeyboard:
     """Build selected booking actions."""
 
-    return MaxInlineKeyboard.from_rows(
+    rows = [[MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)]]
+    if can_cancel:
+        rows.append([MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
+    rows.extend(
         [
-            [MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)],
-            [MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)],
             [MaxButton(text="🔁 Повторить запись", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
+    return MaxInlineKeyboard.from_rows(rows)
 
 
 def my_booking_cancel_confirmation_keyboard() -> MaxInlineKeyboard:
