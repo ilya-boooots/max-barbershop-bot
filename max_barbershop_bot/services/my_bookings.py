@@ -72,7 +72,8 @@ _STATUS_LABELS = {
     "visit": "Завершена",
     "no_show": "Неявка",
 }
-_CANCELLED_OR_PAST_STATUSES = {"cancelled", "canceled", "done", "completed", "visit"}
+_CANCELLED_OR_PAST_STATUSES = {"cancelled", "canceled", "deleted", "done", "completed", "visit", "no_show", "noshow"}
+_ACTIVE_CANCELABLE_STATUSES = {"", "active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
 
 
 class MyBookingsError(RuntimeError):
@@ -256,6 +257,55 @@ class MyBookingsService:
             phone_exists=bool(phone),
         )
 
+    async def get_booking_for_user(
+        self,
+        user: User | None,
+        *,
+        yclients_record_id: str,
+        platform_user_id: str | None = None,
+    ) -> MyBookingItem:
+        """Fetch one fresh YClients record and normalize it for details/cancelability decisions."""
+
+        record_id = _clean_text(yclients_record_id)
+        if not record_id:
+            raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
+        yclients_client_id = _clean_text(user.yclients_client_id if user else None)
+        phone = _clean_text(user.phone if user else None)
+        if not yclients_client_id and not phone:
+            raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
+        try:
+            settings = load_active_yclients_settings(self._settings_repository, operation="get_my_bookings")
+        except Exception as exc:  # noqa: BLE001 - keep details away from users.
+            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
+        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
+        if not has_required_yclients_credentials(settings):
+            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT)
+        try:
+            async with build_yclients_client_from_active_settings(settings) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                payload = await yclients.get_booking_details(
+                    company_id=settings.company_id,
+                    yclients_record_id=record_id,
+                )
+        except YClientsNotFoundError as exc:
+            raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT) from exc
+        except YClientsError as exc:
+            logger.warning(
+                "MAX my bookings cancellation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s yclients_error_category=%s http_status=%s trace_id=%s",
+                bool(platform_user_id),
+                bool(record_id),
+                getattr(exc, "error_category", type(exc).__name__),
+                exc.status_code,
+                getattr(exc, "trace_id", None),
+            )
+            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
+        row = _extract_record_detail_row(payload)
+        contacts = await ContactsService(self._settings_repository).get_contacts()
+        booking = _booking_from_payload(row, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone) if row else None
+        if booking is None:
+            raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
+        return booking
+
     async def cancel_booking_for_user(
         self,
         user: User | None,
@@ -300,14 +350,59 @@ class MyBookingsService:
             )
             raise MyBookingCancellationError(MY_BOOKING_CANCEL_ERROR_TEXT)
 
+        timezone_name = _timezone_name(settings.branch_timezone if settings else None)
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                details = await yclients.get_booking_details(
+                    company_id=settings.company_id,
+                    yclients_record_id=record_id,
+                )
+                row = _extract_record_detail_row(details)
+                current = _booking_from_payload(row, timezone_name=timezone_name) if row else None
+                current_status_raw = _clean_text(row.get("status") or row.get("record_status") or row.get("state")) if row else ""
+                current_status_mapped = format_booking_status(current_status_raw)
+                is_future = bool(current and is_future_booking(current, timezone_name=timezone_name))
+                is_cancelable = bool(current and is_booking_cancelable(current, timezone_name=timezone_name))
+                logger.info(
+                    "MAX my bookings cancellation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s "
+                    "current_status_raw=%s current_status_mapped=%s is_future=%s is_cancelable=%s cancel_endpoint_called=%s "
+                    "yclients_error_category=%s http_status=%s trace_id=%s",
+                    bool(platform_user_id),
+                    bool(record_id),
+                    current_status_raw or None,
+                    current_status_mapped,
+                    is_future,
+                    is_cancelable,
+                    False,
+                    None,
+                    None,
+                    None,
+                )
+                if not is_future or not is_cancelable:
+                    raise MyBookingCancellationNotAllowedError(MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT)
                 result = await yclients.cancel_booking(
                     company_id=settings.company_id,
                     yclients_record_id=record_id,
                     cancellation_marker=cancellation_marker,
                 )
+                logger.info(
+                    "MAX my bookings cancellation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s "
+                    "current_status_raw=%s current_status_mapped=%s is_future=%s is_cancelable=%s cancel_endpoint_called=%s "
+                    "yclients_error_category=%s http_status=%s trace_id=%s",
+                    bool(platform_user_id),
+                    bool(record_id),
+                    current_status_raw or None,
+                    current_status_mapped,
+                    is_future,
+                    is_cancelable,
+                    True,
+                    None,
+                    None,
+                    None,
+                )
+        except MyBookingCancellationNotAllowedError:
+            raise
         except YClientsNotFoundError as exc:
             logger.info(
                 "Booking cancellation record not found: operation=cancel_booking platform_user_id=%s "
@@ -627,7 +722,7 @@ def parse_booking_datetime(item: dict[str, Any] | MyBookingItem, *, timezone_nam
         return None
 
     normalized = raw_value.replace("T", " ").replace("Z", "+00:00")
-    formats = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d")
+    formats = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y")
     parsed: datetime | None = None
     try:
         parsed = datetime.fromisoformat(normalized)
@@ -665,6 +760,23 @@ def is_future_booking(
     if current.tzinfo is None:
         current = current.replace(tzinfo=_zoneinfo(timezone_name))
     return parsed >= current.astimezone(_zoneinfo(timezone_name))
+
+
+def is_booking_cancelable(
+    item: dict[str, Any] | MyBookingItem,
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether the bot should show/call YClients cancellation for this record."""
+
+    if not is_future_booking(item, timezone_name=timezone_name, now=now):
+        return False
+    raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
+    normalized = _clean_text(raw_status).lower()
+    if normalized in {"неизвестен", "unknown", "—"}:
+        normalized = ""
+    return normalized in _ACTIVE_CANCELABLE_STATUSES
 
 
 def sort_bookings_by_datetime(
@@ -909,6 +1021,8 @@ def _booking_from_payload(
     if not record_id or booking_datetime is None:
         return None
     raw_status = _clean_text(item.get("status") or item.get("record_status") or item.get("state")) or None
+    if raw_status is None and booking_datetime >= datetime.now(_zoneinfo(timezone_name)):
+        raw_status = "active"
     return MyBookingItem(
         yclients_record_id=record_id,
         booking_datetime=booking_datetime,
@@ -1028,8 +1142,16 @@ def _extract_client_data(row: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _normalize_duration_minutes(value: int | None) -> int | None:
+    if not value:
+        return None
+    if value >= 300 and value % 60 == 0:
+        return value // 60
+    return value
+
+
 def _extract_seance_length(row: dict[str, Any]) -> int | None:
-    value = _to_int(row.get("seance_length") or row.get("length") or row.get("duration"))
+    value = _normalize_duration_minutes(_to_int(row.get("seance_length") or row.get("length") or row.get("duration")))
     if value:
         return value
     services = row.get("services")
@@ -1037,7 +1159,7 @@ def _extract_seance_length(row: dict[str, Any]) -> int | None:
         total = 0
         for item in services:
             if isinstance(item, dict):
-                total += _to_int(item.get("seance_length") or item.get("duration")) or 0
+                total += _normalize_duration_minutes(_to_int(item.get("seance_length") or item.get("duration"))) or 0
         if total:
             return total
     return None
