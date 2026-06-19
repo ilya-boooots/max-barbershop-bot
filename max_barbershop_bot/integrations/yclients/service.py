@@ -402,11 +402,18 @@ class YClientsServiceLayer:
         try:
             resolved_company_id = self.require_company_id(company_id)
             if cancellation_marker:
-                await self._append_cancellation_marker(
-                    company_id=resolved_company_id,
-                    yclients_record_id=yclients_record_id,
-                    cancellation_marker=cancellation_marker,
-                )
+                try:
+                    await self._append_cancellation_marker(
+                        company_id=resolved_company_id,
+                        yclients_record_id=yclients_record_id,
+                        cancellation_marker=cancellation_marker,
+                    )
+                except YClientsError as exc:
+                    logger.warning(
+                        "YClients cancellation marker update failed; continuing with delete: error_class=%s status_code=%s",
+                        type(exc).__name__,
+                        exc.status_code,
+                    )
             return await endpoint_cancel_booking(
                 self._client,
                 company_id=resolved_company_id,
