@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Any
 
 from max_barbershop_bot.repositories.users import User, UsersRepository, UserProfileUpdate
-from max_barbershop_bot.services.user_names import clean_display_name
+from max_barbershop_bot.services.user_names import FALLBACK_DISPLAY_NAME, clean_display_name
 
 _NON_DIGIT_PHONE_CHARS = re.compile(r"[\s()\-]")
 _MIN_PHONE_DIGITS = 10
@@ -62,7 +62,7 @@ def validate_name(raw_name: str | None) -> str | None:
     name = " ".join(raw_name.strip().split())
     if not (_MIN_NAME_LENGTH <= len(name) <= _MAX_NAME_LENGTH):
         return None
-    if name.isdigit():
+    if name.isdigit() or name == FALLBACK_DISPLAY_NAME:
         return None
     return name
 

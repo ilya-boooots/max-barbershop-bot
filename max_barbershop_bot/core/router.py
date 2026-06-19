@@ -126,6 +126,7 @@ class Router:
 
         event = self._recover_phone_contact_chat(event)
         event = self._recover_screen_text_chat(event)
+        event = self._recover_screen_callback_chat(event)
 
         self._log_contact_diagnostic(event)
         if await self._is_throttled(event, sender):
@@ -270,6 +271,25 @@ class Router:
                 "text",
                 _flow_name_from_screen(screen_id),
             )
+            if event.chat_id is not None:
+                state.move_user_state(event.platform_user_id, recovered_chat_id, event.chat_id)
+                return event
+            return replace(event, chat_id=recovered_chat_id)
+        return event
+
+
+    def _recover_screen_callback_chat(self, event: NormalizedEvent) -> NormalizedEvent:
+        if event.update_type != "message_callback":
+            return event
+
+        current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
+        if current_screen in state.REGISTRATION_SCREENS:
+            return event
+
+        for screen_id in state.REGISTRATION_SCREENS:
+            recovered_chat_id = state.find_chat_id_for_current_screen(event.platform_user_id, screen_id)
+            if recovered_chat_id is None:
+                continue
             if event.chat_id is not None:
                 state.move_user_state(event.platform_user_id, recovered_chat_id, event.chat_id)
                 return event
