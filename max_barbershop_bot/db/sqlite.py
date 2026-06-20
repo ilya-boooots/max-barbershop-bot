@@ -211,6 +211,29 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS bot_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            level TEXT NOT NULL,
+            source TEXT NOT NULL,
+            message TEXT NOT NULL,
+            details_json TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS user_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            platform_user_id TEXT,
+            max_user_id TEXT,
+            chat_id TEXT,
+            username TEXT,
+            phone TEXT,
+            event_type TEXT NOT NULL,
+            event_name TEXT NOT NULL,
+            screen TEXT,
+            payload_json TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS master_photos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -332,6 +355,16 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON audit_log(target_platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_audit_log_created_at
             ON audit_log(created_at);
+        CREATE INDEX IF NOT EXISTS idx_bot_logs_ts_utc
+            ON bot_logs(ts_utc);
+        CREATE INDEX IF NOT EXISTS idx_user_events_platform_user_id
+            ON user_events(platform_user_id);
+        CREATE INDEX IF NOT EXISTS idx_user_events_username
+            ON user_events(username);
+        CREATE INDEX IF NOT EXISTS idx_user_events_event_name
+            ON user_events(event_name);
+        CREATE INDEX IF NOT EXISTS idx_user_events_ts_utc
+            ON user_events(ts_utc);
         CREATE INDEX IF NOT EXISTS idx_master_photos_staff
             ON master_photos(platform, yclients_staff_id);
         CREATE INDEX IF NOT EXISTS idx_master_photos_active
@@ -434,6 +467,21 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "audit_log", "new_role", "TEXT")
     _ensure_column(connection, "audit_log", "metadata_json", "TEXT")
     _ensure_column(connection, "audit_log", "created_at", "TEXT")
+    _ensure_column(connection, "bot_logs", "ts_utc", "TEXT")
+    _ensure_column(connection, "bot_logs", "level", "TEXT")
+    _ensure_column(connection, "bot_logs", "source", "TEXT")
+    _ensure_column(connection, "bot_logs", "message", "TEXT")
+    _ensure_column(connection, "bot_logs", "details_json", "TEXT")
+    _ensure_column(connection, "user_events", "ts_utc", "TEXT")
+    _ensure_column(connection, "user_events", "platform_user_id", "TEXT")
+    _ensure_column(connection, "user_events", "max_user_id", "TEXT")
+    _ensure_column(connection, "user_events", "chat_id", "TEXT")
+    _ensure_column(connection, "user_events", "username", "TEXT")
+    _ensure_column(connection, "user_events", "phone", "TEXT")
+    _ensure_column(connection, "user_events", "event_type", "TEXT")
+    _ensure_column(connection, "user_events", "event_name", "TEXT")
+    _ensure_column(connection, "user_events", "screen", "TEXT")
+    _ensure_column(connection, "user_events", "payload_json", "TEXT")
     _ensure_column(connection, "master_photos", "platform", "TEXT NOT NULL DEFAULT 'max'")
     _ensure_column(connection, "master_photos", "yclients_staff_id", "TEXT")
     _ensure_column(connection, "master_photos", "master_name", "TEXT")

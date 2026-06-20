@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from max_barbershop_bot.core.config import Config, ConfigError, load_config
 from max_barbershop_bot.core.error_handler import ErrorDiagnostics
 from max_barbershop_bot.core.events import normalize_update
-from max_barbershop_bot.core.logging import configure_logging
+from max_barbershop_bot.core.logging import add_database_log_handler, configure_logging
 from max_barbershop_bot.core.router import Router
 from max_barbershop_bot.db.sqlite import init_database
 from max_barbershop_bot.flows import create_router
@@ -223,6 +223,7 @@ async def run() -> None:
     configure_logging(config.log_level)
     try:
         init_database(config.database_path)
+        add_database_log_handler(config.database_path)
         logger.info("✅ SQLite database initialized: %s", config.database_path)
     except Exception:
         logger.exception("❌ SQLite database initialization failed: %s", config.database_path)

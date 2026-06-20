@@ -6,6 +6,8 @@ import logging
 import os
 from pathlib import Path
 
+from max_barbershop_bot.services.diagnostics import sanitize_text
+
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 
@@ -30,3 +32,34 @@ def configure_logging(log_level: str) -> None:
         handlers=handlers,
         force=True,
     )
+
+
+def add_database_log_handler(database_path: str) -> None:
+    """Mirror runtime logs to SQLite diagnostics storage."""
+
+    root = logging.getLogger()
+    if any(isinstance(handler, _SQLiteDiagnosticsLogHandler) for handler in root.handlers):
+        return
+    handler = _SQLiteDiagnosticsLogHandler(database_path)
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt="%Y-%m-%d %H:%M:%S"))
+    root.addHandler(handler)
+
+
+class _SQLiteDiagnosticsLogHandler(logging.Handler):
+    """Best-effort SQLite log sink that never interrupts application logging."""
+
+    def __init__(self, database_path: str) -> None:
+        super().__init__()
+        self._database_path = database_path
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            from max_barbershop_bot.repositories.diagnostics import DiagnosticsRepository
+
+            DiagnosticsRepository(self._database_path).log_bot_event(
+                level=record.levelname,
+                source=record.name,
+                message=sanitize_text(self.format(record)),
+            )
+        except Exception:
+            return

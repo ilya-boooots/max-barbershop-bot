@@ -43,6 +43,9 @@ from max_barbershop_bot.ui.buttons import (
     DEV_DIAGNOSTICS_BOT_LOGS_CSV_PAYLOAD,
     DEV_DIAGNOSTICS_BOT_LOGS_PAYLOAD,
     DEV_DIAGNOSTICS_EVENT_SEARCH_PAYLOAD,
+    DEV_DIAGNOSTICS_LOGS_NEXT_PAYLOAD,
+    DEV_DIAGNOSTICS_LOGS_PREV_PAYLOAD,
+    DEV_DIAGNOSTICS_NOOP_PAYLOAD,
     DEV_DIAGNOSTICS_REFRESH_PAYLOAD,
     DEV_DIAGNOSTICS_RESTART_HELP_PAYLOAD,
     DEV_DIAGNOSTICS_STATUS_PAYLOAD,
@@ -92,8 +95,14 @@ from max_barbershop_bot.services.developer_diagnostics import (
     build_developer_diagnostics_text,
     build_developer_status_text,
 )
-from max_barbershop_bot.repositories.audit_log import AuditLogEntry, AuditLogRepository
+from max_barbershop_bot.repositories.diagnostics import DiagnosticsRepository
 from max_barbershop_bot.services.diagnostics import sanitize_text
+from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
+
+LOG_LINES_LIMIT = 200
+LOG_CHUNK_LIMIT = 3000
+STATE_LOG_PAGES_KEY = "devdiag_log_pages"
+STATE_LOG_PAGE_INDEX_KEY = "devdiag_log_page_index"
 
 
 def register_settings_routes(router: Router) -> None:
@@ -123,6 +132,9 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
     router.on_callback(DEV_DIAGNOSTICS_REFRESH_PAYLOAD, handle_settings_diagnostics_refresh)
     router.on_callback(DEV_DIAGNOSTICS_BOT_LOGS_PAYLOAD, handle_settings_diagnostics_bot_logs)
+    router.on_callback(DEV_DIAGNOSTICS_LOGS_PREV_PAYLOAD, handle_settings_diagnostics_log_pagination)
+    router.on_callback(DEV_DIAGNOSTICS_LOGS_NEXT_PAYLOAD, handle_settings_diagnostics_log_pagination)
+    router.on_callback(DEV_DIAGNOSTICS_NOOP_PAYLOAD, handle_settings_diagnostics_noop)
     router.on_callback(DEV_DIAGNOSTICS_BOT_LOGS_CSV_PAYLOAD, handle_settings_diagnostics_bot_logs_csv)
     router.on_callback(DEV_DIAGNOSTICS_USER_LOGS_PAYLOAD, handle_settings_diagnostics_user_logs_prompt)
     router.on_callback(DEV_DIAGNOSTICS_EVENT_SEARCH_PAYLOAD, handle_settings_diagnostics_event_search_prompt)
@@ -447,10 +459,26 @@ async def handle_settings_diagnostics_bot_logs(context: RouterContext) -> None:
     if lines is None:
         await context.send_text("Логи пока недоступны 🙏", keyboard=settings_diagnostics_keyboard())
         return
-    chunks = _chunk_text("\n".join(lines) or "Логи пока пустые.", limit=3200)
-    for index, chunk in enumerate(chunks, start=1):
-        header = f"🧾 Логи бота\nСтраница {index}/{len(chunks)}\n\n"
-        await context.send_text(header + chunk, keyboard=settings_diagnostics_keyboard() if index == len(chunks) else None)
+    pages = _chunk_lines(lines)
+    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, STATE_LOG_PAGES_KEY, pages)
+    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, STATE_LOG_PAGE_INDEX_KEY, 0)
+    await _send_logs_page(context, 0)
+
+
+async def handle_settings_diagnostics_log_pagination(context: RouterContext) -> None:
+    """Navigate bot log pages."""
+
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    current = state.get_state_data_value(context.event.platform_user_id, context.event.chat_id, STATE_LOG_PAGE_INDEX_KEY)
+    page_index = int(current) if isinstance(current, int) else 0
+    if context.event.callback_payload == DEV_DIAGNOSTICS_LOGS_PREV_PAYLOAD:
+        page_index -= 1
+    else:
+        page_index += 1
+    await _send_logs_page(context, page_index)
 
 
 async def handle_settings_diagnostics_bot_logs_csv(context: RouterContext) -> None:
@@ -464,14 +492,30 @@ async def handle_settings_diagnostics_bot_logs_csv(context: RouterContext) -> No
     if lines is None:
         await context.send_text("Логи пока недоступны 🙏", keyboard=settings_diagnostics_keyboard())
         return
-    csv_preview = _build_logs_csv(lines).decode("utf-8")
-    text = (
-        "📦 Скачать логи бота (CSV)\n\n"
-        "Отправка CSV-файла пока не подключена в MAX-транспорте 🙏\n"
-        "Ниже — безопасный CSV-превью последних строк:\n\n"
-        f"{_short(csv_preview, 2800)}"
+    csv_path = DiagnosticsRepository(_database_path()).export_bot_logs_csv(LOG_LINES_LIMIT)
+    csv_bytes = csv_path.read_bytes()
+    try:
+        csv_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    sent = await _send_file_to_current_chat(
+        context,
+        csv_bytes,
+        filename="bot_logs_last_200.csv",
+        caption="📦 Логи бота CSV",
     )
-    await context.send_text(text, keyboard=settings_diagnostics_keyboard())
+    if not sent:
+        await context.send_text(
+            "📦 Скачать логи бота (CSV)\n\n"
+            "Не удалось отправить CSV-файл через MAX. Показываю безопасный текстовый вариант:\n\n"
+            f"{_short(_build_logs_csv_text(lines), 2800)}",
+            keyboard=settings_diagnostics_keyboard(),
+        )
+
+
+async def handle_settings_diagnostics_noop(context: RouterContext) -> None:
+    if context.event.callback_id:
+        await context.answer_callback()
 
 
 async def handle_settings_diagnostics_user_logs_prompt(context: RouterContext) -> None:
@@ -488,9 +532,14 @@ async def handle_settings_diagnostics_user_logs_input(context: RouterContext) ->
         await _send_dev_no_access(context)
         return
     query = (context.event.text or "").strip()
-    rows = AuditLogRepository(_database_path()).search(query.lstrip("@"), limit=20)
+    repository = DiagnosticsRepository(_database_path())
+    rows = repository.find_user_events(query, limit=500)
+    summary = repository.summarize_events(rows)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
-    await context.send_text("👤 Логи пользователя\n\n" + _render_audit_rows(rows), keyboard=settings_diagnostics_keyboard())
+    await context.send_text(
+        "👤 Логи пользователя\n\n" + _render_user_events(rows, summary=summary),
+        keyboard=settings_diagnostics_keyboard(),
+    )
 
 
 async def handle_settings_diagnostics_event_search_prompt(context: RouterContext) -> None:
@@ -507,9 +556,9 @@ async def handle_settings_diagnostics_event_search_input(context: RouterContext)
         await _send_dev_no_access(context)
         return
     query = (context.event.text or "").strip()
-    rows = AuditLogRepository(_database_path()).search(query, limit=20)
+    rows = DiagnosticsRepository(_database_path()).search_events(query, limit=500)
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
-    await context.send_text("🔎 Поиск по событиям\n\n" + _render_audit_rows(rows), keyboard=settings_diagnostics_keyboard())
+    await context.send_text("🔎 Поиск по событиям\n\n" + _render_user_events(rows), keyboard=settings_diagnostics_keyboard())
 
 
 async def handle_settings_diagnostics_status(context: RouterContext) -> None:
@@ -931,59 +980,165 @@ def _audit(context: RouterContext, actor_role: str, *, action: str, section: str
     )
 
 
-def _load_log_lines(limit: int = 200) -> list[str] | None:
-    path_value = getenv("BOT_LOG_FILE") or getenv("LOG_FILE") or "data/max_barbershop_bot.log"
-    path = Path(path_value)
-    if not path.exists() or not path.is_file():
-        return None
+def _load_log_lines(limit: int = LOG_LINES_LIMIT) -> list[str] | None:
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as file:
-            lines = file.readlines()[-limit:]
-    except OSError:
+        rows = DiagnosticsRepository(_database_path()).get_recent_bot_logs(limit)
+    except Exception:
         return None
-    return [sanitize_text(line.rstrip("\n")) for line in lines]
+    if not rows:
+        return []
+    ordered = list(reversed(rows))
+    return [_format_log_line(row) for row in ordered]
 
 
-def _build_logs_csv(lines: list[str]) -> bytes:
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(["line"])
-    for line in lines:
-        writer.writerow([sanitize_text(line)])
-    return buffer.getvalue().encode("utf-8")
+def _format_log_line(row: dict[str, object]) -> str:
+    ts = str(row.get("ts_utc") or "—").strip()
+    level = str(row.get("level") or "INFO").strip()
+    source = str(row.get("source") or "bot").strip()
+    message = str(row.get("message") or "").strip()
+    return sanitize_text(f"{ts} | {level} | {source} | {message}")
 
 
-def _chunk_text(text: str, *, limit: int) -> list[str]:
-    if len(text) <= limit:
-        return [text]
+def _chunk_lines(lines: list[str], limit: int = LOG_CHUNK_LIMIT) -> list[str]:
+    if not lines:
+        return ["Логи пока пустые."]
     chunks: list[str] = []
     current: list[str] = []
     current_len = 0
-    for line in text.splitlines():
-        line_len = len(line) + 1
+    for line in lines:
+        safe_line = line if line else " "
+        line_len = len(safe_line) + 1
         if current and current_len + line_len > limit:
             chunks.append("\n".join(current))
-            current = []
-            current_len = 0
-        current.append(line[:limit])
-        current_len += min(line_len, limit)
+            current = [safe_line]
+            current_len = line_len
+            continue
+        if not current and line_len > limit:
+            chunks.append(safe_line[:limit])
+            continue
+        current.append(safe_line)
+        current_len += line_len
     if current:
         chunks.append("\n".join(current))
-    return chunks or [""]
+    return chunks or ["Логи пока пустые."]
 
 
-def _render_audit_rows(rows: list[AuditLogEntry]) -> str:
+async def _send_logs_page(context: RouterContext, page_index: int) -> None:
+    pages_value = state.get_state_data_value(context.event.platform_user_id, context.event.chat_id, STATE_LOG_PAGES_KEY)
+    pages = pages_value if isinstance(pages_value, list) else None
+    if not pages:
+        lines = _load_log_lines()
+        if lines is None:
+            await context.send_text("⚠️ Не удалось получить логи. Проверьте права/путь к логам.", keyboard=settings_diagnostics_keyboard())
+            return
+        pages = _chunk_lines(lines)
+    total = len(pages)
+    safe_page = min(max(page_index, 0), total - 1)
+    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, STATE_LOG_PAGES_KEY, pages)
+    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, STATE_LOG_PAGE_INDEX_KEY, safe_page)
+    await context.send_text(
+        "🧾 Логи бота\n"
+        f"Строки: последние {LOG_LINES_LIMIT}\n"
+        f"Страница {safe_page + 1}/{total}\n\n"
+        f"{str(pages[safe_page])}",
+        keyboard=_logs_nav_keyboard(safe_page, total),
+    )
+
+
+def _logs_nav_keyboard(current_page: int, pages_count: int) -> MaxInlineKeyboard:
+    prev_payload = DEV_DIAGNOSTICS_LOGS_PREV_PAYLOAD if current_page > 0 else DEV_DIAGNOSTICS_NOOP_PAYLOAD
+    next_payload = DEV_DIAGNOSTICS_LOGS_NEXT_PAYLOAD if current_page < pages_count - 1 else DEV_DIAGNOSTICS_NOOP_PAYLOAD
+    return MaxInlineKeyboard.from_rows(
+        [
+            [
+                MaxButton(text="◀️ Предыдущая" if current_page > 0 else "⏺", payload=prev_payload),
+                MaxButton(text="▶️ Следующая" if current_page < pages_count - 1 else "⏺", payload=next_payload),
+            ],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_DIAGNOSTICS_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def _build_logs_csv_text(lines: list[str]) -> str:
+    rows = ["timestamp,level,message"]
+    for line in lines:
+        timestamp, level, message = _extract_timestamp_and_level(line)
+        rows.append(",".join([timestamp, level, message]))
+    return "\n".join(rows)
+
+
+def _extract_timestamp_and_level(raw_line: str) -> tuple[str, str, str]:
+    parts = [part.strip() for part in raw_line.split("|", 3)]
+    if len(parts) >= 4:
+        return parts[0], parts[1], parts[3]
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    return "", "", raw_line
+
+
+def _render_user_events(rows: list[dict[str, object]], *, summary: object | None = None) -> str:
     if not rows:
         return "Ничего не найдено 🙏"
     lines: list[str] = []
-    for row in rows[:20]:
-        meta = sanitize_text(str(row.metadata))
-        lines.append(
-            f"• {row.created_at or '—'} | {row.event_type} | "
-            f"actor={row.actor_platform_user_id or '—'} | target={row.target_platform_user_id or row.target_max_user_id or '—'} | "
-            f"{_short(meta, 160)}"
+    if summary is not None:
+        total_7d = getattr(summary, "total_7d", 0)
+        last_activity = getattr(summary, "last_activity", None)
+        top_buttons = getattr(summary, "top_buttons", [])
+        lines.extend(
+            [
+                f"Всего событий за 7 дней: {total_7d}",
+                f"Последняя активность: {last_activity or '—'}",
+                "Топ действий: " + (", ".join(f"{name}×{count}" for name, count in top_buttons) or "—"),
+                "",
+            ]
         )
+    for row in rows[:20]:
+        lines.append(
+            "• "
+            f"{row.get('ts_utc') or '—'} | {row.get('event_type') or '—'} | "
+            f"{row.get('event_name') or '—'} | screen={row.get('screen') or '—'} | "
+            f"user={row.get('platform_user_id') or '—'} @{row.get('username') or '—'}"
+        )
+    if len(rows) > 20:
+        lines.append(f"\nПоказаны 20 из {len(rows)} событий.")
     return _short("\n".join(lines), 3300)
+
+
+async def _send_file_to_current_chat(context: RouterContext, content: bytes, *, filename: str, caption: str) -> bool:
+    try:
+        chat_id = _int_or_none(context.event.chat_id)
+        if chat_id is not None:
+            result = await context.sender.send_file_bytes_to_chat(
+                chat_id,
+                content,
+                filename=filename,
+                text=caption,
+                keyboard=settings_diagnostics_keyboard(),
+            )
+            return result.ok
+        user_id = _int_or_none(context.event.max_user_id or context.event.platform_user_id)
+        if user_id is not None:
+            result = await context.sender.send_file_bytes_to_user(
+                user_id,
+                content,
+                filename=filename,
+                text=caption,
+                keyboard=settings_diagnostics_keyboard(),
+            )
+            return result.ok
+    except Exception:
+        return False
+    return False
+
+
+def _int_or_none(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _short(text: str, limit: int) -> str:
