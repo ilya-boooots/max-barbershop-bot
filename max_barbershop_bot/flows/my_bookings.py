@@ -15,7 +15,7 @@ from max_barbershop_bot.repositories.platform_attribution import PlatformAttribu
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
-from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, build_yclients_action_comment, normalize_branch_timezone
 from max_barbershop_bot.services.cancellation_recovery import create_cancellation_recovery_event
 from max_barbershop_bot.services.booking import (
     BookingService,
@@ -99,7 +99,7 @@ _RESCHEDULE_NEW_RECORD_STATE_KEY = "reschedule_new_record_id"
 _MAX_BOOKING_BUTTONS = 20
 _MAX_RESCHEDULE_DATES = 14
 _MAX_RESCHEDULE_SLOTS = 30
-_CANCELLATION_MARKER_PREFIX = "Запись отменена из MAX бота"
+_CANCELLATION_MARKER_PREFIX = "Клиент отменил запись из MAX бота"
 
 
 def register_my_bookings_routes(router: Router) -> None:
@@ -557,7 +557,13 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
         return
 
     new_record_id = _clean_state_text(result.get("new_record_id")) if isinstance(result, dict) else ""
-    _log_local_reschedule(platform_user_id=platform_user_id, old_record_id=record_id, new_record_id=new_record_id, user=_current_user(context))
+    _log_local_reschedule(
+        platform_user_id=platform_user_id,
+        old_record_id=record_id,
+        new_record_id=new_record_id,
+        user=_current_user(context),
+        timezone_name=_timezone_from_state(context),
+    )
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY, record_id)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_RECORD_STATE_KEY, new_record_id)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
@@ -741,8 +747,11 @@ def _mark_cancel_completed(context: RouterContext, record_id: str) -> None:
 
 
 def _build_cancellation_marker(timezone_name: str) -> str:
-    tz = zoneinfo_or_default(timezone_name, flow="my_bookings", operation="cancellation_marker")
-    return f"{_CANCELLATION_MARKER_PREFIX} {datetime.now(tz).strftime('%d.%m.%Y в %H:%M')}"
+    return build_yclients_action_comment(
+        _CANCELLATION_MARKER_PREFIX,
+        timezone_name=timezone_name,
+        action_type="booking_cancel",
+    )
 
 
 def _payload_index(context: RouterContext, prefix: str) -> int | None:
@@ -814,7 +823,7 @@ def _booking_record_id(booking: Any) -> str | None:
     return str(value).strip() if value is not None and str(value).strip() else None
 
 
-def _log_local_reschedule(*, platform_user_id: str | None, old_record_id: str, new_record_id: str, user: Any) -> None:
+def _log_local_reschedule(*, platform_user_id: str | None, old_record_id: str, new_record_id: str, user: Any, timezone_name: str) -> None:
     if not platform_user_id:
         return
     try:
@@ -824,14 +833,22 @@ def _log_local_reschedule(*, platform_user_id: str | None, old_record_id: str, n
                 platform_user_id=platform_user_id,
                 yclients_record_id=new_record_id,
                 yclients_client_id=user.yclients_client_id if user else None,
-                marker="Клиент перенёс запись из MAX бота",
+                marker=build_yclients_action_comment(
+                    "Клиент перенёс запись из MAX бота",
+                    timezone_name=timezone_name,
+                    action_type="local_reschedule_new",
+                ),
                 platform=PLATFORM_MAX,
             )
         repo.create_record(
             platform_user_id=platform_user_id,
             yclients_record_id=old_record_id,
             yclients_client_id=user.yclients_client_id if user else None,
-            marker="Запись перенесена из MAX бота",
+            marker=build_yclients_action_comment(
+                "Запись перенесена из MAX бота",
+                timezone_name=timezone_name,
+                action_type="local_reschedule_old",
+            ),
             platform=PLATFORM_MAX,
         )
         logger.info(
