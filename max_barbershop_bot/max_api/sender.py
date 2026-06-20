@@ -178,6 +178,56 @@ class MaxMessageSender:
             text_format=format,
         )
 
+    async def send_file_bytes_to_user(
+        self,
+        user_id: int | str,
+        content: bytes,
+        *,
+        filename: str,
+        text: str | None = None,
+        content_type: str = "text/csv",
+        keyboard: MaxInlineKeyboard | None = None,
+        format: str | None = None,
+    ) -> MaxSendResult:
+        """Upload and send a MAX file attachment to a user."""
+
+        return await self._send_uploaded_file(
+            recipient_type="user",
+            recipient_id=str(user_id),
+            content=content,
+            filename=filename,
+            text=text,
+            content_type=content_type,
+            user_id=user_id,
+            keyboard=keyboard,
+            text_format=format,
+        )
+
+    async def send_file_bytes_to_chat(
+        self,
+        chat_id: int | str,
+        content: bytes,
+        *,
+        filename: str,
+        text: str | None = None,
+        content_type: str = "text/csv",
+        keyboard: MaxInlineKeyboard | None = None,
+        format: str | None = None,
+    ) -> MaxSendResult:
+        """Upload and send a MAX file attachment to a chat."""
+
+        return await self._send_uploaded_file(
+            recipient_type="chat",
+            recipient_id=str(chat_id),
+            content=content,
+            filename=filename,
+            text=text,
+            content_type=content_type,
+            chat_id=chat_id,
+            keyboard=keyboard,
+            text_format=format,
+        )
+
     async def answer_callback(
         self,
         callback_id: str,
@@ -200,6 +250,43 @@ class MaxMessageSender:
             operation,
             recipient_type="callback",
             recipient_id=callback_id,
+        )
+
+    async def _send_uploaded_file(
+        self,
+        *,
+        recipient_type: RecipientType,
+        recipient_id: str,
+        content: bytes,
+        filename: str,
+        text: str | None = None,
+        content_type: str = "application/octet-stream",
+        user_id: int | str | None = None,
+        chat_id: int | str | None = None,
+        keyboard: MaxInlineKeyboard | None = None,
+        text_format: str | None = None,
+    ) -> MaxSendResult:
+        async def operation() -> MaxMessage | dict[str, Any] | None:
+            payload = await self._client.upload_media_bytes(
+                upload_type="file",
+                content=content,
+                filename=filename,
+                content_type=content_type,
+            )
+            return await self._client.send_media(
+                media_type="file",
+                media_payload=payload,
+                text=text,
+                user_id=user_id,
+                chat_id=chat_id,
+                keyboard=keyboard,
+                text_format=text_format,
+            )
+
+        return await self._run_with_retry(
+            operation,
+            recipient_type=recipient_type,
+            recipient_id=recipient_id,
         )
 
     async def _send_message(

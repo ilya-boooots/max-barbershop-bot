@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,7 +16,7 @@ from max_barbershop_bot.integrations.yclients.exceptions import YCLIENTS_ERROR_A
 from max_barbershop_bot.max_api.client import MaxApiAuthError, MaxApiClient, MaxApiNetworkError, MaxApiRateLimitError
 from max_barbershop_bot.repositories.notification_history import NotificationHistoryRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
-from max_barbershop_bot.services.diagnostics import sanitize_text
+from max_barbershop_bot.services.diagnostics import recent_errors, sanitize_text
 from max_barbershop_bot.services.reminders import get_reminder_loop_status
 from max_barbershop_bot.services.yclients_settings import check_yclients_connection
 
@@ -37,9 +38,30 @@ class HealthLine:
 
 
 async def build_developer_diagnostics_text(*, database_path: str, max_bot_token: str | None = None) -> str:
-    """Build a compact Telegram-style developer diagnostics screen."""
+    """Build the clean Telegram-style developer diagnostics menu header."""
 
-    lines = ["🛠 Диагностика разработчика", ""]
+    now = datetime.now(UTC).strftime("%d.%m.%Y %H:%M:%S UTC")
+    return sanitize_text(
+        "✅ Бот запущен и работает.\n"
+        f"🕒 Время сервера: {now}\n"
+        f"📦 Версия: {_git_short_sha()}\n\n"
+        "🛠 Разработка: Диагностика\n"
+        "Выберите действие:"
+    )
+
+
+async def build_developer_status_text(*, database_path: str, max_bot_token: str | None = None) -> str:
+    """Build a detailed protected developer system status screen."""
+
+    lines = [
+        "💡 Статус системы",
+        "",
+        "✅ Бот запущен и работает.",
+        f"🕒 Время сервера: {datetime.now(UTC).strftime('%d.%m.%Y %H:%M:%S UTC')}",
+        f"📦 Версия: {_git_short_sha()}",
+        f"🌍 Окружение: {sanitize_text(getenv('APP_ENV', 'local'))}",
+        "",
+    ]
     max_api = await check_max_api_health(max_bot_token=max_bot_token)
     yclients = await check_yclients_health(database_path)
     db = check_db_health(database_path)
@@ -55,6 +77,8 @@ async def build_developer_diagnostics_text(*, database_path: str, max_bot_token:
             f"Напоминания: {reminders}",
             f"Последние ошибки: {last_errors}",
             f"Ошибки уведомлений: {failed_notifications}",
+            "",
+            render_recent_errors_block(),
         ]
     )
     return sanitize_text("\n".join(lines))
@@ -127,13 +151,35 @@ def format_reminders_status() -> str:
 
 
 def format_last_errors() -> str:
-    """Return compact in-memory last errors status.
+    """Return compact in-memory last errors status."""
 
-    MAX currently sends developer alerts from the central error handler but does not
-    persist/list them for screens, so diagnostics reports that storage is absent.
-    """
+    errors = recent_errors(5)
+    if not errors:
+        return "нет"
+    parts = []
+    for item in errors[:3]:
+        parts.append(
+            f"{item.get('error_id', '—')} {item.get('exception_class', 'Error')} "
+            f"@ {item.get('screen_id', '—')}"
+        )
+    return "; ".join(parts)
 
-    return "нет данных"
+
+def render_recent_errors_block(limit: int = 10) -> str:
+    """Render detailed recent error rows for the status screen."""
+
+    errors = recent_errors(limit)
+    if not errors:
+        return "Последние ошибки: нет"
+    lines = ["Последние ошибки:"]
+    for item in errors:
+        lines.append(
+            "• "
+            f"{item.get('error_id', '—')} | {item.get('exception_class', 'Error')} | "
+            f"user={item.get('platform_user_id', '—')} | screen={item.get('screen_id', '—')} | "
+            f"payload={item.get('callback_payload', '—')}"
+        )
+    return sanitize_text("\n".join(lines))
 
 
 def format_failed_notifications(database_path: str) -> str:
@@ -180,6 +226,23 @@ def _safe_error(exc: BaseException) -> str:
 
 def _format_dt(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%d.%m %H:%M UTC")
+
+
+def _git_short_sha() -> str:
+    value = getenv("GIT_COMMIT") or getenv("COMMIT_SHA") or getenv("APP_VERSION")
+    if value:
+        return sanitize_text(value[:12])
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=1,
+        )
+        return sanitize_text(result.stdout.strip() or "unknown")
+    except Exception:
+        return "unknown"
 
 
 def _bool_env(name: str, default: bool) -> bool:

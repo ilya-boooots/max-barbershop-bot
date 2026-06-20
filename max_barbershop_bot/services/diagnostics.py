@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import secrets
 import traceback
+from collections import deque
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -14,6 +15,7 @@ from max_barbershop_bot.core.events import NormalizedEvent
 GENERIC_ERROR_TEXT = "😔 Что-то пошло не так. Попробуйте ещё раз."
 MASK = "***"
 MAX_ALERT_LENGTH = 3500
+_RECENT_ERRORS: deque[dict[str, Any]] = deque(maxlen=50)
 
 _SECRET_KEY_PARTS = (
     "token",
@@ -66,6 +68,18 @@ def sanitize_text(value: str) -> str:
     return text
 
 
+def remember_error(context: Mapping[str, Any]) -> None:
+    """Keep a small sanitized in-memory tail of recent errors for diagnostics."""
+
+    _RECENT_ERRORS.append(sanitize_mapping(context))
+
+
+def recent_errors(limit: int = 20) -> list[dict[str, Any]]:
+    """Return newest sanitized errors first."""
+
+    return list(reversed(_RECENT_ERRORS))[: max(1, min(limit, 50))]
+
+
 def sanitize_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
     """Return a shallow/deep sanitized copy of a mapping."""
 
@@ -101,6 +115,9 @@ def build_safe_error_context(
                 "platform_user_id": event.platform_user_id or "—",
                 "max_user_id": event.max_user_id or "—",
                 "chat_id": event.chat_id or "—",
+                "username": _short(sanitize_text("@" + event.username if event.username else "—"), 120),
+                "name": _short(sanitize_text(" ".join(part for part in [event.first_name, event.last_name] if part) or "—"), 160),
+                "role": "unknown",
                 "message_text_present": event.text is not None,
                 "attachments_count": len(event.attachments),
             }
@@ -133,6 +150,9 @@ def render_developer_alert(context: Mapping[str, Any], *, user_message: str = GE
         f"platform_user_id: {context.get('platform_user_id', '—')}\n"
         f"max_user_id: {context.get('max_user_id', '—')}\n"
         f"chat_id: {context.get('chat_id', '—')}\n"
+        f"username: {context.get('username', '—')}\n"
+        f"name: {context.get('name', '—')}\n"
+        f"role: {context.get('role', 'unknown')}\n"
         f"handler/location: {context.get('handler', '—')}\n"
         f"where: {context.get('location', '—')}\n"
         f"callback_payload: {context.get('callback_payload', '—')}\n"

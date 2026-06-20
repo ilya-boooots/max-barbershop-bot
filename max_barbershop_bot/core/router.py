@@ -15,6 +15,7 @@ from max_barbershop_bot.core.error_handler import ErrorDiagnostics
 from max_barbershop_bot.core.events import NormalizedEvent
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.repositories.diagnostics import DiagnosticsRepository
 from max_barbershop_bot.services.registration import extract_contact_phone, mask_phone
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ class Router:
         self._unknown_text_handler: EventHandler | None = None
         self._unknown_callback_handler: EventHandler | None = None
         self._error_diagnostics = ErrorDiagnostics.from_config(config)
+        self._database_path = config.database_path if config is not None else "data/max_barbershop_bot.sqlite3"
 
     def on_update(self, update_type: str, handler: EventHandler) -> None:
         """Register a handler for an update type, for example bot_started."""
@@ -129,6 +131,7 @@ class Router:
         event = self._recover_screen_callback_chat(event)
 
         self._log_contact_diagnostic(event)
+        self._log_user_event(event)
         if await self._is_throttled(event, sender):
             return
 
@@ -151,6 +154,8 @@ class Router:
 
 
     async def _is_throttled(self, event: NormalizedEvent, sender: MaxMessageSender) -> bool:
+        if _is_diagnostics_event(event):
+            return False
         if event.update_type == "message_created":
             if event.text == "/start" or _looks_like_contact_event(event):
                 return False
@@ -187,6 +192,30 @@ class Router:
         if event.update_type == "message_callback":
             return self._resolve_callback_handler(event)
         return self._update_handlers.get(event.update_type)
+
+    def _log_user_event(self, event: NormalizedEvent) -> None:
+        if event.update_type not in {"message_created", "message_callback", "bot_started"}:
+            return
+        try:
+            screen_id = state.get_current_screen(event.platform_user_id, event.chat_id)
+            event_name = event.callback_payload or event.text or event.update_type
+            DiagnosticsRepository(self._database_path).log_user_event(
+                platform_user_id=event.platform_user_id,
+                max_user_id=event.max_user_id,
+                chat_id=event.chat_id,
+                username=event.username,
+                phone=_safe_contact_phone(event),
+                event_type=event.update_type,
+                event_name=event_name,
+                screen=screen_id,
+                payload={
+                    "callback_payload": event.callback_payload,
+                    "message_text_present": event.text is not None,
+                    "attachments_count": len(event.attachments),
+                },
+            )
+        except Exception as exc:
+            logger.debug("MAX diagnostics user event write skipped: %s", type(exc).__name__)
 
     def _resolve_text_handler(self, event: NormalizedEvent) -> EventHandler | None:
         current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
@@ -469,6 +498,11 @@ def _looks_like_contact_event(event: NormalizedEvent) -> bool:
     return _looks_like_contact_update(event.raw_update)
 
 
+def _safe_contact_phone(event: NormalizedEvent) -> str | None:
+    phone = extract_contact_phone(event.attachments)
+    return mask_phone(phone) if phone else None
+
+
 def _looks_like_contact_update(raw_update: dict[str, object]) -> bool:
     return any(
         attachment_type == "contact" or "vcf_info" in payload_keys
@@ -562,3 +596,15 @@ def _flow_name_from_screen(screen_id: str | None) -> str | None:
     if not screen_id:
         return None
     return screen_id.split("_", 1)[0]
+
+
+def _is_diagnostics_event(event: NormalizedEvent) -> bool:
+    if event.callback_payload and (
+        event.callback_payload.startswith("devdiag:") or event.callback_payload == "settings:diagnostics"
+    ):
+        return True
+    current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
+    return current_screen in {
+        state.SETTINGS_DIAGNOSTICS_USER_LOGS_INPUT_SCREEN,
+        state.SETTINGS_DIAGNOSTICS_EVENT_SEARCH_INPUT_SCREEN,
+    }

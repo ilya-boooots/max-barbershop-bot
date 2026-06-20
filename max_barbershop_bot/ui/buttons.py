@@ -46,6 +46,16 @@ SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD = "settings:diagnostics:notification_histor
 SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD = "settings:diagnostics:yclients_check"
 DEV_DIAGNOSTICS_REFRESH_PAYLOAD = "devdiag:refresh"
 DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD = "devdiag:notif_failed"
+DEV_DIAGNOSTICS_BOT_LOGS_PAYLOAD = "devdiag:bot_logs"
+DEV_DIAGNOSTICS_BOT_LOGS_CSV_PAYLOAD = "devdiag:bot_logs_csv"
+DEV_DIAGNOSTICS_LOGS_PREV_PAYLOAD = "devdiag:logs:prev"
+DEV_DIAGNOSTICS_LOGS_NEXT_PAYLOAD = "devdiag:logs:next"
+DEV_DIAGNOSTICS_NOOP_PAYLOAD = "devdiag:noop"
+DEV_DIAGNOSTICS_USER_LOGS_PAYLOAD = "devdiag:user_logs"
+DEV_DIAGNOSTICS_EVENT_SEARCH_PAYLOAD = "devdiag:event_search"
+DEV_DIAGNOSTICS_STATUS_PAYLOAD = "devdiag:status"
+DEV_DIAGNOSTICS_YCLIENTS_SMOKE_PAYLOAD = "devdiag:yclients_smoke"
+DEV_DIAGNOSTICS_RESTART_HELP_PAYLOAD = "devdiag:restart_help"
 SETTINGS_BACK_PAYLOAD = "settings:back"
 SETTINGS_HOME_PAYLOAD = "settings:home"
 SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD = "settings:contacts:address"
@@ -495,8 +505,13 @@ def settings_diagnostics_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="🔄 Обновить", payload=DEV_DIAGNOSTICS_REFRESH_PAYLOAD)],
-            [MaxButton(text="📜 Ошибки уведомлений", payload=DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD)],
+            [MaxButton(text="🧾 Логи бота (последние 200 строк)", payload=DEV_DIAGNOSTICS_BOT_LOGS_PAYLOAD)],
+            [MaxButton(text="📦 Скачать логи бота (CSV)", payload=DEV_DIAGNOSTICS_BOT_LOGS_CSV_PAYLOAD)],
+            [MaxButton(text="👤 Логи пользователя", payload=DEV_DIAGNOSTICS_USER_LOGS_PAYLOAD)],
+            [MaxButton(text="🔎 Поиск по событиям", payload=DEV_DIAGNOSTICS_EVENT_SEARCH_PAYLOAD)],
+            [MaxButton(text="💡 Статус системы", payload=DEV_DIAGNOSTICS_STATUS_PAYLOAD)],
+            [MaxButton(text="🧪 YClients: client sync smoke test", payload=DEV_DIAGNOSTICS_YCLIENTS_SMOKE_PAYLOAD)],
+            [MaxButton(text="♻️ Перезапустить бота (инструкция)", payload=DEV_DIAGNOSTICS_RESTART_HELP_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]

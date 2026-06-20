@@ -226,6 +226,47 @@ class MaxApiClient:
         response = await self._request("POST", "/uploads", params={"type": upload_type})
         return response if isinstance(response, dict) else {}
 
+    async def upload_media_bytes(
+        self,
+        *,
+        upload_type: str,
+        content: bytes,
+        filename: str,
+        content_type: str = "application/octet-stream",
+    ) -> dict[str, Any]:
+        """Upload bytes to MAX and return payload usable in message attachments."""
+
+        upload_meta = await self.create_upload_url(upload_type=upload_type)
+        upload_url = upload_meta.get("url")
+        if not isinstance(upload_url, str) or not upload_url:
+            raise MaxApiNetworkError("MAX не вернул URL для загрузки файла.")
+
+        form = aiohttp.FormData()
+        form.add_field("data", content, filename=filename, content_type=content_type)
+        try:
+            async with aiohttp.ClientSession(timeout=self._timeout) as session:
+                async with session.post(upload_url, data=form) as response:
+                    payload = await _json_or_text(response)
+                    if response.status >= 400:
+                        code = payload.get("code") if isinstance(payload, dict) else None
+                        message = payload.get("message") if isinstance(payload, dict) else str(payload)
+                        raise MaxApiError(
+                            f"MAX upload failed: HTTP {response.status}: {message}",
+                            status=response.status,
+                            code=str(code) if code else None,
+                        )
+        except MaxApiError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            raise MaxApiNetworkError(f"MAX upload network error: {error}") from error
+
+        result = payload if isinstance(payload, dict) else {}
+        if "token" not in result and isinstance(upload_meta.get("token"), str):
+            result["token"] = upload_meta["token"]
+        if not result:
+            raise MaxApiNetworkError("MAX upload не вернул payload файла.")
+        return result
+
     async def answer_callback(
         self,
         *,
@@ -355,3 +396,11 @@ class MaxApiClient:
             str(message) if message is not None else None,
             str(code) if code is not None else None,
         )
+
+
+async def _json_or_text(response: aiohttp.ClientResponse) -> Any:
+    try:
+        return await response.json(content_type=None)
+    except (aiohttp.ContentTypeError, ValueError):
+        text = await response.text()
+        return {"message": text} if text else {}
