@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+import io
+from pathlib import Path
 from os import getenv
 
 from max_barbershop_bot.core import state
@@ -37,7 +40,14 @@ from max_barbershop_bot.ui.buttons import (
     ADMIN_SETTINGS_PAYLOAD,
     SETTINGS_BACK_PAYLOAD,
     DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD,
+    DEV_DIAGNOSTICS_BOT_LOGS_CSV_PAYLOAD,
+    DEV_DIAGNOSTICS_BOT_LOGS_PAYLOAD,
+    DEV_DIAGNOSTICS_EVENT_SEARCH_PAYLOAD,
     DEV_DIAGNOSTICS_REFRESH_PAYLOAD,
+    DEV_DIAGNOSTICS_RESTART_HELP_PAYLOAD,
+    DEV_DIAGNOSTICS_STATUS_PAYLOAD,
+    DEV_DIAGNOSTICS_USER_LOGS_PAYLOAD,
+    DEV_DIAGNOSTICS_YCLIENTS_SMOKE_PAYLOAD,
     SETTINGS_CONTACTS_PAYLOAD,
     SETTINGS_CONTACTS_EDIT_ADDRESS_PAYLOAD,
     SETTINGS_CONTACTS_EDIT_PHONE_PAYLOAD,
@@ -80,7 +90,10 @@ from max_barbershop_bot.ui.texts import (
 from max_barbershop_bot.services.developer_diagnostics import (
     NO_ACCESS_TEXT as DEV_DIAGNOSTICS_NO_ACCESS_TEXT,
     build_developer_diagnostics_text,
+    build_developer_status_text,
 )
+from max_barbershop_bot.repositories.audit_log import AuditLogEntry, AuditLogRepository
+from max_barbershop_bot.services.diagnostics import sanitize_text
 
 
 def register_settings_routes(router: Router) -> None:
@@ -109,6 +122,13 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
     router.on_callback(DEV_DIAGNOSTICS_REFRESH_PAYLOAD, handle_settings_diagnostics_refresh)
+    router.on_callback(DEV_DIAGNOSTICS_BOT_LOGS_PAYLOAD, handle_settings_diagnostics_bot_logs)
+    router.on_callback(DEV_DIAGNOSTICS_BOT_LOGS_CSV_PAYLOAD, handle_settings_diagnostics_bot_logs_csv)
+    router.on_callback(DEV_DIAGNOSTICS_USER_LOGS_PAYLOAD, handle_settings_diagnostics_user_logs_prompt)
+    router.on_callback(DEV_DIAGNOSTICS_EVENT_SEARCH_PAYLOAD, handle_settings_diagnostics_event_search_prompt)
+    router.on_callback(DEV_DIAGNOSTICS_STATUS_PAYLOAD, handle_settings_diagnostics_status)
+    router.on_callback(DEV_DIAGNOSTICS_YCLIENTS_SMOKE_PAYLOAD, handle_settings_diagnostics_yclients_smoke)
+    router.on_callback(DEV_DIAGNOSTICS_RESTART_HELP_PAYLOAD, handle_settings_diagnostics_restart_help)
     router.on_callback(DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD, handle_settings_diagnostics_failed_notifications)
     router.on_callback(SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD, handle_settings_notification_history)
     router.on_callback(SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD, handle_settings_yclients_check)
@@ -122,6 +142,8 @@ def register_settings_routes(router: Router) -> None:
     router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_GOOGLE_MAPS_SCREEN, handle_settings_contacts_google_input)
     router.on_screen_text(state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, handle_settings_support_username_input)
     router.on_screen_text(state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN, handle_settings_support_description_input)
+    router.on_screen_text(state.SETTINGS_DIAGNOSTICS_USER_LOGS_INPUT_SCREEN, handle_settings_diagnostics_user_logs_input)
+    router.on_screen_text(state.SETTINGS_DIAGNOSTICS_EVENT_SEARCH_INPUT_SCREEN, handle_settings_diagnostics_event_search_input)
 
 
 async def handle_settings_menu(context: RouterContext) -> None:
@@ -412,6 +434,113 @@ async def handle_settings_diagnostics_refresh(context: RouterContext) -> None:
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
     _audit(context, _actor_role(context), action="settings_section_refreshed", section="diagnostics")
     await context.send_text(text, keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_bot_logs(context: RouterContext) -> None:
+    """Show last bot log lines in safe chunks."""
+
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    lines = _load_log_lines()
+    if lines is None:
+        await context.send_text("Логи пока недоступны 🙏", keyboard=settings_diagnostics_keyboard())
+        return
+    chunks = _chunk_text("\n".join(lines) or "Логи пока пустые.", limit=3200)
+    for index, chunk in enumerate(chunks, start=1):
+        header = f"🧾 Логи бота\nСтраница {index}/{len(chunks)}\n\n"
+        await context.send_text(header + chunk, keyboard=settings_diagnostics_keyboard() if index == len(chunks) else None)
+
+
+async def handle_settings_diagnostics_bot_logs_csv(context: RouterContext) -> None:
+    """Explain CSV behavior because MAX file upload is not wired for documents."""
+
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    lines = _load_log_lines()
+    if lines is None:
+        await context.send_text("Логи пока недоступны 🙏", keyboard=settings_diagnostics_keyboard())
+        return
+    csv_preview = _build_logs_csv(lines).decode("utf-8")
+    text = (
+        "📦 Скачать логи бота (CSV)\n\n"
+        "Отправка CSV-файла пока не подключена в MAX-транспорте 🙏\n"
+        "Ниже — безопасный CSV-превью последних строк:\n\n"
+        f"{_short(csv_preview, 2800)}"
+    )
+    await context.send_text(text, keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_user_logs_prompt(context: RouterContext) -> None:
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_USER_LOGS_INPUT_SCREEN)
+    await context.send_text("👤 Логи пользователя\n\nВведите user_id или @username:", keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_user_logs_input(context: RouterContext) -> None:
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    query = (context.event.text or "").strip()
+    rows = AuditLogRepository(_database_path()).search(query.lstrip("@"), limit=20)
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
+    await context.send_text("👤 Логи пользователя\n\n" + _render_audit_rows(rows), keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_event_search_prompt(context: RouterContext) -> None:
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_EVENT_SEARCH_INPUT_SCREEN)
+    await context.send_text("🔎 Поиск по событиям\n\nВведите ключевое слово:", keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_event_search_input(context: RouterContext) -> None:
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    query = (context.event.text or "").strip()
+    rows = AuditLogRepository(_database_path()).search(query, limit=20)
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
+    await context.send_text("🔎 Поиск по событиям\n\n" + _render_audit_rows(rows), keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_status(context: RouterContext) -> None:
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    await context.send_text(await build_developer_status_text(database_path=_database_path()), keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_yclients_smoke(context: RouterContext) -> None:
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    await context.send_text("🧪 YClients: client sync smoke test\n\nSmoke test пока недоступен в MAX 🙏", keyboard=settings_diagnostics_keyboard())
+
+
+async def handle_settings_diagnostics_restart_help(context: RouterContext) -> None:
+    if not _is_protected_developer(context):
+        await _send_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    await context.send_text(
+        "♻️ Перезапустить бота (инструкция)\n\n"
+        "Для перезапуска выполните на сервере:\n"
+        "sudo systemctl restart telegram-bot@max-barbershop-bot\n\n"
+        "Проверить статус:\n"
+        "sudo systemctl status telegram-bot@max-barbershop-bot",
+        keyboard=settings_diagnostics_keyboard(),
+    )
 
 
 async def handle_settings_diagnostics_failed_notifications(context: RouterContext) -> None:
@@ -800,6 +929,66 @@ def _audit(context: RouterContext, actor_role: str, *, action: str, section: str
         target_platform_user_id=target_platform_user_id,
         metadata=metadata,
     )
+
+
+def _load_log_lines(limit: int = 200) -> list[str] | None:
+    path_value = getenv("BOT_LOG_FILE") or getenv("LOG_FILE") or "data/max_barbershop_bot.log"
+    path = Path(path_value)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as file:
+            lines = file.readlines()[-limit:]
+    except OSError:
+        return None
+    return [sanitize_text(line.rstrip("\n")) for line in lines]
+
+
+def _build_logs_csv(lines: list[str]) -> bytes:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["line"])
+    for line in lines:
+        writer.writerow([sanitize_text(line)])
+    return buffer.getvalue().encode("utf-8")
+
+
+def _chunk_text(text: str, *, limit: int) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in text.splitlines():
+        line_len = len(line) + 1
+        if current and current_len + line_len > limit:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+        current.append(line[:limit])
+        current_len += min(line_len, limit)
+    if current:
+        chunks.append("\n".join(current))
+    return chunks or [""]
+
+
+def _render_audit_rows(rows: list[AuditLogEntry]) -> str:
+    if not rows:
+        return "Ничего не найдено 🙏"
+    lines: list[str] = []
+    for row in rows[:20]:
+        meta = sanitize_text(str(row.metadata))
+        lines.append(
+            f"• {row.created_at or '—'} | {row.event_type} | "
+            f"actor={row.actor_platform_user_id or '—'} | target={row.target_platform_user_id or row.target_max_user_id or '—'} | "
+            f"{_short(meta, 160)}"
+        )
+    return _short("\n".join(lines), 3300)
+
+
+def _short(text: str, limit: int) -> str:
+    safe = sanitize_text(text)
+    return safe if len(safe) <= limit else safe[:limit] + "…"
 
 
 async def _send_no_access(context: RouterContext) -> None:

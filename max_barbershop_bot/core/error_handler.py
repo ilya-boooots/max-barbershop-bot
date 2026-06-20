@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from os import getenv
 from typing import Any
 
 from max_barbershop_bot.core import state
@@ -13,11 +14,13 @@ from max_barbershop_bot.core.config import Config
 from max_barbershop_bot.core.events import NormalizedEvent
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.services.diagnostics import (
     GENERIC_ERROR_TEXT,
     alert_fingerprint,
     build_safe_error_context,
     generate_error_id,
+    remember_error,
     render_developer_alert,
     sanitize_text,
 )
@@ -154,6 +157,17 @@ class ErrorDiagnostics:
         extra: Mapping[str, Any] | None = None,
         throttle: bool = False,
     ) -> None:
+        context = build_safe_error_context(
+            error_id=error_id,
+            exception=exception,
+            event=event,
+            handler_name=handler_name,
+            location=location,
+            screen_id=screen_id,
+            extra={"app_env": self.app_env, **dict(extra or {})},
+        )
+        context["role"] = _resolve_role(event)
+        remember_error(context)
         if not self.enabled:
             logger.debug("Developer diagnostics disabled; alert skipped error_id=%s", error_id)
             return
@@ -166,15 +180,6 @@ class ErrorDiagnostics:
             logger.debug("Developer alert throttled error_id=%s location=%s", error_id, location)
             return
         try:
-            context = build_safe_error_context(
-                error_id=error_id,
-                exception=exception,
-                event=event,
-                handler_name=handler_name,
-                location=location,
-                screen_id=screen_id,
-                extra={"app_env": self.app_env, **dict(extra or {})},
-            )
             result = await sender.send_to_user(developer_id, render_developer_alert(context))
             if not result.ok:
                 logger.warning(
@@ -218,3 +223,15 @@ def _sanitize_exception_args(exception: BaseException) -> None:
         exception.args = tuple(sanitize_text(str(arg)) for arg in exception.args)
     except Exception:
         return
+
+
+def _resolve_role(event: NormalizedEvent | None) -> str:
+    if event is None or not event.platform_user_id:
+        return "unknown"
+    try:
+        role = StaffRolesRepository(getenv("DATABASE_PATH", "data/max_barbershop_bot.sqlite3")).get_highest_role(
+            event.platform_user_id
+        )
+        return role or "user"
+    except Exception:
+        return "unknown"
