@@ -19,6 +19,7 @@ from max_barbershop_bot.integrations.yclients.exceptions import (
 )
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import normalize_phone, safe_str
+from max_barbershop_bot.repositories.platform_attribution import PLATFORM_MAX, PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import User
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactsService
@@ -218,11 +219,13 @@ class MyBookingsService:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 if not yclients_client_id and phone:
                     yclients_client_id = await _resolve_client_id_by_phone(yclients, settings.company_id, phone)
-                payload = await _fetch_all_client_records(
+                payload = await _fetch_all_relevant_records(
                     yclients,
                     company_id=settings.company_id,
                     yclients_client_id=yclients_client_id,
-                    phone=phone if not yclients_client_id else None,
+                    phone=phone,
+                    platform_user_id=platform_user_id,
+                    database_path=self._settings_repository.database_path,
                     start_date=(now.date() - timedelta(days=365)).isoformat(),
                     end_date=(now.date() + timedelta(days=365)).isoformat(),
                 )
@@ -1197,7 +1200,72 @@ def _extract_record_rows(payload: dict[str, Any] | list[Any]) -> list[dict[str, 
 
 
 
-async def _fetch_all_client_records(
+async def _fetch_all_relevant_records(
+    yclients: YClientsServiceLayer,
+    *,
+    company_id: str | int,
+    yclients_client_id: str | None,
+    phone: str | None,
+    platform_user_id: str | None,
+    database_path: str,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, Any]]:
+    """Fetch records by all existing user links: client id, phone and MAX attribution."""
+
+    rows: list[dict[str, Any]] = []
+    if yclients_client_id:
+        rows.extend(
+            await _fetch_all_client_records_page_set(
+                yclients,
+                company_id=company_id,
+                yclients_client_id=yclients_client_id,
+                phone=None,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+    if phone:
+        rows.extend(
+            await _fetch_all_client_records_page_set(
+                yclients,
+                company_id=company_id,
+                yclients_client_id=None,
+                phone=phone,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+
+    for record_id in _platform_user_attributed_record_ids(database_path, platform_user_id):
+        try:
+            details = await yclients.get_booking_details(company_id=company_id, yclients_record_id=record_id)
+        except YClientsError:
+            logger.info(
+                "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
+                "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s "
+                "upcoming_count=%s past_count=%s rendered_buttons_count=%s state_map_size=%s page=%s page_size=%s "
+                "branch_timezone=%s",
+                bool(platform_user_id),
+                _mask_phone(phone),
+                bool(yclients_client_id),
+                len(rows),
+                len(rows),
+                0,
+                0,
+                0,
+                0,
+                "attribution_detail_skipped",
+                _MY_BOOKINGS_PAGE_SIZE,
+                "unknown",
+            )
+            continue
+        rows.extend(_extract_record_rows(details))
+
+    return _deduplicate_record_rows(rows)
+
+
+async def _fetch_all_client_records_page_set(
     yclients: YClientsServiceLayer,
     *,
     company_id: str | int,
@@ -1206,7 +1274,7 @@ async def _fetch_all_client_records(
     start_date: str,
     end_date: str,
 ) -> list[dict[str, Any]]:
-    """Fetch all available YClients record pages for the My bookings screen."""
+    """Fetch all pages for one YClients records filter set."""
 
     rows: list[dict[str, Any]] = []
     for page in range(1, _MY_BOOKINGS_MAX_PAGES + 1):
@@ -1225,7 +1293,43 @@ async def _fetch_all_client_records(
         rows.extend(page_rows)
         if len(page_rows) < _MY_BOOKINGS_PAGE_SIZE:
             break
-    return _deduplicate_record_rows(rows)
+    return rows
+
+
+def _platform_user_attributed_record_ids(database_path: str, platform_user_id: str | None) -> list[str]:
+    """Return locally attributed YClients record ids for this MAX user only."""
+
+    if not platform_user_id:
+        return []
+    try:
+        records = PlatformAttributionRepository(database_path).list_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+    except Exception as exc:  # noqa: BLE001 - attribution is an optional lookup source.
+        logger.info(
+            "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
+            "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s upcoming_count=%s "
+            "past_count=%s rendered_buttons_count=%s state_map_size=%s page=%s page_size=%s branch_timezone=%s",
+            True,
+            False,
+            False,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "attribution_lookup_failed",
+            _MY_BOOKINGS_PAGE_SIZE,
+            type(exc).__name__,
+        )
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        record_id = _clean_text(record.yclients_record_id)
+        if record_id and record_id not in seen:
+            seen.add(record_id)
+            result.append(record_id)
+    return result
 
 
 def _deduplicate_record_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
