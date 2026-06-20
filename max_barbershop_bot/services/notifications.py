@@ -194,6 +194,7 @@ async def send_business_notification(
     yclients_client_id: str | None = None,
     scheduled_for: str | None = None,
     keyboard: MaxInlineKeyboard | None = None,
+    attachments: list[Mapping[str, Any]] | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> NotificationHistoryRecord | None:
     """Send one business notification once and persist both history and delivery."""
@@ -257,6 +258,7 @@ async def send_business_notification(
         text=text,
         database_path=database_path,
         keyboard=keyboard,
+        attachments=attachments,
         platform_user_id=platform_user_id,
         max_user_id=max_user_id,
         chat_id=chat_id,

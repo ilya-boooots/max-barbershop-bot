@@ -13,6 +13,7 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
+from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.cancellation_recovery import create_cancellation_recovery_event
@@ -24,6 +25,7 @@ from max_barbershop_bot.services.booking import (
     format_slot_button,
 )
 from max_barbershop_bot.flows.booking import start_repeat_booking_with_prefill
+from max_barbershop_bot.services.master_photos import MasterPhotosService
 from max_barbershop_bot.services.my_bookings import (
     MY_BOOKING_CANCEL_IN_PROGRESS_TEXT,
     MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT,
@@ -165,7 +167,11 @@ async def handle_my_booking_details(context: RouterContext) -> None:
     can_cancel = is_booking_cancelable(booking, timezone_name=timezone_name)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking_display_data(booking, timezone_name=timezone_name))
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
-    await context.send_text(format_booking_details_text(booking, timezone_name=timezone_name), keyboard=my_booking_details_keyboard(can_cancel=can_cancel))
+    await context.send_text(
+        format_booking_details_text(booking, timezone_name=timezone_name),
+        keyboard=my_booking_details_keyboard(can_cancel=can_cancel),
+        attachments=_booking_master_photo_attachment(booking),
+    )
 
 
 async def handle_my_booking_cancel_start(context: RouterContext) -> None:
@@ -509,7 +515,11 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
     completed_old_id = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY))
     if completed_old_id == record_id:
         await context.answer_callback()
-        await context.send_text(_format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)), keyboard=my_booking_reschedule_result_keyboard())
+        await context.send_text(
+            _format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)),
+            keyboard=my_booking_reschedule_result_keyboard(),
+            attachments=_booking_master_photo_attachment(selected_booking),
+        )
         return
 
     lock_key = f"booking:reschedule:{platform_user_id or 'unknown'}:{record_id}"
@@ -555,7 +565,11 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, None)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, None)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_SUCCESS_SCREEN)
-    await context.send_text(_format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)), keyboard=my_booking_reschedule_result_keyboard())
+    await context.send_text(
+        _format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)),
+        keyboard=my_booking_reschedule_result_keyboard(),
+        attachments=_booking_master_photo_attachment(selected_booking),
+    )
 
 
 async def handle_my_bookings_back(context: RouterContext) -> None:
@@ -570,6 +584,7 @@ async def handle_my_bookings_back(context: RouterContext) -> None:
             await context.send_text(
                 format_booking_details_text(booking, timezone_name=_timezone_from_state(context)),
                 keyboard=my_booking_details_keyboard(),
+                attachments=_booking_master_photo_attachment(booking),
             )
             return
     if current_screen == state.MY_BOOKING_RESCHEDULE_SLOTS_SCREEN:
@@ -660,6 +675,34 @@ async def _show_reschedule_slots_from_state(context: RouterContext) -> None:
     await context.send_text(text, keyboard=my_booking_reschedule_slots_keyboard(slots, format_slot_button))
 
 
+
+
+def _booking_master_photo_attachment(booking: Any) -> list[dict[str, object]] | None:
+    """Return configured MAX master photo attachment for a booking details card."""
+
+    staff_id = _booking_staff_id(booking)
+    if not staff_id:
+        return None
+    try:
+        service = MasterPhotosService(
+            MasterPhotosRepository(_database_path()),
+            YClientsSettingsRepository(_database_path()),
+        )
+        return service.photo_attachments(staff_id)
+    except Exception as exc:  # noqa: BLE001 - master photo must not block booking details.
+        logger.warning("My bookings master photo skipped safely: error_class=%s", type(exc).__name__)
+        return None
+
+
+def _booking_staff_id(booking: Any) -> str | None:
+    if booking is None:
+        return None
+    value = getattr(booking, "yclients_staff_id", None)
+    if value:
+        return _clean_state_text(value)
+    if isinstance(booking, dict):
+        return _clean_state_text(booking.get("yclients_staff_id") or booking.get("staff_id") or booking.get("master_id"))
+    return None
 
 def _format_reschedule_success_card(booking: dict[str, Any] | None, slot_data: dict[str, Any], *, timezone_name: str) -> str:
     if not booking:

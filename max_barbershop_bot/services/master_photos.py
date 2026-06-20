@@ -57,6 +57,12 @@ class MasterPhotosService:
 
         return self.prepare_photo_attachment(self.get_photo(yclients_staff_id))
 
+    def photo_attachments(self, yclients_staff_id: str | None) -> list[dict[str, Any]] | None:
+        """Build a MAX attachments list for screens that can show a master photo."""
+
+        attachment = self.photo_attachment(yclients_staff_id)
+        return [attachment] if attachment else None
+
     def prepare_photo_attachment(self, photo: MasterPhoto | None) -> dict[str, Any] | None:
         """Convert a stored photo row into a MAX AttachmentRequest."""
 

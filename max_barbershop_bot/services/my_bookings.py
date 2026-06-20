@@ -126,6 +126,7 @@ class MyBookingItem:
     service_name: str
     master_name: str | None
     status: str | None
+    yclients_staff_id: str | None = None
     raw_status: str | None = None
     duration_minutes: int | None = None
     price: str | None = None
@@ -961,6 +962,7 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
             "yclients_record_id": booking.yclients_record_id,
             "service_name": booking.service_name,
             "master_name": booking.master_name,
+            "yclients_staff_id": booking.yclients_staff_id,
             "date": booking_datetime.strftime("%d.%m.%Y"),
             "time": booking_datetime.strftime("%H:%M"),
             "status": format_booking_status(booking.raw_status or booking.status),
@@ -981,6 +983,7 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
         "yclients_record_id": _clean_text(booking.get("yclients_record_id") or booking.get("record_id") or booking.get("id")),
         "service_name": _clean_text(booking.get("service_name")) or _extract_service_name(booking),
         "master_name": _clean_text(booking.get("master_name")) or _extract_master_name(booking),
+        "yclients_staff_id": _clean_text(booking.get("yclients_staff_id") or booking.get("staff_id") or booking.get("master_id")) or _extract_staff_id(booking),
         "date": booking_date or "—",
         "time": booking_time or "—",
         "status": format_booking_status(booking.get("status") or booking.get("raw_status")),
@@ -1127,6 +1130,7 @@ def _booking_from_payload(
         service_name=_extract_service_name(item),
         master_name=_extract_master_name(item),
         status=format_booking_status(raw_status),
+        yclients_staff_id=_extract_staff_id(item),
         raw_status=raw_status,
         duration_minutes=_extract_seance_length(item),
         price=_extract_price(item),

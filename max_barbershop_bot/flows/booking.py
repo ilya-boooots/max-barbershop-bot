@@ -1392,11 +1392,11 @@ def _selected_master_photo_attachment(context: RouterContext) -> list[dict[str, 
             MasterPhotosRepository(_database_path()),
             YClientsSettingsRepository(_database_path()),
         )
-        attachment = service.photo_attachment(_optional_state_text(_state_value(context, _SELECTED_MASTER_STATE_KEY)))
+        attachment = service.photo_attachments(_optional_state_text(_state_value(context, _SELECTED_MASTER_STATE_KEY)))
     except Exception as exc:  # noqa: BLE001 - photo is optional for confirmation UX.
         logger.warning("Booking master photo skipped safely: error_class=%s", type(exc).__name__)
         return None
-    return [attachment] if attachment else None
+    return attachment
 
 
 async def _booking_contacts_safely():
@@ -1478,6 +1478,7 @@ async def _send_immediate_confirmation_safely(context: RouterContext, *, created
             timezone_name=timezone_name,
             keyboard=booking_success_keyboard(),
             text_override=success_text,
+            attachments=_selected_master_photo_attachment(context),
         )
         logger.info(
             "MAX immediate booking confirmation diagnostic: platform_user_id_present=%s yclients_record_id_present=%s notification_type=%s notifications_enabled=%s history_existing=%s send_attempted=%s send_status=%s delivery_status=%s message_id_present=%s blocked_or_stopped=%s error_class=%s http_status=%s",

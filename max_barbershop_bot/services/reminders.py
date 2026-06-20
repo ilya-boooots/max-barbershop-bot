@@ -167,6 +167,7 @@ async def send_booking_notification(
     timezone_name: str,
     keyboard: MaxInlineKeyboard | None = None,
     text_override: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> NotificationHistoryRecord | None:
     """Send and record one booking notification without raising transport errors."""
 
@@ -205,6 +206,7 @@ async def send_booking_notification(
             recipient_type=recipient_type,
             recipient_id=recipient_id,
             keyboard=keyboard,
+            attachments=attachments,
             metadata={"label": _NOTIFICATION_TYPE_LABELS.get(context.notification_type)},
         )
     except Exception:
@@ -233,6 +235,7 @@ async def send_immediate_confirmation(
     chat_id: str | None = None,
     keyboard: MaxInlineKeyboard | None = None,
     text_override: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> NotificationHistoryRecord | None:
     """Send the booking success confirmation through the notification service."""
 
@@ -255,6 +258,7 @@ async def send_immediate_confirmation(
         timezone_name=timezone_name,
         keyboard=keyboard,
         text_override=text_override,
+        attachments=attachments,
     )
 
 
