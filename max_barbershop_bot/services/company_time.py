@@ -124,3 +124,76 @@ def localize_datetime(value: Any, timezone_name: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=tz)
     return parsed.astimezone(tz)
+
+
+def format_branch_action_timestamp(
+    timezone_name: str | None,
+    *,
+    action_type: str,
+    action_at: datetime | None = None,
+) -> str:
+    """Format the current MAX action time for YClients comments in branch timezone."""
+
+    raw_timezone = str(timezone_name).strip() if timezone_name is not None else ""
+    branch_timezone_present = bool(raw_timezone)
+    branch_timezone_value = normalize_branch_timezone(
+        raw_timezone or DEFAULT_BRANCH_TIMEZONE,
+        flow="yclients_comment",
+        operation="format_branch_action_timestamp",
+    )
+    fallback_used = (not branch_timezone_present) or branch_timezone_value != raw_timezone
+    try:
+        branch_zone = ZoneInfo(branch_timezone_value)
+        action_time = action_at or datetime.now(branch_zone)
+        if action_time.tzinfo is None:
+            action_time = action_time.replace(tzinfo=branch_zone)
+        else:
+            action_time = action_time.astimezone(branch_zone)
+        formatted = action_time.strftime("%d.%m.%Y в %H:%M")
+    except Exception as exc:  # noqa: BLE001 - YClients comments must not block user actions.
+        fallback_used = True
+        branch_timezone_value = DEFAULT_BRANCH_TIMEZONE
+        branch_zone = ZoneInfo(DEFAULT_BRANCH_TIMEZONE)
+        action_time = action_at or datetime.now(branch_zone)
+        if action_time.tzinfo is None:
+            action_time = action_time.replace(tzinfo=branch_zone)
+        else:
+            action_time = action_time.astimezone(branch_zone)
+        formatted = action_time.strftime("%d.%m.%Y в %H:%M")
+        logger.warning(
+            "MAX YClients comment timestamp diagnostic: action_type=%s branch_timezone_present=%s "
+            "branch_timezone_value=%s formatted_timestamp_present=%s fallback_used=%s error_class=%s",
+            action_type,
+            branch_timezone_present,
+            branch_timezone_value,
+            bool(formatted),
+            fallback_used,
+            type(exc).__name__,
+        )
+        return formatted
+
+    if fallback_used:
+        logger.warning(
+            "MAX YClients comment timestamp diagnostic: action_type=%s branch_timezone_present=%s "
+            "branch_timezone_value=%s formatted_timestamp_present=%s fallback_used=%s",
+            action_type,
+            branch_timezone_present,
+            branch_timezone_value,
+            bool(formatted),
+            fallback_used,
+        )
+    return formatted
+
+
+def build_yclients_action_comment(
+    marker: str,
+    *,
+    timezone_name: str | None,
+    action_type: str,
+    action_at: datetime | None = None,
+) -> str:
+    """Build a one-line YClients MAX action comment with branch-local action time."""
+
+    clean_marker = str(marker or "").strip()
+    timestamp = format_branch_action_timestamp(timezone_name, action_type=action_type, action_at=action_at)
+    return f"{clean_marker} {timestamp}".strip()

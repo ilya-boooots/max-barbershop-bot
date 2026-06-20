@@ -15,7 +15,7 @@ from max_barbershop_bot.repositories.platform_attribution import PlatformAttribu
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
-from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, localize_datetime, normalize_branch_timezone, zoneinfo_or_default
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, build_yclients_action_comment, localize_datetime, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.booking import (
     BookingCatalog,
     BookingService,
@@ -762,7 +762,11 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
         platform_user_id=user.platform_user_id,
         yclients_record_id=created.yclients_record_id,
         yclients_client_id=created.yclients_client_id or user.yclients_client_id,
-        marker=MAX_REPEAT_BOOKING_COMMENT_MARKER if booking_data.get("entry_mode") == _ENTRY_MODE_REPEAT else MAX_BOOKING_COMMENT_MARKER,
+        marker=build_yclients_action_comment(
+            MAX_REPEAT_BOOKING_COMMENT_MARKER if booking_data.get("entry_mode") == _ENTRY_MODE_REPEAT else MAX_BOOKING_COMMENT_MARKER,
+            timezone_name=booking_service.get_branch_timezone(),
+            action_type="local_booking_attribution",
+        ),
     )
     if created.datetime_iso:
         state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, created.datetime_iso)
