@@ -605,7 +605,7 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
     user = _current_user(context)
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
     try:
-        result = await service.get_future_bookings_for_user(user, platform_user_id=platform_user_id)
+        result = await service.get_bookings_for_user(user, platform_user_id=platform_user_id)
     except MyBookingsProfileMissingError:
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_ERROR_SCREEN)
         await context.send_text(MY_BOOKINGS_NO_PROFILE_TEXT, keyboard=my_bookings_keyboard())
@@ -632,13 +632,13 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
 
     if result.is_empty:
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_EMPTY_SCREEN)
-        await context.send_text(format_bookings_screen([], timezone_name=result.branch_timezone), keyboard=my_bookings_keyboard(include_booking=True))
+        await context.send_text(format_bookings_list_screen([], timezone_name=result.branch_timezone), keyboard=my_bookings_keyboard(include_booking=True))
         return
 
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_SCREEN)
     await context.send_text(
         format_bookings_list_screen(result.bookings, timezone_name=result.branch_timezone),
-        keyboard=my_bookings_list_keyboard(len(result.bookings), max_buttons=_MAX_BOOKING_BUTTONS),
+        keyboard=my_bookings_list_keyboard(result.bookings, timezone_name=result.branch_timezone, max_buttons=_MAX_BOOKING_BUTTONS),
     )
 
 

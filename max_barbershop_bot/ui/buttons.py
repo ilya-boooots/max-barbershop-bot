@@ -1033,26 +1033,65 @@ def my_bookings_keyboard(*, include_booking: bool = False) -> MaxInlineKeyboard:
     rows: list[list[MaxButton]] = []
     if include_booking:
         rows.append([MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)])
+    else:
+        rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def my_bookings_list_keyboard(bookings: int | list[object], *, timezone_name: str | None = None, max_buttons: int = 20) -> MaxInlineKeyboard:
+    """Build booking selection buttons with short indexed MAX payloads."""
+
+    if isinstance(bookings, int):
+        items: list[object] = []
+        bookings_count = bookings
+    else:
+        items = bookings
+        bookings_count = len(items)
+
+    rows: list[list[MaxButton]] = []
+    for index in range(min(max(bookings_count, 0), max_buttons)):
+        label = _my_booking_button_label(items[index], index=index, timezone_name=timezone_name) if index < len(items) else f"📋 Запись {index + 1}"
+        rows.append([MaxButton(text=label, payload=indexed_payload(MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX, index))])
     rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
 
-def my_bookings_list_keyboard(bookings_count: int, *, max_buttons: int = 20) -> MaxInlineKeyboard:
-    """Build future booking selection buttons with short MAX payloads."""
+def _my_booking_button_label(item: object, *, index: int, timezone_name: str | None = None) -> str:
+    """Return a compact booking button label without putting record ids into payloads."""
 
-    rows: list[list[MaxButton]] = [
-        [
-            MaxButton(
-                text=f"📋 Запись {index + 1}",
-                payload=indexed_payload(MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX, index),
-            )
-        ]
-        for index in range(min(max(bookings_count, 0), max_buttons))
-    ]
-    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
-    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
-    return MaxInlineKeyboard.from_rows(rows)
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    dt = getattr(item, "booking_datetime", None)
+    if isinstance(item, dict):
+        dt = item.get("booking_datetime") or item.get("datetime") or item.get("date")
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt.replace("T", " ").replace("Z", "+00:00"))
+        except ValueError:
+            dt = None
+    if isinstance(dt, datetime):
+        try:
+            zone = ZoneInfo(timezone_name or "Europe/Moscow")
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=zone)
+            dt = dt.astimezone(zone)
+        except ZoneInfoNotFoundError:
+            pass
+        when = dt.strftime("%d.%m %H:%M")
+    else:
+        when = f"Запись {index + 1}"
+
+    service = getattr(item, "service_name", None)
+    master = getattr(item, "master_name", None)
+    if isinstance(item, dict):
+        service = item.get("service_name") or service
+        master = item.get("master_name") or master
+    details = " · ".join(str(value) for value in (service, master) if value)
+    label = f"📋 {when}" + (f" · {details}" if details else "")
+    return label[:80]
 
 
 def my_booking_details_keyboard(*, can_cancel: bool = True) -> MaxInlineKeyboard:
