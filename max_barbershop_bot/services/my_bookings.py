@@ -135,8 +135,16 @@ class MyBookingItem:
 
 
 @dataclass(frozen=True)
+class MyBookingsSplit:
+    """Bookings split by appointment datetime in branch timezone."""
+
+    upcoming: list[MyBookingItem]
+    past: list[MyBookingItem]
+
+
+@dataclass(frozen=True)
 class MyBookingsResult:
-    """Result of loading future bookings for one user."""
+    """Result of loading YClients bookings for one user."""
 
     bookings: list[MyBookingItem]
     branch_timezone: str
@@ -149,13 +157,13 @@ class MyBookingsResult:
 
 
 class MyBookingsService:
-    """Load and format future YClients records without bot transport dependencies."""
+    """Load and format YClients records without bot transport dependencies."""
 
     def __init__(self, settings_repository: YClientsSettingsRepository) -> None:
         self._settings_repository = settings_repository
 
-    async def get_future_bookings_for_user(self, user: User | None, *, platform_user_id: str | None = None) -> MyBookingsResult:
-        """Return future YClients bookings for a stored MAX user profile."""
+    async def get_bookings_for_user(self, user: User | None, *, platform_user_id: str | None = None) -> MyBookingsResult:
+        """Return recent past and future YClients bookings for a stored MAX user profile."""
 
         yclients_client_id = _clean_text(user.yclients_client_id if user else None)
         phone = _clean_text(user.phone if user else None)
@@ -204,11 +212,11 @@ class MyBookingsService:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 if not yclients_client_id and phone:
                     yclients_client_id = await _resolve_client_id_by_phone(yclients, settings.company_id, phone)
-                payload = await yclients.get_future_records(
+                payload = await yclients.get_client_records(
                     company_id=settings.company_id,
                     yclients_client_id=yclients_client_id,
                     phone=phone if not yclients_client_id else None,
-                    start_date=now.date().isoformat(),
+                    start_date=(now.date() - timedelta(days=365)).isoformat(),
                     end_date=(now.date() + timedelta(days=365)).isoformat(),
                     page=1,
                     count=200,
@@ -241,8 +249,9 @@ class MyBookingsService:
                 _booking_from_payload(item, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone)
                 for item in _extract_record_rows(payload)
             ]
-            future = [item for item in bookings if item is not None and is_future_booking(item, timezone_name=timezone_name, now=now)]
-            future = sort_bookings_by_datetime(future, timezone_name=timezone_name)
+            normalized_bookings = [item for item in bookings if item is not None]
+            split = split_bookings_by_period(normalized_bookings, timezone_name=timezone_name, now=now)
+            all_bookings = [*split.upcoming, *split.past]
         except Exception as exc:  # noqa: BLE001 - bad contact/settings/payload shape must not make the callback silent.
             logger.warning(
                 "My bookings payload normalization failed: operation=get_my_bookings platform_user_id=%s "
@@ -255,19 +264,26 @@ class MyBookingsService:
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
         logger.info(
             "My bookings loaded: operation=get_my_bookings platform_user_id=%s "
-            "yclients_client_id_present=%s phone_present=%s future_bookings_count=%s branch_timezone=%s",
+            "yclients_client_id_present=%s phone_present=%s bookings_count=%s upcoming_bookings_count=%s past_bookings_count=%s branch_timezone=%s",
             platform_user_id,
             bool(yclients_client_id),
             bool(phone),
-            len(future),
+            len(all_bookings),
+            len(split.upcoming),
+            len(split.past),
             timezone_name,
         )
         return MyBookingsResult(
-            bookings=future,
+            bookings=all_bookings,
             branch_timezone=timezone_name,
             yclients_client_id=yclients_client_id,
             phone_exists=bool(phone),
         )
+
+    async def get_future_bookings_for_user(self, user: User | None, *, platform_user_id: str | None = None) -> MyBookingsResult:
+        """Backward-compatible alias for loading the My bookings list."""
+
+        return await self.get_bookings_for_user(user, platform_user_id=platform_user_id)
 
     async def get_booking_for_user(
         self,
@@ -815,6 +831,36 @@ def sort_bookings_by_datetime(
     )
 
 
+
+def split_bookings_by_period(
+    items: list[MyBookingItem],
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+    now: datetime | None = None,
+) -> MyBookingsSplit:
+    """Split bookings by appointment datetime using branch timezone only."""
+
+    zone = _zoneinfo(timezone_name)
+    current = now or datetime.now(zone)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=zone)
+    current = current.astimezone(zone)
+
+    upcoming: list[MyBookingItem] = []
+    past: list[MyBookingItem] = []
+    for item in items:
+        booking_datetime = parse_booking_datetime(item, timezone_name=timezone_name)
+        if booking_datetime is None:
+            continue
+        if booking_datetime > current:
+            upcoming.append(item)
+        else:
+            past.append(item)
+
+    upcoming = sort_bookings_by_datetime(upcoming, timezone_name=timezone_name)
+    past = list(reversed(sort_bookings_by_datetime(past, timezone_name=timezone_name)))
+    return MyBookingsSplit(upcoming=upcoming, past=past)
+
 def format_booking_item(item: MyBookingItem, *, index: int, timezone_name: str) -> str:
     """Format one booking card in the reference UX style."""
 
@@ -843,12 +889,25 @@ def format_booking_list_item(item: MyBookingItem, *, index: int, timezone_name: 
 
 
 def format_bookings_list_screen(bookings: list[MyBookingItem], *, timezone_name: str) -> str:
-    """Format a compact bookings list that stays small even with many active records."""
+    """Format a compact bookings list split into upcoming and past sections."""
 
     if not bookings:
-        return MY_BOOKINGS_EMPTY_TEXT
-    rows = [format_booking_list_item(item, index=index, timezone_name=timezone_name) for index, item in enumerate(bookings, start=1)]
-    return f"{MY_BOOKINGS_TITLE_TEXT}\n\nВыберите запись, чтобы открыть детали 👇\n\n" + "\n".join(rows)
+        return "📭 Записей пока нет.\n\nМожно выбрать удобное время и записаться на стрижку ✂️"
+
+    split = split_bookings_by_period(bookings, timezone_name=timezone_name)
+    parts = [MY_BOOKINGS_TITLE_TEXT, "Выберите запись, чтобы открыть детали 👇"]
+    index = 1
+    if split.upcoming:
+        parts.extend(["", "🔜 Предстоящие записи"])
+        for item in split.upcoming:
+            parts.append(format_booking_list_item(item, index=index, timezone_name=timezone_name))
+            index += 1
+    if split.past:
+        parts.extend(["", "🕓 Прошедшие записи"])
+        for item in split.past:
+            parts.append(format_booking_list_item(item, index=index, timezone_name=timezone_name))
+            index += 1
+    return "\n".join(parts)
 
 
 def format_bookings_screen(bookings: list[MyBookingItem], *, timezone_name: str) -> str:
