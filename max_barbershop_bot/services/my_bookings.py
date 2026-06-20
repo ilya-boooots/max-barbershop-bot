@@ -23,7 +23,7 @@ from max_barbershop_bot.repositories.platform_attribution import PLATFORM_MAX, P
 from max_barbershop_bot.repositories.users import User
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactsService
-from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, build_yclients_action_comment, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -646,10 +646,14 @@ class MyBookingsService:
                     phone=client_phone,
                     fullname=client_name,
                     staff_id=staff_id,
-                    marker=RESCHEDULE_CREATE_MARKER,
+                    marker=build_yclients_action_comment(
+                        RESCHEDULE_CREATE_MARKER,
+                        timezone_name=settings.branch_timezone,
+                        action_type="booking_reschedule",
+                    ),
                 )
                 created_record_id = _clean_text(getattr(created, "record_id", None))
-                cancel_marker = _build_reschedule_cancel_marker(datetime_iso, _timezone_name(settings.branch_timezone))
+                cancel_marker = _build_reschedule_cancel_marker(_timezone_name(settings.branch_timezone))
                 await yclients.cancel_booking(
                     company_id=settings.company_id,
                     yclients_record_id=record_id,
@@ -727,18 +731,13 @@ class MyBookingsService:
         return settings
 
 
-def _build_reschedule_cancel_marker(datetime_iso: str, timezone_name: str) -> str:
-    value = _clean_text(datetime_iso).replace("T", " ")
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        parsed = None
-    if parsed is not None:
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=_zoneinfo(timezone_name))
-        local = parsed.astimezone(_zoneinfo(timezone_name))
-        return f"{RESCHEDULE_CANCEL_MARKER_PREFIX} {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}"
-    return RESCHEDULE_CANCEL_MARKER_PREFIX
+def _build_reschedule_cancel_marker(timezone_name: str) -> str:
+    return build_yclients_action_comment(
+        RESCHEDULE_CANCEL_MARKER_PREFIX,
+        timezone_name=timezone_name,
+        action_type="booking_reschedule_cancel_old",
+    )
+
 
 def format_booking_status(status: Any) -> str:
     """Return a friendly Russian booking status label."""

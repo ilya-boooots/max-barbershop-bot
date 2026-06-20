@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from math import ceil
 from time import perf_counter
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from max_barbershop_bot.integrations.yclients.dto import (
     YClientsBookingRecord,
@@ -33,7 +33,7 @@ from max_barbershop_bot.integrations.yclients.exceptions import (
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, normalize_phone
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettings, YClientsSettingsRepository
-from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
+from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, build_yclients_action_comment, normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -1351,52 +1351,15 @@ def build_booking_comment(
     timezone_name: str | None = DEFAULT_BRANCH_TIMEZONE,
     request_created_at: datetime | None = None,
 ) -> str:
-    """Build YClients booking comment with MAX marker and request creation time.
-
-    The timestamp is the moment the booking request is created from MAX, not the
-    selected appointment slot time. It is formatted strictly in the branch
-    timezone with a safe project fallback.
-    """
+    """Build YClients booking comment with MAX marker and branch-local action time."""
 
     marker_comment = (comment or MAX_BOOKING_COMMENT_MARKER).strip() or MAX_BOOKING_COMMENT_MARKER
-    raw_timezone = str(timezone_name).strip() if timezone_name is not None else ""
-    branch_timezone_present = bool(raw_timezone)
-    branch_timezone_value = raw_timezone or DEFAULT_BRANCH_TIMEZONE
-    try:
-        branch_zone = ZoneInfo(branch_timezone_value)
-    except ZoneInfoNotFoundError:
-        branch_timezone_value = DEFAULT_BRANCH_TIMEZONE
-        branch_zone = ZoneInfo(DEFAULT_BRANCH_TIMEZONE)
-        logger.warning(
-            "MAX booking comment diagnostic: branch_timezone_present=%s "
-            "branch_timezone_value=%s request_created_at_present=%s "
-            "formatted_request_created_at_present=%s",
-            branch_timezone_present,
-            branch_timezone_value,
-            request_created_at is not None,
-            False,
-        )
-    if not branch_timezone_present:
-        logger.warning(
-            "MAX booking comment diagnostic: branch_timezone_present=%s "
-            "branch_timezone_value=%s request_created_at_present=%s "
-            "formatted_request_created_at_present=%s",
-            branch_timezone_present,
-            branch_timezone_value,
-            request_created_at is not None,
-            False,
-        )
-
-    created_at = request_created_at or datetime.now(branch_zone)
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=branch_zone)
-    else:
-        created_at = created_at.astimezone(branch_zone)
-    formatted_created_at = created_at.strftime("%d.%m.%Y в %H:%M")
-    request_line = f"Заявка создана: {formatted_created_at}"
-    if request_line in marker_comment:
-        return marker_comment
-    return f"{marker_comment}\n{request_line}"
+    return build_yclients_action_comment(
+        marker_comment,
+        timezone_name=timezone_name,
+        action_type="booking_create",
+        action_at=request_created_at,
+    )
 
 
 def build_booking_payload(
