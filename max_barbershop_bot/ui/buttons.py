@@ -155,6 +155,7 @@ BOOKING_CANCEL_DRAFT_PAYLOAD = "booking:cancel_draft"
 BOOKING_PHONE_USE_REGISTERED_PAYLOAD = "booking:phone:use_registered"
 
 MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX = "my_bookings:details:"
+MY_BOOKINGS_PAGE_PAYLOAD_PREFIX = "my_bookings:page:"
 MY_BOOKINGS_CANCEL_START_PAYLOAD = "my_bookings:cancel:start"
 MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD = "my_bookings:cancel:confirm"
 MY_BOOKINGS_REPEAT_START_PAYLOAD = "my_bookings:repeat:start"
@@ -1039,7 +1040,13 @@ def my_bookings_keyboard(*, include_booking: bool = False) -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(rows)
 
 
-def my_bookings_list_keyboard(bookings: int | list[object], *, timezone_name: str | None = None, max_buttons: int = 20) -> MaxInlineKeyboard:
+def my_bookings_list_keyboard(
+    bookings: int | list[object],
+    *,
+    timezone_name: str | None = None,
+    max_buttons: int = 20,
+    page: int = 0,
+) -> MaxInlineKeyboard:
     """Build booking selection buttons with short indexed MAX payloads."""
 
     if isinstance(bookings, int):
@@ -1049,10 +1056,22 @@ def my_bookings_list_keyboard(bookings: int | list[object], *, timezone_name: st
         items = bookings
         bookings_count = len(items)
 
+    safe_page = max(page, 0)
+    page_size = max(1, max_buttons)
+    start = safe_page * page_size
+    end = min(start + page_size, max(bookings_count, 0))
+
     rows: list[list[MaxButton]] = []
-    for index in range(min(max(bookings_count, 0), max_buttons)):
+    for index in range(start, end):
         label = _my_booking_button_label(items[index], index=index, timezone_name=timezone_name) if index < len(items) else f"📋 Запись {index + 1}"
         rows.append([MaxButton(text=label, payload=indexed_payload(MY_BOOKINGS_DETAILS_PAYLOAD_PREFIX, index))])
+    navigation: list[MaxButton] = []
+    if safe_page > 0:
+        navigation.append(MaxButton(text="⬅️ Предыдущие", payload=f"{MY_BOOKINGS_PAGE_PAYLOAD_PREFIX}{safe_page - 1}"))
+    if end < bookings_count:
+        navigation.append(MaxButton(text="➡️ Следующие", payload=f"{MY_BOOKINGS_PAGE_PAYLOAD_PREFIX}{safe_page + 1}"))
+    if navigation:
+        rows.append(navigation)
     rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
