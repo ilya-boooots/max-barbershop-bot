@@ -20,7 +20,7 @@ from max_barbershop_bot.services.cancellation_recovery import create_cancellatio
 from max_barbershop_bot.services.booking import (
     BookingService,
     BookingServiceError,
-    build_booking_dates,
+    DATE_LOOKAHEAD_DAYS,
     format_date_button,
     format_slot_button,
 )
@@ -33,6 +33,8 @@ from max_barbershop_bot.services.my_bookings import (
     MY_BOOKING_RESCHEDULE_DATES_TEXT,
     MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT,
     MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT,
+    MY_BOOKING_RESCHEDULE_NO_DATES_TEXT,
+    MY_BOOKING_RESCHEDULE_STALE_SLOT_TEXT,
     MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT,
     MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT,
     MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT,
@@ -97,7 +99,7 @@ _RESCHEDULE_IN_PROGRESS_STATE_KEY = "booking_reschedule_in_progress"
 _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY = "reschedule_completed_old_record_id"
 _RESCHEDULE_NEW_RECORD_STATE_KEY = "reschedule_new_record_id"
 _MAX_BOOKING_BUTTONS = 20
-_MAX_RESCHEDULE_DATES = 14
+_MAX_RESCHEDULE_DATES = DATE_LOOKAHEAD_DAYS
 _MAX_RESCHEDULE_SLOTS = 30
 _CANCELLATION_MARKER_PREFIX = "Запись отменена из MAX бота"
 
@@ -398,13 +400,42 @@ async def handle_my_booking_reschedule_start(context: RouterContext) -> None:
         await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
         return
 
-    dates = build_booking_dates(days=_MAX_RESCHEDULE_DATES, timezone_name=str(reschedule_context.get("branch_timezone") or _timezone_from_state(context)))
+    try:
+        dates = await _load_valid_reschedule_dates(reschedule_context)
+    except BookingServiceError as exc:
+        logger.warning(
+            "MAX reschedule availability diagnostic: yclients_record_id_present=%s service_id_present=%s "
+            "staff_id_present=%s selected_date_present=%s selected_time_present=%s branch_timezone=%s "
+            "raw_dates_count=%s valid_dates_count=%s raw_slots_count=%s valid_slots_count=%s is_stale=%s "
+            "yclients_error_category=%s http_status=%s trace_id=%s",
+            bool(record_id),
+            bool(_clean_state_text(reschedule_context.get("service_id"))),
+            bool(_clean_state_text(reschedule_context.get("staff_id"))),
+            False,
+            False,
+            reschedule_context.get("branch_timezone"),
+            0,
+            0,
+            0,
+            0,
+            False,
+            exc.diagnostic.get("error_category") if hasattr(exc, "diagnostic") else None,
+            exc.diagnostic.get("http_status") if hasattr(exc, "diagnostic") else None,
+            exc.diagnostic.get("trace_id") if hasattr(exc, "diagnostic") else None,
+        )
+        state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_ERROR_SCREEN)
+        await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
+        return
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_CONTEXT_STATE_KEY, reschedule_context)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_DATES_STATE_KEY, [item.isoformat() for item in dates])
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_SLOTS_STATE_KEY, [])
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY, None)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, None)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
+    if not dates:
+        state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_DATES_SCREEN)
+        await context.send_text(MY_BOOKING_RESCHEDULE_NO_DATES_TEXT, keyboard=my_booking_reschedule_dates_keyboard([], lambda value: format_date_button(value, timezone_name=str(reschedule_context.get("branch_timezone") or _timezone_from_state(context)))))
+        return
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_DATES_SCREEN)
     await context.send_text(
         MY_BOOKING_RESCHEDULE_DATES_TEXT,
@@ -453,12 +484,38 @@ async def handle_my_booking_reschedule_date(context: RouterContext) -> None:
         await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
         return
 
+    if not slots:
+        logger.info(
+            "MAX reschedule availability diagnostic: yclients_record_id_present=%s service_id_present=%s "
+            "staff_id_present=%s selected_date_present=%s selected_time_present=%s branch_timezone=%s "
+            "raw_dates_count=%s valid_dates_count=%s raw_slots_count=%s valid_slots_count=%s is_stale=%s "
+            "yclients_error_category=%s http_status=%s trace_id=%s",
+            bool(reschedule_context.get("yclients_record_id")),
+            bool(service_id),
+            bool(staff_id),
+            bool(new_booking_date),
+            False,
+            reschedule_context.get("branch_timezone"),
+            len(dates),
+            len(dates),
+            0,
+            0,
+            True,
+            None,
+            None,
+            None,
+        )
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY, None)
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_SLOTS_STATE_KEY, [])
+        await context.send_text(MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT)
+        await _reload_reschedule_dates(context, reschedule_context)
+        return
+
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY, new_booking_date)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_SLOTS_STATE_KEY, slots[:_MAX_RESCHEDULE_SLOTS])
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, None)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_SLOTS_SCREEN)
-    text = MY_BOOKING_RESCHEDULE_SLOTS_TEXT if slots else MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT
-    await context.send_text(text, keyboard=my_booking_reschedule_slots_keyboard(slots[:_MAX_RESCHEDULE_SLOTS], format_slot_button))
+    await context.send_text(MY_BOOKING_RESCHEDULE_SLOTS_TEXT, keyboard=my_booking_reschedule_slots_keyboard(slots[:_MAX_RESCHEDULE_SLOTS], format_slot_button))
 
 
 async def handle_my_booking_reschedule_slot(context: RouterContext) -> None:
@@ -508,6 +565,10 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
     selected_booking = _selected_booking(context)
     record_id = _clean_state_text(reschedule_context.get("yclients_record_id"))
     new_datetime = _clean_state_text(slot_data.get("new_datetime"))
+    service_id = _clean_state_text(reschedule_context.get("service_id"))
+    staff_id = _clean_state_text(reschedule_context.get("staff_id"))
+    new_date = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY))
+    new_time = _clean_state_text(slot_data.get("new_time"))
     if not record_id or not new_datetime:
         await context.answer_callback()
         await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
@@ -531,6 +592,48 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
         await context.answer_callback()
         await context.send_text(MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT)
         return
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    try:
+        current_slots = await booking_service.get_available_slots(
+            yclients_service_id=service_id,
+            yclients_master_id=staff_id,
+            booking_date=new_date,
+        )
+    except BookingServiceError as exc:
+        logger.warning(
+            "MAX reschedule availability diagnostic: yclients_record_id_present=%s service_id_present=%s "
+            "staff_id_present=%s selected_date_present=%s selected_time_present=%s branch_timezone=%s "
+            "raw_dates_count=%s valid_dates_count=%s raw_slots_count=%s valid_slots_count=%s is_stale=%s "
+            "yclients_error_category=%s http_status=%s trace_id=%s",
+            bool(record_id), bool(service_id), bool(staff_id), bool(new_date), bool(new_time),
+            reschedule_context.get("branch_timezone"), 0, 0, 0, 0, True,
+            exc.diagnostic.get("error_category") if hasattr(exc, "diagnostic") else None,
+            exc.diagnostic.get("http_status") if hasattr(exc, "diagnostic") else None,
+            exc.diagnostic.get("trace_id") if hasattr(exc, "diagnostic") else None,
+        )
+        await context.answer_callback()
+        await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
+        return
+    if not _slot_available(current_slots, new_time, new_datetime):
+        await context.answer_callback()
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, None)
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_SLOTS_STATE_KEY, current_slots[:_MAX_RESCHEDULE_SLOTS])
+        logger.info(
+            "MAX reschedule availability diagnostic: yclients_record_id_present=%s service_id_present=%s "
+            "staff_id_present=%s selected_date_present=%s selected_time_present=%s branch_timezone=%s "
+            "raw_dates_count=%s valid_dates_count=%s raw_slots_count=%s valid_slots_count=%s is_stale=%s "
+            "yclients_error_category=%s http_status=%s trace_id=%s",
+            bool(record_id), bool(service_id), bool(staff_id), bool(new_date), bool(new_time),
+            reschedule_context.get("branch_timezone"), 0, 0, len(current_slots), len(current_slots), True, None, None, None,
+        )
+        await context.send_text(MY_BOOKING_RESCHEDULE_STALE_SLOT_TEXT)
+        if current_slots:
+            await _show_reschedule_slots_from_state(context)
+        else:
+            await _reload_reschedule_dates(context, reschedule_context)
+        return
+
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, True)
     await context.answer_callback()
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
@@ -655,6 +758,65 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
         format_bookings_list_screen(result.bookings, timezone_name=result.branch_timezone),
         keyboard=my_bookings_list_keyboard(result.bookings, timezone_name=result.branch_timezone, max_buttons=_MAX_BOOKING_BUTTONS),
     )
+
+
+async def _load_valid_reschedule_dates(reschedule_context: dict[str, Any]) -> list[Any]:
+    service_id = _clean_state_text(reschedule_context.get("service_id"))
+    staff_id = _clean_state_text(reschedule_context.get("staff_id"))
+    timezone_name = str(reschedule_context.get("branch_timezone") or DEFAULT_BRANCH_TIMEZONE)
+    if not service_id or not staff_id:
+        logger.info(
+            "MAX reschedule availability diagnostic: yclients_record_id_present=%s service_id_present=%s "
+            "staff_id_present=%s selected_date_present=%s selected_time_present=%s branch_timezone=%s "
+            "raw_dates_count=%s valid_dates_count=%s raw_slots_count=%s valid_slots_count=%s is_stale=%s "
+            "yclients_error_category=%s http_status=%s trace_id=%s",
+            bool(reschedule_context.get("yclients_record_id")), bool(service_id), bool(staff_id), False, False,
+            timezone_name, 0, 0, 0, 0, False, None, None, None,
+        )
+        return []
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    dates = await booking_service.get_available_dates_for_selection(
+        yclients_service_id=service_id,
+        yclients_master_id=staff_id,
+        days=_MAX_RESCHEDULE_DATES,
+    )
+    logger.info(
+        "MAX reschedule availability diagnostic: yclients_record_id_present=%s service_id_present=%s "
+        "staff_id_present=%s selected_date_present=%s selected_time_present=%s branch_timezone=%s "
+        "raw_dates_count=%s valid_dates_count=%s raw_slots_count=%s valid_slots_count=%s is_stale=%s "
+        "yclients_error_category=%s http_status=%s trace_id=%s",
+        bool(reschedule_context.get("yclients_record_id")), True, True, False, False, timezone_name,
+        _MAX_RESCHEDULE_DATES, len(dates), 0, 0, False, None, None, None,
+    )
+    return dates
+
+
+async def _reload_reschedule_dates(context: RouterContext, reschedule_context: dict[str, Any]) -> None:
+    platform_user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    try:
+        dates = await _load_valid_reschedule_dates(reschedule_context)
+    except BookingServiceError as exc:
+        state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_ERROR_SCREEN)
+        await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
+        return
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_DATES_STATE_KEY, [item.isoformat() for item in dates])
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_SLOTS_STATE_KEY, [])
+    state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_DATES_SCREEN)
+    timezone_name = str(reschedule_context.get("branch_timezone") or _timezone_from_state(context))
+    await context.send_text(
+        MY_BOOKING_RESCHEDULE_DATES_TEXT if dates else MY_BOOKING_RESCHEDULE_NO_DATES_TEXT,
+        keyboard=my_booking_reschedule_dates_keyboard(dates, lambda value: format_date_button(value, timezone_name=timezone_name)),
+    )
+
+
+def _slot_available(slots: list[Any], selected_time: str, selected_datetime: str) -> bool:
+    for slot in slots:
+        slot_time = _clean_state_text(getattr(slot, "time", None))
+        slot_datetime = _clean_state_text(getattr(slot, "datetime_iso", None))
+        if slot_time == selected_time and (not selected_datetime or not slot_datetime or slot_datetime == selected_datetime):
+            return True
+    return False
 
 
 async def _show_reschedule_dates_from_state(context: RouterContext) -> None:
