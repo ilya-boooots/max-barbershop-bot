@@ -19,6 +19,7 @@ from max_barbershop_bot.integrations.yclients.exceptions import (
 )
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.integrations.yclients.utils import normalize_phone, safe_str
+from max_barbershop_bot.repositories.platform_attribution import PLATFORM_MAX, PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import User
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactsService
@@ -36,7 +37,7 @@ _MY_BOOKINGS_MAX_PAGES = 10
 
 MY_BOOKINGS_NO_PROFILE_TEXT = "Не получилось найти ваши данные для записей 🙏\n\nНажмите /start и пройдите регистрацию заново."
 MY_BOOKINGS_LOAD_ERROR_TEXT = "Не удалось загрузить ваши записи 🙏\n\nПожалуйста, попробуйте позже."
-MY_BOOKINGS_EMPTY_TEXT = "📭 У вас пока нет активных записей."
+MY_BOOKINGS_EMPTY_TEXT = "Пока у вас нет записей 🙏"
 MY_BOOKINGS_TITLE_TEXT = "📅 Ваши записи"
 MY_BOOKING_NOT_FOUND_TEXT = "Эта запись уже неактуальна 🙏\n\nОткройте список записей заново."
 MY_BOOKING_CANCEL_IN_PROGRESS_TEXT = "⏳ Уже выполняем действие, секундочку 🙂"
@@ -77,8 +78,12 @@ _STATUS_LABELS = {
     "visit": "Завершена",
     "no_show": "Неявка",
 }
-_CANCELLED_OR_PAST_STATUSES = {"cancelled", "canceled", "deleted", "done", "completed", "visit", "no_show", "noshow"}
-_ACTIVE_CANCELABLE_STATUSES = {"active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
+_CANCELLED_STATUSES = {"cancelled", "canceled", "cancel", "deleted", "delete", "removed"}
+_COMPLETED_VISIT_STATUSES = {"done", "completed", "complete", "visit", "visited", "arrived", "paid", "finished"}
+_NO_SHOW_STATUSES = {"no_show", "noshow", "not_come", "did_not_come"}
+_ACTIVE_BOOKING_STATUSES = {"active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
+_CANCELLED_OR_PAST_STATUSES = _CANCELLED_STATUSES | _COMPLETED_VISIT_STATUSES | _NO_SHOW_STATUSES
+_ACTIVE_CANCELABLE_STATUSES = _ACTIVE_BOOKING_STATUSES
 _CANCEL_CUTOFF_MINUTES = 10
 
 
@@ -218,11 +223,13 @@ class MyBookingsService:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 if not yclients_client_id and phone:
                     yclients_client_id = await _resolve_client_id_by_phone(yclients, settings.company_id, phone)
-                payload = await _fetch_all_client_records(
+                payload = await _fetch_all_relevant_records(
                     yclients,
                     company_id=settings.company_id,
                     yclients_client_id=yclients_client_id,
-                    phone=phone if not yclients_client_id else None,
+                    phone=phone,
+                    platform_user_id=platform_user_id,
+                    database_path=self._settings_repository.database_path,
                     start_date=(now.date() - timedelta(days=365)).isoformat(),
                     end_date=(now.date() + timedelta(days=365)).isoformat(),
                 )
@@ -258,6 +265,13 @@ class MyBookingsService:
             normalized_bookings = [item for item in bookings if item is not None]
             split = split_bookings_by_period(normalized_bookings, timezone_name=timezone_name, now=now)
             all_bookings = [*split.upcoming, *split.past]
+            hidden_cancelled_count = sum(1 for item in normalized_bookings if _normalize_status(item.raw_status) in _CANCELLED_STATUSES)
+            hidden_unknown_count = sum(
+                1
+                for item in normalized_bookings
+                if _normalize_status(item.raw_status) not in (_ACTIVE_BOOKING_STATUSES | _COMPLETED_VISIT_STATUSES | _CANCELLED_STATUSES | _NO_SHOW_STATUSES)
+                and not is_future_booking(item, timezone_name=timezone_name, now=now)
+            )
         except Exception as exc:  # noqa: BLE001 - bad contact/settings/payload shape must not make the callback silent.
             logger.warning(
                 "My bookings payload normalization failed: operation=get_my_bookings platform_user_id=%s "
@@ -268,6 +282,16 @@ class MyBookingsService:
                 type(exc).__name__,
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
+        logger.info(
+            "MAX my bookings status filter diagnostic: raw_records_count=%s active_count=%s history_count=%s "
+            "hidden_cancelled_count=%s hidden_unknown_count=%s branch_timezone=%s",
+            len(raw_rows),
+            len(split.upcoming),
+            len(split.past),
+            hidden_cancelled_count,
+            hidden_unknown_count,
+            timezone_name,
+        )
         logger.info(
             "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
             "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s "
@@ -789,10 +813,10 @@ def is_future_booking(
     timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
     now: datetime | None = None,
 ) -> bool:
-    """Return whether a record is future and not cancelled/completed."""
+    """Return whether a record is future and not explicitly cancelled/deleted."""
 
-    status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("status") or item.get("record_status") or item.get("state"))
-    if _clean_text(status).lower() in _CANCELLED_OR_PAST_STATUSES:
+    status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
+    if _normalize_status(status) in _CANCELLED_STATUSES:
         return False
     parsed = parse_booking_datetime(item, timezone_name=timezone_name)
     if parsed is None:
@@ -801,6 +825,37 @@ def is_future_booking(
     if current.tzinfo is None:
         current = current.replace(tzinfo=_zoneinfo(timezone_name))
     return parsed > current.astimezone(_zoneinfo(timezone_name))
+
+
+def is_completed_visit(
+    item: dict[str, Any] | MyBookingItem,
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether a record is a real completed past visit."""
+
+    raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
+    if _normalize_status(raw_status) not in _COMPLETED_VISIT_STATUSES:
+        return False
+    parsed = parse_booking_datetime(item, timezone_name=timezone_name)
+    if parsed is None:
+        return False
+    current = now or datetime.now(_zoneinfo(timezone_name))
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_zoneinfo(timezone_name))
+    return parsed < current.astimezone(_zoneinfo(timezone_name))
+
+
+def is_visible_my_booking(
+    item: dict[str, Any] | MyBookingItem,
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether a record belongs to active bookings or real visit history."""
+
+    return is_future_booking(item, timezone_name=timezone_name, now=now) or is_completed_visit(item, timezone_name=timezone_name, now=now)
 
 
 def is_booking_cancelable(
@@ -823,7 +878,7 @@ def is_booking_cancelable(
     if parsed - current <= timedelta(minutes=_CANCEL_CUTOFF_MINUTES):
         return False
     raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
-    normalized = _clean_text(raw_status).lower()
+    normalized = _normalize_status(raw_status)
     if normalized in {"неизвестен", "unknown", "—"}:
         return False
     return normalized in _ACTIVE_CANCELABLE_STATUSES
@@ -866,7 +921,7 @@ def split_bookings_by_period(
             continue
         if is_future_booking(item, timezone_name=timezone_name, now=current):
             upcoming.append(item)
-        else:
+        elif is_completed_visit(item, timezone_name=timezone_name, now=current):
             past.append(item)
 
     upcoming = sort_bookings_by_datetime(upcoming, timezone_name=timezone_name)
@@ -904,7 +959,7 @@ def format_bookings_list_screen(bookings: list[MyBookingItem], *, timezone_name:
     """Format a compact bookings list split into upcoming and past sections."""
 
     if not bookings:
-        return "📭 Записей пока нет.\n\nМожно выбрать удобное время и записаться на стрижку ✂️"
+        return f"{MY_BOOKINGS_TITLE_TEXT}\n\n{MY_BOOKINGS_EMPTY_TEXT}"
 
     split = split_bookings_by_period(bookings, timezone_name=timezone_name)
     parts = [MY_BOOKINGS_TITLE_TEXT, "Выберите запись, чтобы открыть детали 👇"]
@@ -915,7 +970,7 @@ def format_bookings_list_screen(bookings: list[MyBookingItem], *, timezone_name:
             parts.append(format_booking_list_item(item, index=index, timezone_name=timezone_name))
             index += 1
     if split.past:
-        parts.extend(["", "🕓 Прошедшие записи"])
+        parts.extend(["", "🕓 История визитов"])
         for item in split.past:
             parts.append(format_booking_list_item(item, index=index, timezone_name=timezone_name))
             index += 1
@@ -1162,8 +1217,6 @@ def _booking_from_payload(
     if not record_id or booking_datetime is None:
         return None
     raw_status = _clean_text(item.get("status") or item.get("record_status") or item.get("state")) or None
-    if raw_status is None and booking_datetime >= datetime.now(_zoneinfo(timezone_name)):
-        raw_status = "active"
     return MyBookingItem(
         yclients_record_id=record_id,
         booking_datetime=booking_datetime,
@@ -1197,7 +1250,72 @@ def _extract_record_rows(payload: dict[str, Any] | list[Any]) -> list[dict[str, 
 
 
 
-async def _fetch_all_client_records(
+async def _fetch_all_relevant_records(
+    yclients: YClientsServiceLayer,
+    *,
+    company_id: str | int,
+    yclients_client_id: str | None,
+    phone: str | None,
+    platform_user_id: str | None,
+    database_path: str,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, Any]]:
+    """Fetch records by all existing user links: client id, phone and MAX attribution."""
+
+    rows: list[dict[str, Any]] = []
+    if yclients_client_id:
+        rows.extend(
+            await _fetch_all_client_records_page_set(
+                yclients,
+                company_id=company_id,
+                yclients_client_id=yclients_client_id,
+                phone=None,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+    if phone:
+        rows.extend(
+            await _fetch_all_client_records_page_set(
+                yclients,
+                company_id=company_id,
+                yclients_client_id=None,
+                phone=phone,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+
+    for record_id in _platform_user_attributed_record_ids(database_path, platform_user_id):
+        try:
+            details = await yclients.get_booking_details(company_id=company_id, yclients_record_id=record_id)
+        except YClientsError:
+            logger.info(
+                "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
+                "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s "
+                "upcoming_count=%s past_count=%s rendered_buttons_count=%s state_map_size=%s page=%s page_size=%s "
+                "branch_timezone=%s",
+                bool(platform_user_id),
+                _mask_phone(phone),
+                bool(yclients_client_id),
+                len(rows),
+                len(rows),
+                0,
+                0,
+                0,
+                0,
+                "attribution_detail_skipped",
+                _MY_BOOKINGS_PAGE_SIZE,
+                "unknown",
+            )
+            continue
+        rows.extend(_extract_record_rows(details))
+
+    return _deduplicate_record_rows(rows)
+
+
+async def _fetch_all_client_records_page_set(
     yclients: YClientsServiceLayer,
     *,
     company_id: str | int,
@@ -1206,7 +1324,7 @@ async def _fetch_all_client_records(
     start_date: str,
     end_date: str,
 ) -> list[dict[str, Any]]:
-    """Fetch all available YClients record pages for the My bookings screen."""
+    """Fetch all pages for one YClients records filter set."""
 
     rows: list[dict[str, Any]] = []
     for page in range(1, _MY_BOOKINGS_MAX_PAGES + 1):
@@ -1225,7 +1343,43 @@ async def _fetch_all_client_records(
         rows.extend(page_rows)
         if len(page_rows) < _MY_BOOKINGS_PAGE_SIZE:
             break
-    return _deduplicate_record_rows(rows)
+    return rows
+
+
+def _platform_user_attributed_record_ids(database_path: str, platform_user_id: str | None) -> list[str]:
+    """Return locally attributed YClients record ids for this MAX user only."""
+
+    if not platform_user_id:
+        return []
+    try:
+        records = PlatformAttributionRepository(database_path).list_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+    except Exception as exc:  # noqa: BLE001 - attribution is an optional lookup source.
+        logger.info(
+            "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
+            "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s upcoming_count=%s "
+            "past_count=%s rendered_buttons_count=%s state_map_size=%s page=%s page_size=%s branch_timezone=%s",
+            True,
+            False,
+            False,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "attribution_lookup_failed",
+            _MY_BOOKINGS_PAGE_SIZE,
+            type(exc).__name__,
+        )
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        record_id = _clean_text(record.yclients_record_id)
+        if record_id and record_id not in seen:
+            seen.add(record_id)
+            result.append(record_id)
+    return result
 
 
 def _deduplicate_record_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1369,6 +1523,11 @@ def _to_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return result if result > 0 else None
+
+
+def _normalize_status(status: Any) -> str:
+    return _clean_text(status).lower().replace("-", "_").replace(" ", "_")
+
 
 def _is_safe_status(status: str) -> bool:
     if status.isdigit():

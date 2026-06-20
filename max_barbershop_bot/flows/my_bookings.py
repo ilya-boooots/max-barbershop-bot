@@ -61,6 +61,8 @@ from max_barbershop_bot.services.my_bookings import (
     build_new_datetime_iso,
     format_reschedule_success_text,
     is_booking_cancelable,
+    is_future_booking,
+    is_visible_my_booking,
     split_bookings_by_period,
 )
 from max_barbershop_bot.ui.buttons import (
@@ -90,6 +92,7 @@ from max_barbershop_bot.ui.buttons import (
     my_bookings_history_keyboard,
     my_bookings_keyboard,
     my_bookings_list_keyboard,
+    my_bookings_main_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -222,7 +225,7 @@ async def handle_my_bookings_page(context: RouterContext) -> None:
     end = min(start + _MAX_BOOKING_BUTTONS, len(bookings))
     await context.send_text(
         format_bookings_list_screen(bookings[start:end], timezone_name=timezone_name),
-        keyboard=my_bookings_list_keyboard(bookings, timezone_name=timezone_name, max_buttons=_MAX_BOOKING_BUTTONS, page=page),
+        keyboard=my_bookings_main_keyboard(bookings, timezone_name=timezone_name, max_buttons=_MAX_BOOKING_BUTTONS, page=page),
     )
 
 
@@ -270,12 +273,16 @@ async def handle_my_booking_details(context: RouterContext) -> None:
             bool(_booking_record_id(booking)),
             False,
         )
+    if not is_visible_my_booking(booking, timezone_name=timezone_name):
+        await context.send_text("Эта запись уже недоступна 🙏", keyboard=my_booking_cancel_result_keyboard())
+        return
     can_cancel = is_booking_cancelable(booking, timezone_name=timezone_name)
+    is_active = is_future_booking(booking, timezone_name=timezone_name)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking_display_data(booking, timezone_name=timezone_name))
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
     await context.send_text(
         format_booking_details_text(booking, timezone_name=timezone_name),
-        keyboard=my_booking_details_keyboard(can_cancel=can_cancel),
+        keyboard=my_booking_details_keyboard(can_cancel=can_cancel, is_active=is_active),
         attachments=_booking_master_photo_attachment(booking),
     )
 
@@ -796,9 +803,13 @@ async def handle_my_bookings_back(context: RouterContext) -> None:
         booking = _selected_booking(context)
         if booking is not None:
             state.set_current_screen(_user_id(context), _chat_id(context), state.MY_BOOKING_DETAILS_SCREEN)
+            timezone_name = _timezone_from_state(context)
             await context.send_text(
-                format_booking_details_text(booking, timezone_name=_timezone_from_state(context)),
-                keyboard=my_booking_details_keyboard(),
+                format_booking_details_text(booking, timezone_name=timezone_name),
+                keyboard=my_booking_details_keyboard(
+                    can_cancel=is_booking_cancelable(booking, timezone_name=timezone_name),
+                    is_active=is_future_booking(booking, timezone_name=timezone_name),
+                ),
                 attachments=_booking_master_photo_attachment(booking),
             )
             return
@@ -869,7 +880,7 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
 
     if result.is_empty:
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_EMPTY_SCREEN)
-        await context.send_text(format_bookings_list_screen([], timezone_name=result.branch_timezone), keyboard=my_bookings_keyboard(include_booking=True))
+        await context.send_text(format_bookings_list_screen([], timezone_name=result.branch_timezone), keyboard=my_bookings_main_keyboard([]))
         return
 
     rendered_buttons_count = min(len(rendered_split.upcoming), _MAX_BOOKING_BUTTONS)
@@ -891,20 +902,13 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
         result.branch_timezone,
     )
 
-    if not rendered_split.upcoming:
+    if not rendered_split.upcoming and not rendered_split.past:
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_EMPTY_SCREEN)
-        await context.send_text("📭 У вас пока нет активных записей.", keyboard=my_bookings_history_keyboard(page=0, has_next=len(rendered_split.past) > 5))
-        return
-
-    active = rendered_split.upcoming[0]
-    selected = booking_display_data(active, timezone_name=result.branch_timezone)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, selected)
-    state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
-    can_cancel = is_booking_cancelable(active, timezone_name=result.branch_timezone)
+    else:
+        state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_SCREEN)
     await context.send_text(
-        format_booking_details_text(active, timezone_name=result.branch_timezone, title="📅 Моя ближайшая запись"),
-        keyboard=my_booking_entry_keyboard(can_cancel=can_cancel, show_all=len(rendered_split.upcoming) > 1),
-        attachments=_booking_master_photo_attachment(active),
+        format_bookings_list_screen(result.bookings, timezone_name=result.branch_timezone),
+        keyboard=my_bookings_main_keyboard(result.bookings, timezone_name=result.branch_timezone, max_buttons=_MAX_BOOKING_BUTTONS, page=0),
     )
 
 
