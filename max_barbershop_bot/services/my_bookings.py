@@ -37,7 +37,7 @@ _MY_BOOKINGS_MAX_PAGES = 10
 
 MY_BOOKINGS_NO_PROFILE_TEXT = "Не получилось найти ваши данные для записей 🙏\n\nНажмите /start и пройдите регистрацию заново."
 MY_BOOKINGS_LOAD_ERROR_TEXT = "Не удалось загрузить ваши записи 🙏\n\nПожалуйста, попробуйте позже."
-MY_BOOKINGS_EMPTY_TEXT = "📭 У вас пока нет активных записей."
+MY_BOOKINGS_EMPTY_TEXT = "Пока у вас нет записей 🙏"
 MY_BOOKINGS_TITLE_TEXT = "📅 Ваши записи"
 MY_BOOKING_NOT_FOUND_TEXT = "Эта запись уже неактуальна 🙏\n\nОткройте список записей заново."
 MY_BOOKING_CANCEL_IN_PROGRESS_TEXT = "⏳ Уже выполняем действие, секундочку 🙂"
@@ -78,8 +78,12 @@ _STATUS_LABELS = {
     "visit": "Завершена",
     "no_show": "Неявка",
 }
-_CANCELLED_OR_PAST_STATUSES = {"cancelled", "canceled", "deleted", "done", "completed", "visit", "no_show", "noshow"}
-_ACTIVE_CANCELABLE_STATUSES = {"active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
+_CANCELLED_STATUSES = {"cancelled", "canceled", "cancel", "deleted", "delete", "removed"}
+_COMPLETED_VISIT_STATUSES = {"done", "completed", "complete", "visit", "visited", "arrived", "paid", "finished"}
+_NO_SHOW_STATUSES = {"no_show", "noshow", "not_come", "did_not_come"}
+_ACTIVE_BOOKING_STATUSES = {"active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
+_CANCELLED_OR_PAST_STATUSES = _CANCELLED_STATUSES | _COMPLETED_VISIT_STATUSES | _NO_SHOW_STATUSES
+_ACTIVE_CANCELABLE_STATUSES = _ACTIVE_BOOKING_STATUSES
 _CANCEL_CUTOFF_MINUTES = 10
 
 
@@ -261,6 +265,12 @@ class MyBookingsService:
             normalized_bookings = [item for item in bookings if item is not None]
             split = split_bookings_by_period(normalized_bookings, timezone_name=timezone_name, now=now)
             all_bookings = [*split.upcoming, *split.past]
+            hidden_cancelled_count = sum(1 for item in normalized_bookings if _normalize_status(item.raw_status) in _CANCELLED_STATUSES)
+            hidden_unknown_count = sum(
+                1
+                for item in normalized_bookings
+                if _normalize_status(item.raw_status) not in (_ACTIVE_BOOKING_STATUSES | _COMPLETED_VISIT_STATUSES | _CANCELLED_STATUSES | _NO_SHOW_STATUSES)
+            )
         except Exception as exc:  # noqa: BLE001 - bad contact/settings/payload shape must not make the callback silent.
             logger.warning(
                 "My bookings payload normalization failed: operation=get_my_bookings platform_user_id=%s "
@@ -271,6 +281,16 @@ class MyBookingsService:
                 type(exc).__name__,
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
+        logger.info(
+            "MAX my bookings status filter diagnostic: raw_records_count=%s active_count=%s history_count=%s "
+            "hidden_cancelled_count=%s hidden_unknown_count=%s branch_timezone=%s",
+            len(raw_rows),
+            len(split.upcoming),
+            len(split.past),
+            hidden_cancelled_count,
+            hidden_unknown_count,
+            timezone_name,
+        )
         logger.info(
             "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
             "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s "
@@ -794,8 +814,8 @@ def is_future_booking(
 ) -> bool:
     """Return whether a record is future and not cancelled/completed."""
 
-    status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("status") or item.get("record_status") or item.get("state"))
-    if _clean_text(status).lower() in _CANCELLED_OR_PAST_STATUSES:
+    status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
+    if _normalize_status(status) not in _ACTIVE_BOOKING_STATUSES:
         return False
     parsed = parse_booking_datetime(item, timezone_name=timezone_name)
     if parsed is None:
@@ -804,6 +824,37 @@ def is_future_booking(
     if current.tzinfo is None:
         current = current.replace(tzinfo=_zoneinfo(timezone_name))
     return parsed > current.astimezone(_zoneinfo(timezone_name))
+
+
+def is_completed_visit(
+    item: dict[str, Any] | MyBookingItem,
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether a record is a real completed past visit."""
+
+    raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
+    if _normalize_status(raw_status) not in _COMPLETED_VISIT_STATUSES:
+        return False
+    parsed = parse_booking_datetime(item, timezone_name=timezone_name)
+    if parsed is None:
+        return False
+    current = now or datetime.now(_zoneinfo(timezone_name))
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_zoneinfo(timezone_name))
+    return parsed < current.astimezone(_zoneinfo(timezone_name))
+
+
+def is_visible_my_booking(
+    item: dict[str, Any] | MyBookingItem,
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether a record belongs to active bookings or real visit history."""
+
+    return is_future_booking(item, timezone_name=timezone_name, now=now) or is_completed_visit(item, timezone_name=timezone_name, now=now)
 
 
 def is_booking_cancelable(
@@ -826,7 +877,7 @@ def is_booking_cancelable(
     if parsed - current <= timedelta(minutes=_CANCEL_CUTOFF_MINUTES):
         return False
     raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
-    normalized = _clean_text(raw_status).lower()
+    normalized = _normalize_status(raw_status)
     if normalized in {"неизвестен", "unknown", "—"}:
         return False
     return normalized in _ACTIVE_CANCELABLE_STATUSES
@@ -869,7 +920,7 @@ def split_bookings_by_period(
             continue
         if is_future_booking(item, timezone_name=timezone_name, now=current):
             upcoming.append(item)
-        else:
+        elif is_completed_visit(item, timezone_name=timezone_name, now=current):
             past.append(item)
 
     upcoming = sort_bookings_by_datetime(upcoming, timezone_name=timezone_name)
@@ -907,7 +958,7 @@ def format_bookings_list_screen(bookings: list[MyBookingItem], *, timezone_name:
     """Format a compact bookings list split into upcoming and past sections."""
 
     if not bookings:
-        return "📭 Записей пока нет.\n\nМожно выбрать удобное время и записаться на стрижку ✂️"
+        return f"{MY_BOOKINGS_TITLE_TEXT}\n\n{MY_BOOKINGS_EMPTY_TEXT}"
 
     split = split_bookings_by_period(bookings, timezone_name=timezone_name)
     parts = [MY_BOOKINGS_TITLE_TEXT, "Выберите запись, чтобы открыть детали 👇"]
@@ -918,7 +969,7 @@ def format_bookings_list_screen(bookings: list[MyBookingItem], *, timezone_name:
             parts.append(format_booking_list_item(item, index=index, timezone_name=timezone_name))
             index += 1
     if split.past:
-        parts.extend(["", "🕓 Прошедшие записи"])
+        parts.extend(["", "🕓 История визитов"])
         for item in split.past:
             parts.append(format_booking_list_item(item, index=index, timezone_name=timezone_name))
             index += 1
@@ -1165,8 +1216,6 @@ def _booking_from_payload(
     if not record_id or booking_datetime is None:
         return None
     raw_status = _clean_text(item.get("status") or item.get("record_status") or item.get("state")) or None
-    if raw_status is None and booking_datetime >= datetime.now(_zoneinfo(timezone_name)):
-        raw_status = "active"
     return MyBookingItem(
         yclients_record_id=record_id,
         booking_datetime=booking_datetime,
@@ -1473,6 +1522,11 @@ def _to_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return result if result > 0 else None
+
+
+def _normalize_status(status: Any) -> str:
+    return _clean_text(status).lower().replace("-", "_").replace(" ", "_")
+
 
 def _is_safe_status(status: str) -> bool:
     if status.isdigit():
