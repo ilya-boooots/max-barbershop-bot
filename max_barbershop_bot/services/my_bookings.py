@@ -864,7 +864,7 @@ def split_bookings_by_period(
         booking_datetime = parse_booking_datetime(item, timezone_name=timezone_name)
         if booking_datetime is None:
             continue
-        if booking_datetime > current:
+        if is_future_booking(item, timezone_name=timezone_name, now=current):
             upcoming.append(item)
         else:
             past.append(item)
@@ -922,6 +922,26 @@ def format_bookings_list_screen(bookings: list[MyBookingItem], *, timezone_name:
     return "\n".join(parts)
 
 
+def format_visit_history_screen(bookings: list[MyBookingItem | dict[str, Any]], *, timezone_name: str, page: int = 0, page_size: int = 5) -> str:
+    """Format past bookings like the Telegram visit history screen."""
+
+    if not bookings:
+        return "🕘 История визитов пока пуста."
+
+    start = max(page, 0) * max(page_size, 1)
+    shown = bookings[start : start + max(page_size, 1)]
+    lines = ["🕘 История визитов", ""]
+    for idx, booking in enumerate(shown, start=start + 1):
+        display = booking_display_data(booking, timezone_name=timezone_name)
+        lines.append(f"{idx}. ✂️ {display['service_name']}")
+        lines.append(f"   👤 {display['master_name'] or 'Любой мастер'}")
+        lines.append(f"   📅 {display['date']} {display['time']}")
+        lines.append(f"   💰 {display['price'] or '—'}")
+        if display.get("status"):
+            lines.append(f"   🧾 {display['status']}")
+    return "\n".join(lines)
+
+
 def format_bookings_screen(bookings: list[MyBookingItem], *, timezone_name: str) -> str:
     """Format the full future bookings screen."""
 
@@ -931,13 +951,18 @@ def format_bookings_screen(bookings: list[MyBookingItem], *, timezone_name: str)
     return f"{MY_BOOKINGS_TITLE_TEXT}\n\n" + "\n\n".join(cards)
 
 
-def format_booking_details_text(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
+def format_booking_details_text(
+    booking: MyBookingItem | dict[str, Any],
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+    title: str = "📋 Активная запись",
+) -> str:
     """Format selected booking details in the Telegram reference style."""
 
     display = booking_display_data(booking, timezone_name=timezone_name)
     return "\n".join(
         [
-            "📋 Активная запись",
+            title,
             "",
             f"✂️ Услуга: {display['service_name']}",
             f"👤 Мастер: {display['master_name'] or 'Любой мастер'}",
@@ -974,8 +999,10 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
             "service_name": booking.service_name,
             "master_name": booking.master_name,
             "yclients_staff_id": booking.yclients_staff_id,
+            "datetime": booking_datetime.isoformat(),
             "date": booking_datetime.strftime("%d.%m.%Y"),
             "time": booking_datetime.strftime("%H:%M"),
+            "raw_status": booking.raw_status,
             "status": format_booking_status(booking.raw_status or booking.status),
             "duration_minutes": str(booking.duration_minutes) if booking.duration_minutes else None,
             "price": booking.price,
@@ -995,9 +1022,11 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
         "service_name": _clean_text(booking.get("service_name")) or _extract_service_name(booking),
         "master_name": _clean_text(booking.get("master_name")) or _extract_master_name(booking),
         "yclients_staff_id": _clean_text(booking.get("yclients_staff_id") or booking.get("staff_id") or booking.get("master_id")) or _extract_staff_id(booking),
+        "datetime": _clean_text(booking.get("datetime") or booking.get("booking_datetime")) or None,
         "date": booking_date or "—",
         "time": booking_time or "—",
-        "status": format_booking_status(booking.get("status") or booking.get("raw_status")),
+        "raw_status": _clean_text(booking.get("raw_status")) or None,
+        "status": format_booking_status(booking.get("raw_status") or booking.get("status")),
         "duration_minutes": _clean_text(booking.get("duration_minutes")) or None,
         "price": _clean_text(booking.get("price")) or None,
         "address": _clean_text(booking.get("address")) or None,
