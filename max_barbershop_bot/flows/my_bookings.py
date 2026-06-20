@@ -811,12 +811,33 @@ async def _reload_reschedule_dates(context: RouterContext, reschedule_context: d
 
 
 def _slot_available(slots: list[Any], selected_time: str, selected_datetime: str) -> bool:
+    normalized_selected_time = _slot_time_from_values(selected_time, selected_datetime)
+    if not normalized_selected_time:
+        return False
     for slot in slots:
-        slot_time = _clean_state_text(getattr(slot, "time", None))
-        slot_datetime = _clean_state_text(getattr(slot, "datetime_iso", None))
-        if slot_time == selected_time and (not selected_datetime or not slot_datetime or slot_datetime == selected_datetime):
+        slot_time = _slot_time_from_values(_slot_value(slot, "time"), _slot_value(slot, "datetime_iso") or _slot_value(slot, "datetime"))
+        if slot_time == normalized_selected_time:
             return True
     return False
+
+
+def _slot_time_from_values(slot_time: Any, datetime_value: Any = None) -> str:
+    raw_time = _clean_state_text(slot_time)
+    if len(raw_time) >= 5 and raw_time[2] == ":" and raw_time[:2].isdigit() and raw_time[3:5].isdigit():
+        return raw_time[:5]
+    raw_datetime = _clean_state_text(datetime_value)
+    for separator in ("T", " "):
+        if separator in raw_datetime:
+            candidate = raw_datetime.split(separator, 1)[1][:5]
+            if len(candidate) == 5 and candidate[2] == ":" and candidate.replace(":", "").isdigit():
+                return candidate
+    return ""
+
+
+def _slot_value(slot: Any, key: str) -> Any:
+    if isinstance(slot, dict):
+        return slot.get(key)
+    return getattr(slot, key, None)
 
 
 async def _show_reschedule_dates_from_state(context: RouterContext) -> None:
