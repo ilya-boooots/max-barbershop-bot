@@ -31,6 +31,9 @@ from max_barbershop_bot.services.yclients_context import (
 
 logger = logging.getLogger(__name__)
 
+_MY_BOOKINGS_PAGE_SIZE = 200
+_MY_BOOKINGS_MAX_PAGES = 10
+
 MY_BOOKINGS_NO_PROFILE_TEXT = "Не получилось найти ваши данные для записей 🙏\n\nНажмите /start и пройдите регистрацию заново."
 MY_BOOKINGS_LOAD_ERROR_TEXT = "Не удалось загрузить ваши записи 🙏\n\nПожалуйста, попробуйте позже."
 MY_BOOKINGS_EMPTY_TEXT = "📭 У вас пока нет активных записей."
@@ -215,14 +218,13 @@ class MyBookingsService:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
                 if not yclients_client_id and phone:
                     yclients_client_id = await _resolve_client_id_by_phone(yclients, settings.company_id, phone)
-                payload = await yclients.get_client_records(
+                payload = await _fetch_all_client_records(
+                    yclients,
                     company_id=settings.company_id,
                     yclients_client_id=yclients_client_id,
                     phone=phone if not yclients_client_id else None,
                     start_date=(now.date() - timedelta(days=365)).isoformat(),
                     end_date=(now.date() + timedelta(days=365)).isoformat(),
-                    page=1,
-                    count=200,
                 )
         except YClientsError as exc:
             logger.warning(
@@ -248,9 +250,10 @@ class MyBookingsService:
 
         try:
             contacts = await ContactsService(self._settings_repository).get_contacts()
+            raw_rows = _deduplicate_record_rows(_extract_record_rows(payload))
             bookings = [
                 _booking_from_payload(item, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone)
-                for item in _extract_record_rows(payload)
+                for item in raw_rows
             ]
             normalized_bookings = [item for item in bookings if item is not None]
             split = split_bookings_by_period(normalized_bookings, timezone_name=timezone_name, now=now)
@@ -266,14 +269,21 @@ class MyBookingsService:
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
         logger.info(
-            "My bookings loaded: operation=get_my_bookings platform_user_id=%s "
-            "yclients_client_id_present=%s phone_present=%s bookings_count=%s upcoming_bookings_count=%s past_bookings_count=%s branch_timezone=%s",
-            platform_user_id,
+            "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
+            "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s "
+            "upcoming_count=%s past_count=%s rendered_buttons_count=%s state_map_size=%s page=%s page_size=%s "
+            "branch_timezone=%s",
+            bool(platform_user_id),
+            _mask_phone(phone),
             bool(yclients_client_id),
-            bool(phone),
-            len(all_bookings),
+            len(raw_rows),
+            len(normalized_bookings),
             len(split.upcoming),
             len(split.past),
+            min(len(all_bookings), len(all_bookings)),
+            len(all_bookings),
+            "all",
+            _MY_BOOKINGS_PAGE_SIZE,
             timezone_name,
         )
         return MyBookingsResult(
@@ -1155,6 +1165,62 @@ def _extract_record_rows(payload: dict[str, Any] | list[Any]) -> list[dict[str, 
             if nested:
                 return nested
     return [payload]
+
+
+
+async def _fetch_all_client_records(
+    yclients: YClientsServiceLayer,
+    *,
+    company_id: str | int,
+    yclients_client_id: str | None,
+    phone: str | None,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, Any]]:
+    """Fetch all available YClients record pages for the My bookings screen."""
+
+    rows: list[dict[str, Any]] = []
+    for page in range(1, _MY_BOOKINGS_MAX_PAGES + 1):
+        payload = await yclients.get_client_records(
+            company_id=company_id,
+            yclients_client_id=yclients_client_id,
+            phone=phone,
+            start_date=start_date,
+            end_date=end_date,
+            page=page,
+            count=_MY_BOOKINGS_PAGE_SIZE,
+        )
+        page_rows = _extract_record_rows(payload)
+        if not page_rows:
+            break
+        rows.extend(page_rows)
+        if len(page_rows) < _MY_BOOKINGS_PAGE_SIZE:
+            break
+    return _deduplicate_record_rows(rows)
+
+
+def _deduplicate_record_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep all unique records without collapsing different visits for one client."""
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        record_id = _clean_text(row.get("id") or row.get("record_id") or row.get("booking_id") or row.get("visit_id"))
+        key = record_id or f"row:{index}"
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
+def _mask_phone(phone: str | None) -> str:
+    normalized = normalize_phone(phone or "") if phone else ""
+    if not normalized:
+        return "False"
+    digits = "".join(ch for ch in normalized if ch.isdigit())
+    suffix = digits[-2:] if len(digits) >= 2 else "**"
+    return f"***{suffix}"
 
 
 def _extract_service_name(item: dict[str, Any]) -> str:
