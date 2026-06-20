@@ -90,6 +90,28 @@ class AuditLogRepository:
             ).fetchall()
         return [_row_to_entry(row) for row in rows]
 
+    def search(self, query: str, *, limit: int = 20) -> list[AuditLogEntry]:
+        """Search recent audit events by user id, event type or metadata text."""
+
+        needle = f"%{query.strip()}%"
+        if needle == "%%":
+            return []
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM audit_log
+                WHERE event_type LIKE ?
+                   OR actor_platform_user_id LIKE ?
+                   OR target_platform_user_id LIKE ?
+                   OR target_max_user_id LIKE ?
+                   OR metadata_json LIKE ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (needle, needle, needle, needle, needle, max(1, min(limit, 50))),
+            ).fetchall()
+        return [_row_to_entry(row) for row in rows]
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path)
         connection.row_factory = sqlite3.Row
