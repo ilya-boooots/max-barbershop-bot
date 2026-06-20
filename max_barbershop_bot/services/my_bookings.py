@@ -270,6 +270,7 @@ class MyBookingsService:
                 1
                 for item in normalized_bookings
                 if _normalize_status(item.raw_status) not in (_ACTIVE_BOOKING_STATUSES | _COMPLETED_VISIT_STATUSES | _CANCELLED_STATUSES | _NO_SHOW_STATUSES)
+                and not is_future_booking(item, timezone_name=timezone_name, now=now)
             )
         except Exception as exc:  # noqa: BLE001 - bad contact/settings/payload shape must not make the callback silent.
             logger.warning(
@@ -812,10 +813,10 @@ def is_future_booking(
     timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
     now: datetime | None = None,
 ) -> bool:
-    """Return whether a record is future and not cancelled/completed."""
+    """Return whether a record is future and not explicitly cancelled/deleted."""
 
     status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
-    if _normalize_status(status) not in _ACTIVE_BOOKING_STATUSES:
+    if _normalize_status(status) in _CANCELLED_STATUSES:
         return False
     parsed = parse_booking_datetime(item, timezone_name=timezone_name)
     if parsed is None:
