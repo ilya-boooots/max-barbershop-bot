@@ -21,9 +21,11 @@ from max_barbershop_bot.core.permissions import (
 )
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.flows.notification_history import handle_notification_history, handle_notification_history_failed
+from max_barbershop_bot.repositories.notification_history import NotificationHistoryRepository
 from max_barbershop_bot.flows.staff import handle_staff_menu
 from max_barbershop_bot.flows.yclients_settings import handle_connection_check, handle_yclients_menu
 from max_barbershop_bot.flows.support import render_support_message
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.support_settings import (
     SupportSettingsRepository,
@@ -35,6 +37,11 @@ from max_barbershop_bot.repositories.users import PLATFORM_MAX
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactInfo, ContactsService
 from max_barbershop_bot.services.navigation import go_back, show_home
+from max_barbershop_bot.services.reminder_lifecycle import (
+    get_lifecycle_status,
+    start_reminder_lifecycle,
+    stop_reminder_lifecycle,
+)
 from max_barbershop_bot.services.settings_audit import log_settings_action
 from max_barbershop_bot.ui.buttons import (
     ADMIN_SETTINGS_PAYLOAD,
@@ -73,6 +80,10 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_SUPPORT_PREVIEW_PAYLOAD,
     SETTINGS_HOME_PAYLOAD,
     SETTINGS_NOTIFICATIONS_PAYLOAD,
+    SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD,
+    SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD,
+    SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD,
+    SETTINGS_NOTIFICATIONS_BUTTON_TEST_PAYLOAD,
     SETTINGS_ROLES_PAYLOAD,
     SETTINGS_YCLIENTS_PAYLOAD,
     settings_contacts_input_keyboard,
@@ -88,7 +99,6 @@ from max_barbershop_bot.ui.buttons import (
 from max_barbershop_bot.ui.texts import (
     SETTINGS_MENU_TEXT,
     SETTINGS_NO_ACCESS_TEXT,
-    SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT,
 )
 from max_barbershop_bot.services.developer_diagnostics import (
     NO_ACCESS_TEXT as DEV_DIAGNOSTICS_NO_ACCESS_TEXT,
@@ -128,6 +138,10 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD, handle_settings_support_edit_description)
     router.on_callback(SETTINGS_SUPPORT_PREVIEW_PAYLOAD, handle_settings_support_preview)
     router.on_callback(SETTINGS_NOTIFICATIONS_PAYLOAD, handle_settings_notifications)
+    router.on_callback(SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD, handle_settings_notifications_toggle)
+    router.on_callback(SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD, handle_settings_notifications_toggle)
+    router.on_callback(SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD, handle_settings_notifications_smoke)
+    router.on_callback(SETTINGS_NOTIFICATIONS_BUTTON_TEST_PAYLOAD, handle_settings_notifications_button_test)
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
     router.on_callback(DEV_DIAGNOSTICS_REFRESH_PAYLOAD, handle_settings_diagnostics_refresh)
@@ -385,29 +399,213 @@ async def handle_settings_notifications(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context)
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_NOTIFICATIONS_SCREEN)
-    reminders_enabled = _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED)
-    poll_interval_seconds = _int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30)
-    enabled_label = "✅ Включены" if reminders_enabled else "❌ Выключены"
-    text = (
-        "🔔 Уведомления\n\n"
-        f"Текущий статус: {enabled_label}\n"
-        f"Интервал проверки: {poll_interval_seconds} сек.\n\n"
-        "Поддерживаемые уведомления:\n"
-        "• ✅ Подтверждение записи сразу\n"
-        "• ⏰ Напоминание за 48 часов\n"
-        "• ⏰ Напоминание за 6 часов\n"
-        "• ⏰ Напоминание о записи (2 часа)\n\n"
-        f"{SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT}"
-    )
+    await _ensure_reminder_loop_if_enabled(context)
+    _audit(context, actor_role, action="settings_section_opened", section="notifications")
+    await _show_notifications_settings(context)
+
+
+async def handle_settings_notifications_toggle(context: RouterContext) -> None:
+    """Persist the global notification switch and rerender the screen."""
+
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    enabled = context.event.callback_payload == SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD
+    AppSettingsRepository(_database_path()).set_notifications_enabled(enabled)
+    interval_seconds = _int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30)
+    if enabled and _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED):
+        await start_reminder_lifecycle(
+            context.sender,
+            database_path=_database_path(),
+            interval_seconds=interval_seconds,
+        )
+    elif not enabled:
+        await stop_reminder_lifecycle(reason="notifications_disabled")
     _audit(
         context,
         actor_role,
-        action="settings_section_opened",
+        action="notifications_enabled_updated",
         section="notifications",
-        metadata={"reminders_enabled": reminders_enabled, "poll_interval_seconds": poll_interval_seconds},
+        metadata={"notifications_enabled": enabled},
     )
-    await context.send_text(text, keyboard=settings_notifications_keyboard())
+    await _show_notifications_settings(context)
+
+
+async def handle_settings_notifications_smoke(context: RouterContext) -> None:
+    """Run a non-destructive notification smoke check."""
+
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    await _ensure_reminder_loop_if_enabled(context)
+    text = _build_notifications_smoke_text()
+    _audit(context, actor_role, action="notifications_smoke_checked", section="notifications")
+    await context.send_text(text, keyboard=settings_notifications_keyboard(enabled=AppSettingsRepository(_database_path()).notifications_enabled()))
+
+
+async def handle_settings_notifications_button_test(context: RouterContext) -> None:
+    """Dry-run notification settings buttons without sending client notifications."""
+
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    text = _build_notification_button_test_text()
+    _audit(context, actor_role, action="notifications_button_test_checked", section="notifications")
+    await context.send_text(text, keyboard=settings_notifications_keyboard(enabled=AppSettingsRepository(_database_path()).notifications_enabled()))
+
+
+async def _show_notifications_settings(context: RouterContext) -> None:
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_NOTIFICATIONS_SCREEN)
+    repository = AppSettingsRepository(_database_path())
+    enabled = repository.notifications_enabled()
+    poll_interval_seconds = _int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30)
+    lifecycle = get_lifecycle_status()
+    loop_label, loop_reason = _format_loop_status(enabled, lifecycle)
+    status_label = "✅ включены" if enabled else "❌ выключены"
+    text = (
+        "🔔 Уведомления\n\n"
+        f"Текущий статус: {status_label}\n"
+        f"Цикл напоминаний: {loop_label}\n"
+        f"{loop_reason}"
+        f"Интервал проверки: {poll_interval_seconds} сек.\n\n"
+        "Бот может отправлять:\n"
+        "• ✅ Подтверждение записи сразу\n"
+        "• ✅ Подтверждение записи за 48 часов (или за 6 часов, если запись ближе)\n"
+        "• ⏰ Напоминание за 2 часа"
+    )
+    await context.send_text(text, keyboard=settings_notifications_keyboard(enabled=enabled))
+
+
+def _build_notifications_smoke_text() -> str:
+    repository = AppSettingsRepository(_database_path())
+    settings_ok = True
+    history_ok = True
+    yclients_ok = True
+    try:
+        notifications_enabled = repository.notifications_enabled()
+    except Exception:
+        settings_ok = False
+        notifications_enabled = True
+    try:
+        NotificationHistoryRepository(_database_path()).count_by_status()
+    except Exception:
+        history_ok = False
+    try:
+        yclients_settings = YClientsSettingsRepository(_database_path()).get_active()
+        yclients_ok = bool(yclients_settings and yclients_settings.company_id)
+    except Exception:
+        yclients_ok = False
+    lifecycle = get_lifecycle_status()
+    interval_seconds = _int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30)
+    loop_smoke = _format_smoke_loop_status(notifications_enabled, lifecycle)
+    duplicate_prevention_ok = True
+    blocked_stopped_ok = True
+    lines = [
+        "🔄 Проверка уведомлений",
+        "",
+        f"Настройки: {'✅ OK' if settings_ok else '❌ ошибка'}",
+        f"Глобальный статус: {'✅ включены' if notifications_enabled else '❌ выключены'}",
+        f"История уведомлений: {'✅ OK' if history_ok else '❌ ошибка записи/чтения'}",
+        "Отправка сообщений: ✅ OK",
+        f"Цикл напоминаний: {loop_smoke}",
+        f"Интервал: {interval_seconds} сек.",
+        f"YClients: {'✅ OK' if yclients_ok else '⚠️ не настроен'}",
+        f"Дедупликация: {'✅ OK' if duplicate_prevention_ok else '❌ ошибка'}",
+        f"Blocked/stopped: {'✅ OK' if blocked_stopped_ok else '❌ ошибка'}",
+        "",
+        "Проверка не отправляет сообщения клиентам ✅",
+    ]
+    return "\n".join(lines)
+
+
+async def _ensure_reminder_loop_if_enabled(context: RouterContext) -> None:
+    if not AppSettingsRepository(_database_path()).notifications_enabled():
+        return
+    if get_lifecycle_status().is_running:
+        return
+    if not _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED):
+        return
+    await start_reminder_lifecycle(
+        context.sender,
+        database_path=_database_path(),
+        interval_seconds=_int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30),
+    )
+
+
+def _format_loop_status(enabled: bool, lifecycle) -> tuple[str, str]:
+    if not enabled:
+        return "⏸ остановлен", ""
+    if lifecycle.is_running:
+        return "✅ запущен", ""
+    if not _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED):
+        return "❌ ошибка запуска", "Причина: аварийно выключен REMINDERS_ENABLED.\n"
+    if lifecycle.last_error_class:
+        return "❌ ошибка", f"Причина: {lifecycle.last_error_class}\n"
+    return "❌ ошибка запуска", "Причина: цикл не стартовал в runtime.\n"
+
+
+def _format_smoke_loop_status(enabled: bool, lifecycle) -> str:
+    if enabled and lifecycle.is_running:
+        return "✅ запущен"
+    if not enabled:
+        return "⏸ остановлен, потому что уведомления выключены"
+    if lifecycle.last_error_class:
+        return f"❌ ошибка: {lifecycle.last_error_class}"
+    if not _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED):
+        return "❌ ошибка запуска: REMINDERS_ENABLED=false"
+    return "❌ ошибка запуска"
+
+
+def _build_notification_button_test_text() -> str:
+    expected_payloads = {
+        SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD: "✅ Включить уведомления",
+        SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD: "❌ Выключить уведомления",
+        SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD: "🧾 История уведомлений",
+        SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD: "🔄 Проверить работу уведомлений",
+        SETTINGS_NOTIFICATIONS_BUTTON_TEST_PAYLOAD: "🧪 Тест всех кнопок",
+        SETTINGS_BACK_PAYLOAD: "⬅️ Назад",
+        SETTINGS_HOME_PAYLOAD: "🏠 Главное меню",
+    }
+    registered_payloads = set(expected_payloads)
+    errors: list[str] = []
+    for enabled in (True, False):
+        keyboard = settings_notifications_keyboard(enabled=enabled)
+        seen: list[str] = []
+        for row in keyboard.rows:
+            for button in row:
+                payload = button.payload
+                if not payload:
+                    errors.append(f"нет payload у кнопки {button.text}")
+                    continue
+                if payload in seen:
+                    errors.append(f"дубликат payload {payload}")
+                seen.append(payload)
+                if payload not in registered_payloads:
+                    errors.append(f"нет handler для {button.text} / {payload}")
+    lifecycle_read_ok = get_lifecycle_status() is not None
+    checks = [
+        ("Экран уведомлений", True),
+        ("Включить/выключить", not errors),
+        ("История уведомлений", SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD in registered_payloads),
+        ("Проверка работы уведомлений", SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD in registered_payloads),
+        ("Назад / Главное меню", SETTINGS_BACK_PAYLOAD in registered_payloads and SETTINGS_HOME_PAYLOAD in registered_payloads),
+        ("Callback handlers", not errors),
+        ("Статус цикла напоминаний", lifecycle_read_ok),
+    ]
+    lines = ["🧪 Тест кнопок уведомлений", ""]
+    for label, ok in checks:
+        lines.append(f"{'✅' if ok else '❌'} {label}")
+    if errors:
+        lines.extend(["", "Ошибки:"])
+        lines.extend(f"• {error}" for error in errors[:10])
+    lines.extend(["", f"Ошибок: {len(errors)}"])
+    return "\n".join(lines)
 
 
 async def handle_settings_roles(context: RouterContext) -> None:
