@@ -39,6 +39,13 @@ ADMIN_CLIENTS_DIRECTORY_PAYLOAD = "admin:clients_directory"
 SETTINGS_YCLIENTS_PAYLOAD = "settings:yclients"
 SETTINGS_CONTACTS_PAYLOAD = "settings:contacts"
 SETTINGS_NOTIFICATIONS_PAYLOAD = "settings:notifications"
+SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD = "settings:notifications:enable"
+SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD = "settings:notifications:disable"
+SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD = "settings:notifications:smoke"
+SETTINGS_NOTIFICATIONS_TESTS_PAYLOAD = "settings:notifications:tests"
+SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD = "settings:notifications:test:immediate"
+SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD = "settings:notifications:test:48h"
+SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD = "settings:notifications:test:2h"
 SETTINGS_MASTER_PHOTOS_PAYLOAD = "settings:master_photos"
 SETTINGS_ROLES_PAYLOAD = "settings:roles"
 SETTINGS_DIAGNOSTICS_PAYLOAD = "settings:diagnostics"
@@ -488,12 +495,19 @@ def settings_contacts_input_keyboard() -> MaxInlineKeyboard:
     )
 
 
-def settings_notifications_keyboard() -> MaxInlineKeyboard:
+def settings_notifications_keyboard(*, enabled: bool = True) -> MaxInlineKeyboard:
     """Build notification settings buttons."""
 
+    toggle = MaxButton(
+        text="❌ Выключить уведомления" if enabled else "✅ Включить уведомления",
+        payload=SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD if enabled else SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD,
+    )
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="🔔 История уведомлений", payload=SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD)],
+            [toggle],
+            [MaxButton(text="🧾 История уведомлений", payload=SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD)],
+            [MaxButton(text="🔄 Проверить работу уведомлений", payload=SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD)],
+            [MaxButton(text="🧪 Тест уведомлений", payload=SETTINGS_NOTIFICATIONS_TESTS_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
         ]
@@ -1421,5 +1435,19 @@ def registration_navigation_keyboard() -> MaxInlineKeyboard:
                 MaxButton(text="⬅️ Назад", payload=REGISTRATION_BACK_PAYLOAD),
                 MaxButton(text="🏠 Главное меню", payload=REGISTRATION_HOME_PAYLOAD),
             ]
+        ]
+    )
+
+
+def settings_notification_tests_keyboard() -> MaxInlineKeyboard:
+    """Build safe per-notification test buttons from Telegram reference dev-tests pattern."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Тест подтверждения сразу", payload=SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD)],
+            [MaxButton(text="✅ Тест подтверждения за 48 часов", payload=SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD)],
+            [MaxButton(text="⏰ Тест напоминания за 2 часа", payload=SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
         ]
     )

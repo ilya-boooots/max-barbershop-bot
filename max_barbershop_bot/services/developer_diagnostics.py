@@ -17,7 +17,7 @@ from max_barbershop_bot.max_api.client import MaxApiAuthError, MaxApiClient, Max
 from max_barbershop_bot.repositories.notification_history import NotificationHistoryRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.diagnostics import recent_errors, sanitize_text
-from max_barbershop_bot.services.reminders import get_reminder_loop_status
+from max_barbershop_bot.services.reminder_lifecycle import get_lifecycle_status
 from max_barbershop_bot.services.yclients_settings import check_yclients_connection
 
 NO_ACCESS_TEXT = "⛔️ Доступ только для разработчика."
@@ -27,6 +27,7 @@ _REQUIRED_TABLES = (
     "yclients_settings",
     "platform_attribution",
     "notification_history",
+    "app_settings",
 )
 
 
@@ -136,10 +137,17 @@ def check_db_health(database_path: str) -> HealthLine:
 def format_reminders_status() -> str:
     """Return reminder-loop status with in-memory tracker details."""
 
-    status = get_reminder_loop_status()
+    status = get_lifecycle_status()
     enabled = _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED)
-    interval = _int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30)
-    state = "работают" if status.is_running else ("включены, не запущены" if enabled else "выключены")
+    interval = status.interval_seconds or _int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30)
+    if status.is_running:
+        state = "работают"
+    elif status.state == "disabled" or not enabled:
+        state = "остановлены"
+    elif status.state == "error":
+        state = "ошибка"
+    else:
+        state = "не запущены"
     parts = [f"{'✅' if status.is_running else '⚠️'} {state}", f"интервал {interval}с"]
     if status.last_success_at:
         parts.append(f"успех {_format_dt(status.last_success_at)}")
