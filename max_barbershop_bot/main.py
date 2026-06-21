@@ -55,7 +55,7 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
     settings_repository = AppSettingsRepository(config.database_path)
     notifications_enabled = settings_repository.notifications_enabled()
     setting_source = settings_repository.notification_setting_source()
-    if config.reminders_enabled and notifications_enabled:
+    if notifications_enabled:
         await start_reminder_lifecycle(
             sender,
             database_path=config.database_path,
@@ -65,17 +65,6 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
                 sender=sender,
                 location="booking_reminder_loop",
             ),
-        )
-    elif not config.reminders_enabled:
-        logger.info(
-            "MAX notifications lifecycle diagnostic: %s",
-            {
-                "notifications_enabled": notifications_enabled,
-                "setting_source": setting_source,
-                "startup_attempted": False,
-                "start_result": "disabled_by_reminders_enabled_env",
-                "interval_seconds": config.reminders_poll_interval_seconds,
-            },
         )
     else:
         logger.info(

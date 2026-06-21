@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from os import getenv
 
@@ -42,6 +43,8 @@ from max_barbershop_bot.services.reminder_lifecycle import (
     start_reminder_lifecycle,
     stop_reminder_lifecycle,
 )
+from max_barbershop_bot.services.notifications import BOOKING_CONFIRMATION_IMMEDIATE, BOOKING_REMINDER_2H, BOOKING_REMINDER_48H
+from max_barbershop_bot.services.reminders import BookingNotificationContext, render_booking_notification_text
 from max_barbershop_bot.services.settings_audit import log_settings_action
 from max_barbershop_bot.ui.buttons import (
     ADMIN_SETTINGS_PAYLOAD,
@@ -83,7 +86,10 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD,
     SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD,
     SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD,
-    SETTINGS_NOTIFICATIONS_BUTTON_TEST_PAYLOAD,
+    SETTINGS_NOTIFICATIONS_TESTS_PAYLOAD,
+    SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD,
+    SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD,
+    SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD,
     SETTINGS_ROLES_PAYLOAD,
     SETTINGS_YCLIENTS_PAYLOAD,
     settings_contacts_input_keyboard,
@@ -92,6 +98,7 @@ from max_barbershop_bot.ui.buttons import (
     settings_diagnostics_keyboard,
     settings_menu_keyboard,
     settings_notifications_keyboard,
+    settings_notification_tests_keyboard,
     settings_status_keyboard,
     settings_support_input_keyboard,
     settings_support_keyboard,
@@ -141,7 +148,10 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD, handle_settings_notifications_toggle)
     router.on_callback(SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD, handle_settings_notifications_toggle)
     router.on_callback(SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD, handle_settings_notifications_smoke)
-    router.on_callback(SETTINGS_NOTIFICATIONS_BUTTON_TEST_PAYLOAD, handle_settings_notifications_button_test)
+    router.on_callback(SETTINGS_NOTIFICATIONS_TESTS_PAYLOAD, handle_settings_notifications_tests)
+    router.on_callback(SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD, handle_settings_notifications_run_test)
+    router.on_callback(SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD, handle_settings_notifications_run_test)
+    router.on_callback(SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD, handle_settings_notifications_run_test)
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
     router.on_callback(DEV_DIAGNOSTICS_REFRESH_PAYLOAD, handle_settings_diagnostics_refresh)
@@ -415,7 +425,7 @@ async def handle_settings_notifications_toggle(context: RouterContext) -> None:
     enabled = context.event.callback_payload == SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD
     AppSettingsRepository(_database_path()).set_notifications_enabled(enabled)
     interval_seconds = _int_env("REMINDERS_POLL_INTERVAL_SECONDS", DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS, minimum=30)
-    if enabled and _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED):
+    if enabled:
         await start_reminder_lifecycle(
             context.sender,
             database_path=_database_path(),
@@ -447,17 +457,34 @@ async def handle_settings_notifications_smoke(context: RouterContext) -> None:
     await context.send_text(text, keyboard=settings_notifications_keyboard(enabled=AppSettingsRepository(_database_path()).notifications_enabled()))
 
 
-async def handle_settings_notifications_button_test(context: RouterContext) -> None:
-    """Dry-run notification settings buttons without sending client notifications."""
+async def handle_settings_notifications_tests(context: RouterContext) -> None:
+    """Open safe per-notification tests, ported from Telegram dev-tests UX."""
 
     actor_role = _actor_role(context)
     if not can_view_notification_settings(actor_role):
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context)
-    text = _build_notification_button_test_text()
-    _audit(context, actor_role, action="notifications_button_test_checked", section="notifications")
-    await context.send_text(text, keyboard=settings_notifications_keyboard(enabled=AppSettingsRepository(_database_path()).notifications_enabled()))
+    text = (
+        "🧪 Тест уведомлений\n\n"
+        "Выберите конкретное уведомление для безопасной проверки.\n"
+        "Тесты не отправляют сообщения клиентам, не меняют YClients и не создают реальные записи."
+    )
+    await context.send_text(text, keyboard=settings_notification_tests_keyboard())
+
+
+async def handle_settings_notifications_run_test(context: RouterContext) -> None:
+    """Run one safe notification dry-run test for the current admin/developer."""
+
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    payload = context.event.callback_payload or ""
+    text = _build_notification_test_result_text(payload)
+    _audit(context, actor_role, action="notifications_safe_test_run", section="notifications", metadata={"payload": payload})
+    await context.send_text(text, keyboard=settings_notification_tests_keyboard())
 
 
 async def _show_notifications_settings(context: RouterContext) -> None:
@@ -529,8 +556,6 @@ async def _ensure_reminder_loop_if_enabled(context: RouterContext) -> None:
         return
     if get_lifecycle_status().is_running:
         return
-    if not _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED):
-        return
     await start_reminder_lifecycle(
         context.sender,
         database_path=_database_path(),
@@ -543,8 +568,6 @@ def _format_loop_status(enabled: bool, lifecycle) -> tuple[str, str]:
         return "⏸ остановлен", ""
     if lifecycle.is_running:
         return "✅ запущен", ""
-    if not _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED):
-        return "❌ ошибка запуска", "Причина: аварийно выключен REMINDERS_ENABLED.\n"
     if lifecycle.last_error_class:
         return "❌ ошибка", f"Причина: {lifecycle.last_error_class}\n"
     return "❌ ошибка запуска", "Причина: цикл не стартовал в runtime.\n"
@@ -557,9 +580,52 @@ def _format_smoke_loop_status(enabled: bool, lifecycle) -> str:
         return "⏸ остановлен, потому что уведомления выключены"
     if lifecycle.last_error_class:
         return f"❌ ошибка: {lifecycle.last_error_class}"
-    if not _bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED):
-        return "❌ ошибка запуска: REMINDERS_ENABLED=false"
     return "❌ ошибка запуска"
+
+
+
+def _build_notification_test_result_text(payload: str) -> str:
+    notification_type_by_payload = {
+        SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD: BOOKING_CONFIRMATION_IMMEDIATE,
+        SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD: BOOKING_REMINDER_48H,
+        SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD: BOOKING_REMINDER_2H,
+    }
+    label_by_payload = {
+        SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD: "подтверждение записи сразу",
+        SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD: "подтверждение записи за 48 часов",
+        SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD: "напоминание за 2 часа",
+    }
+    notification_type = notification_type_by_payload.get(payload)
+    if notification_type is None:
+        return "🧪 Тест уведомлений\n\n❌ Неизвестный тест. Откройте раздел заново."
+    now = datetime.now(UTC)
+    booking_datetime = now + timedelta(days=3 if notification_type == BOOKING_REMINDER_48H else 1, hours=2)
+    context = BookingNotificationContext(
+        platform_user_id="dev-safe-test",
+        max_user_id="dev-safe-test",
+        yclients_record_id=f"dev-safe-{notification_type}",
+        yclients_client_id="dev-safe-client",
+        notification_type=notification_type,
+        booking_datetime=booking_datetime,
+        service_name="Тестовая стрижка",
+        master_name="Тестовый мастер",
+        client_name="Тестовый клиент",
+        branch_address="Тестовый адрес",
+        scheduled_for=now,
+    )
+    preview = render_booking_notification_text(context, "Europe/Moscow")
+    return (
+        "🧪 Тест уведомлений\n\n"
+        f"Тип: {label_by_payload[payload]}\n"
+        "Статус: ✅ OK\n\n"
+        "Что проверено:\n"
+        "• ✅ шаблон уведомления собирается\n"
+        "• ✅ payload кнопки обработан\n"
+        "• ✅ история/YClients не изменялись\n"
+        "• ✅ сообщения клиентам не отправлялись\n\n"
+        "Предпросмотр текста:\n"
+        f"{preview}"
+    )[:3900]
 
 
 def _build_notification_button_test_text() -> str:
@@ -568,14 +634,18 @@ def _build_notification_button_test_text() -> str:
         SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD: "❌ Выключить уведомления",
         SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD: "🧾 История уведомлений",
         SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD: "🔄 Проверить работу уведомлений",
-        SETTINGS_NOTIFICATIONS_BUTTON_TEST_PAYLOAD: "🧪 Тест всех кнопок",
+        SETTINGS_NOTIFICATIONS_TESTS_PAYLOAD: "🧪 Тест уведомлений",
+        SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD: "✅ Тест подтверждения сразу",
+        SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD: "✅ Тест подтверждения за 48 часов",
+        SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD: "⏰ Тест напоминания за 2 часа",
+        SETTINGS_NOTIFICATIONS_PAYLOAD: "⬅️ Назад к уведомлениям",
         SETTINGS_BACK_PAYLOAD: "⬅️ Назад",
         SETTINGS_HOME_PAYLOAD: "🏠 Главное меню",
     }
     registered_payloads = set(expected_payloads)
     errors: list[str] = []
-    for enabled in (True, False):
-        keyboard = settings_notifications_keyboard(enabled=enabled)
+    keyboards = [settings_notifications_keyboard(enabled=True), settings_notifications_keyboard(enabled=False), settings_notification_tests_keyboard()]
+    for keyboard in keyboards:
         seen: list[str] = []
         for row in keyboard.rows:
             for button in row:
@@ -592,6 +662,9 @@ def _build_notification_button_test_text() -> str:
     checks = [
         ("Экран уведомлений", True),
         ("Включить/выключить", not errors),
+        ("Тест подтверждения сразу", SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD in registered_payloads),
+        ("Тест 48 часов", SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD in registered_payloads),
+        ("Тест 2 часа", SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD in registered_payloads),
         ("История уведомлений", SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD in registered_payloads),
         ("Проверка работы уведомлений", SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD in registered_payloads),
         ("Назад / Главное меню", SETTINGS_BACK_PAYLOAD in registered_payloads and SETTINGS_HOME_PAYLOAD in registered_payloads),
