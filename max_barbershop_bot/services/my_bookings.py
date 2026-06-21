@@ -178,7 +178,10 @@ class MyBookingsService:
 
         yclients_client_id = _clean_text(user.yclients_client_id if user else None)
         phone = _clean_text(user.phone if user else None)
-        if not yclients_client_id and not phone:
+        attribution_rows = _platform_user_attributions(self._settings_repository.database_path, platform_user_id)
+        known_phones = collect_known_user_phones(user, attribution_rows)
+        attributed_record_ids = _attributed_record_ids(attribution_rows)
+        if not yclients_client_id and not known_phones and not attributed_record_ids:
             logger.info(
                 "My bookings profile unresolved: operation=get_my_bookings platform_user_id=%s "
                 "yclients_client_id_present=%s phone_present=%s",
@@ -227,9 +230,8 @@ class MyBookingsService:
                     yclients,
                     company_id=settings.company_id,
                     yclients_client_id=yclients_client_id,
-                    phone=phone,
-                    platform_user_id=platform_user_id,
-                    database_path=self._settings_repository.database_path,
+                    phones=known_phones,
+                    attributed_record_ids=attributed_record_ids,
                     start_date=now.date().isoformat(),
                     end_date=(now.date() + timedelta(days=365)).isoformat(),
                 )
@@ -261,7 +263,8 @@ class MyBookingsService:
             filtered_rows, filter_counts = _filter_owned_active_rows(
                 raw_rows,
                 yclients_client_id=yclients_client_id,
-                phone=phone,
+                attributed_record_ids=attributed_record_ids,
+                known_phones=known_phones,
                 timezone_name=timezone_name,
                 now=now,
             )
@@ -285,13 +288,15 @@ class MyBookingsService:
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
         logger.info(
-            "MAX my bookings telegram parity diagnostic: platform_user_id_present=%s yclients_client_id_present=%s "
-            "saved_phone_present_masked=%s raw_records_count=%s candidates_count=%s owned_count=%s future_count=%s visible_active_count=%s "
+            "MAX my bookings ownership diagnostic: platform_user_id_present=%s yclients_client_id_present=%s "
+            "registered_phone_present_masked=%s known_phones_count=%s attributed_record_ids_count=%s yclients_candidates_count=%s fresh_records_count=%s owned_records_count=%s future_count=%s visible_active_count=%s "
             "hidden_not_owned_count=%s hidden_cancelled_count=%s hidden_deleted_count=%s hidden_past_count=%s "
             "hidden_parse_error_count=%s status_raw=%s status_mapped=%s branch_timezone=%s telegram_reference_rule_used=%s",
             bool(platform_user_id),
             bool(yclients_client_id),
             _mask_phone(phone),
+            len(known_phones),
+            len(attributed_record_ids),
             len(raw_rows),
             len(raw_rows),
             filter_counts["owned_records_count"],
@@ -351,7 +356,10 @@ class MyBookingsService:
             raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
         yclients_client_id = _clean_text(user.yclients_client_id if user else None)
         phone = _clean_text(user.phone if user else None)
-        if not yclients_client_id and not phone:
+        attribution_rows = _platform_user_attributions(self._settings_repository.database_path, platform_user_id)
+        known_phones = collect_known_user_phones(user, attribution_rows)
+        attributed_record_ids = set(_attributed_record_ids(attribution_rows))
+        if not yclients_client_id and not known_phones and not attributed_record_ids:
             raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
         try:
             settings = load_active_yclients_settings(self._settings_repository, operation="get_my_bookings")
@@ -384,7 +392,7 @@ class MyBookingsService:
         booking = _booking_from_payload(row, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone) if row else None
         if booking is None:
             raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
-        if not _record_belongs_to_user(row, yclients_client_id=yclients_client_id, phone=phone):
+        if ownership_source_for_record(row, yclients_client_id=yclients_client_id, attributed_record_ids=attributed_record_ids, known_phones=known_phones) == "none":
             raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
         if not is_future_booking(booking, timezone_name=timezone_name):
             raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
@@ -406,7 +414,10 @@ class MyBookingsService:
 
         yclients_client_id = _clean_text(user.yclients_client_id if user else None)
         phone = _clean_text(user.phone if user else None)
-        if not yclients_client_id and not phone:
+        attribution_rows = _platform_user_attributions(self._settings_repository.database_path, platform_user_id)
+        known_phones = collect_known_user_phones(user, attribution_rows)
+        attributed_record_ids = set(_attributed_record_ids(attribution_rows))
+        if not yclients_client_id and not known_phones and not attributed_record_ids:
             raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
 
         try:
@@ -447,7 +458,7 @@ class MyBookingsService:
                 current_status_raw = _clean_text(row.get("status") or row.get("record_status") or row.get("state")) if row else ""
                 current_status_mapped = format_booking_status(current_status_raw)
                 appointment_datetime = parse_booking_datetime(current, timezone_name=timezone_name) if current else None
-                is_owned = bool(row and _record_belongs_to_user(row, yclients_client_id=yclients_client_id, phone=phone))
+                is_owned = bool(row and ownership_source_for_record(row, yclients_client_id=yclients_client_id, attributed_record_ids=attributed_record_ids, known_phones=known_phones) != "none")
                 is_future = bool(current and is_owned and is_future_booking(current, timezone_name=timezone_name))
                 is_past = bool(appointment_datetime and not is_future)
                 is_cancelable = bool(current and is_owned and is_booking_cancelable(current, timezone_name=timezone_name))
@@ -553,8 +564,10 @@ class MyBookingsService:
         if not record_id:
             raise MyBookingReschedulePrepareError(MY_BOOKING_NOT_FOUND_TEXT)
         yclients_client_id = _clean_text(user.yclients_client_id if user else None)
-        phone = _clean_text(user.phone if user else None)
-        if not yclients_client_id and not phone:
+        attribution_rows = _platform_user_attributions(self._settings_repository.database_path, platform_user_id)
+        known_phones = collect_known_user_phones(user, attribution_rows)
+        attributed_record_ids = set(_attributed_record_ids(attribution_rows))
+        if not yclients_client_id and not known_phones and not attributed_record_ids:
             raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
 
         settings = self._active_settings_for_reschedule(platform_user_id=platform_user_id, record_id=record_id)
@@ -589,6 +602,10 @@ class MyBookingsService:
         row = _extract_record_detail_row(details)
         if not row:
             raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT)
+        if ownership_source_for_record(row, yclients_client_id=yclients_client_id, attributed_record_ids=attributed_record_ids, known_phones=known_phones) == "none":
+            raise MyBookingReschedulePrepareError(MY_BOOKING_NOT_FOUND_TEXT)
+        if not is_record_visible_active(row, datetime.now(_zoneinfo(timezone_name)), timezone_name=timezone_name):
+            raise MyBookingReschedulePrepareError(MY_BOOKING_NOT_FOUND_TEXT)
 
         service_ids = _extract_service_ids(row)
         staff_id = _extract_staff_id(row)
@@ -1019,8 +1036,6 @@ def format_visit_history_screen(bookings: list[MyBookingItem | dict[str, Any]], 
         lines.append(f"   👤 {display['master_name'] or 'Любой мастер'}")
         lines.append(f"   📅 {display['date']} {display['time']}")
         lines.append(f"   💰 {display['price'] or '—'}")
-        if display.get("status"):
-            lines.append(f"   🧾 {display['status']}")
     return "\n".join(lines)
 
 
@@ -1038,25 +1053,26 @@ def format_booking_details_text(
     *,
     timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
     title: str = "📋 Активная запись",
+    include_status: bool = True,
 ) -> str:
     """Format selected booking details in the Telegram reference style."""
 
     display = booking_display_data(booking, timezone_name=timezone_name)
-    return "\n".join(
-        [
-            title,
-            "",
-            f"✂️ Услуга: {display['service_name']}",
-            f"👤 Мастер: {display['master_name'] or 'Любой мастер'}",
-            f"📅 Дата: {display['date']}",
-            f"🕒 Время: {display['time']}",
-            f"⏳ Длительность: {display['duration_minutes'] + ' мин' if display['duration_minutes'] else '—'}",
-            f"💰 Цена: {display['price'] or '—'}",
-            f"📍 Адрес: {display['address'] or '—'}",
-            f"📞 Контакты: {display['phone'] or '—'}",
-            f"🧾 Статус: {display['status']}",
-        ]
-    )
+    lines = [
+        title,
+        "",
+        f"✂️ Услуга: {display['service_name']}",
+        f"👤 Мастер: {display['master_name'] or 'Любой мастер'}",
+        f"📅 Дата: {display['date']}",
+        f"🕒 Время: {display['time']}",
+        f"⏳ Длительность: {display['duration_minutes'] + ' мин' if display['duration_minutes'] else '—'}",
+        f"💰 Цена: {display['price'] or '—'}",
+        f"📍 Адрес: {display['address'] or '—'}",
+        f"📞 Контакты: {display['phone'] or '—'}",
+    ]
+    if include_status and display.get("status"):
+        lines.append(f"🧾 Статус: {display['status']}")
+    return "\n".join(lines)
 
 
 def format_cancel_confirmation_text(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
@@ -1282,15 +1298,22 @@ async def _fetch_all_relevant_records(
     *,
     company_id: str | int,
     yclients_client_id: str | None,
-    phone: str | None,
-    platform_user_id: str | None,
-    database_path: str,
+    phones: set[str],
+    attributed_record_ids: list[str],
     start_date: str,
     end_date: str,
 ) -> list[dict[str, Any]]:
-    """Fetch fresh YClients records only by current user's client id or phone."""
+    """Fetch fresh YClients records by scoped ownership candidates only."""
 
     rows: list[dict[str, Any]] = []
+    for record_id in attributed_record_ids:
+        try:
+            payload = await yclients.get_booking_details(company_id=company_id, yclients_record_id=record_id)
+        except YClientsNotFoundError:
+            continue
+        row = _extract_record_detail_row(payload)
+        if row:
+            rows.append(row)
     if yclients_client_id:
         rows.extend(
             await _fetch_all_client_records_page_set(
@@ -1302,13 +1325,13 @@ async def _fetch_all_relevant_records(
                 end_date=end_date,
             )
         )
-    if phone:
+    for known_phone in sorted(phones):
         rows.extend(
             await _fetch_all_client_records_page_set(
                 yclients,
                 company_id=company_id,
                 yclients_client_id=None,
-                phone=phone,
+                phone=known_phone,
                 start_date=start_date,
                 end_date=end_date,
             )
@@ -1348,40 +1371,47 @@ async def _fetch_all_client_records_page_set(
     return rows
 
 
-def _platform_user_attributed_record_ids(database_path: str, platform_user_id: str | None) -> list[str]:
-    """Return locally attributed YClients record ids for this MAX user only."""
+def _platform_user_attributions(database_path: str, platform_user_id: str | None):
+    """Return locally attributed rows for this MAX user only."""
 
     if not platform_user_id:
         return []
     try:
-        records = PlatformAttributionRepository(database_path).list_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+        return PlatformAttributionRepository(database_path).list_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
     except Exception as exc:  # noqa: BLE001 - attribution is an optional lookup source.
         logger.info(
-            "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
-            "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s upcoming_count=%s "
-            "past_count=%s rendered_buttons_count=%s state_map_size=%s page=%s page_size=%s branch_timezone=%s",
+            "MAX my bookings ownership diagnostic: platform_user_id_present=%s attributed_record_ids_count=%s hidden_missing_fresh_count=%s branch_timezone=%s",
             True,
-            False,
-            False,
             0,
             0,
-            0,
-            0,
-            0,
-            0,
-            "attribution_lookup_failed",
-            _MY_BOOKINGS_PAGE_SIZE,
             type(exc).__name__,
         )
         return []
+
+
+def _attributed_record_ids(attribution_rows: list[Any]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
-    for record in records:
-        record_id = _clean_text(record.yclients_record_id)
+    for record in attribution_rows:
+        record_id = _clean_text(getattr(record, "yclients_record_id", None))
         if record_id and record_id not in seen:
             seen.add(record_id)
             result.append(record_id)
     return result
+
+
+def collect_known_user_phones(user: User | None, attribution_rows: list[Any]) -> set[str]:
+    """Collect verified/locally attributed phones normalized for ownership checks."""
+
+    phones: set[str] = set()
+    registered = _normalize_phone_digits(user.phone if user else None)
+    if registered:
+        phones.add(registered)
+    for record in attribution_rows:
+        booking_phone = _normalize_phone_digits(getattr(record, "booking_phone", None))
+        if booking_phone:
+            phones.add(booking_phone)
+    return phones
 
 
 def _deduplicate_record_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1542,7 +1572,8 @@ def _filter_owned_active_rows(
     rows: list[dict[str, Any]],
     *,
     yclients_client_id: str | None,
-    phone: str | None,
+    attributed_record_ids: list[str],
+    known_phones: set[str],
     timezone_name: str,
     now: datetime,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -1556,7 +1587,13 @@ def _filter_owned_active_rows(
     }
     visible: list[dict[str, Any]] = []
     for row in rows:
-        if not _record_belongs_to_user(row, yclients_client_id=yclients_client_id, phone=phone):
+        ownership_source = ownership_source_for_record(
+            row,
+            yclients_client_id=yclients_client_id,
+            attributed_record_ids=set(attributed_record_ids),
+            known_phones=known_phones,
+        )
+        if ownership_source == "none":
             counts["hidden_not_owned_count"] += 1
             continue
         counts["owned_records_count"] += 1
@@ -1578,16 +1615,46 @@ def _filter_owned_active_rows(
     return visible, counts
 
 
-def _record_belongs_to_user(row: dict[str, Any], *, yclients_client_id: str | None, phone: str | None) -> bool:
+def ownership_source_for_record(
+    row: dict[str, Any],
+    *,
+    yclients_client_id: str | None,
+    attributed_record_ids: set[str],
+    known_phones: set[str],
+) -> str:
+    record_id = _clean_text(row.get("record_id") or row.get("id") or row.get("booking_id") or row.get("visit_id"))
+    if record_id and record_id in attributed_record_ids:
+        return "attribution"
     expected_client_id = _clean_text(yclients_client_id)
-    expected_phone = _normalize_phone_digits(phone)
     actual_client_id = _extract_record_client_id(row)
     actual_phone = _extract_record_client_phone(row)
     if expected_client_id and actual_client_id and actual_client_id == expected_client_id:
-        return True
-    if expected_phone and actual_phone and actual_phone == expected_phone:
-        return True
-    return False
+        return "client_id"
+    if actual_phone and actual_phone in known_phones:
+        return "phone"
+    return "none"
+
+
+def is_record_owned_by_user(
+    row: dict[str, Any],
+    user: User | None,
+    attributed_record_ids: set[str],
+    known_phones: set[str],
+) -> bool:
+    return ownership_source_for_record(
+        row,
+        yclients_client_id=_clean_text(user.yclients_client_id if user else None),
+        attributed_record_ids=attributed_record_ids,
+        known_phones=known_phones,
+    ) != "none"
+
+
+def is_record_visible_active(row: dict[str, Any], branch_now: datetime, *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> bool:
+    status = _normalize_status(row.get("status") or row.get("record_status") or row.get("state"))
+    if status in _CANCELLED_STATUSES or status in {"deleted", "delete", "removed", "archived", "archive"}:
+        return False
+    booking = _booking_from_payload(row, timezone_name=timezone_name)
+    return bool(booking and is_future_booking(booking, timezone_name=timezone_name, now=branch_now))
 
 
 def _extract_record_client_id(row: dict[str, Any]) -> str:

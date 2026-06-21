@@ -111,7 +111,10 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             yclients_record_id TEXT,
             yclients_client_id TEXT,
             marker TEXT NOT NULL DEFAULT 'Клиент записался из MAX бота',
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            booking_phone TEXT,
+            source TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS state_storage (
@@ -311,6 +314,14 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             UNIQUE(platform, platform_user_id, yclients_record_id, notification_type)
         );
 
+
+        """
+    )
+    _ensure_column(connection, "platform_attribution", "booking_phone", "TEXT")
+    _ensure_column(connection, "platform_attribution", "source", "TEXT")
+    _ensure_column(connection, "platform_attribution", "updated_at", "TEXT")
+    connection.executescript(
+        """
         CREATE INDEX IF NOT EXISTS idx_users_platform_user_id
             ON users(platform, platform_user_id);
         CREATE INDEX IF NOT EXISTS idx_users_max_user_id
