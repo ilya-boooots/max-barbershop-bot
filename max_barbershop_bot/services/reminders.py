@@ -14,7 +14,7 @@ from max_barbershop_bot.integrations.yclients.service import YClientsServiceLaye
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
-from max_barbershop_bot.repositories.settings import SettingsRepository
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import normalize_branch_timezone, zoneinfo_or_default
@@ -264,7 +264,7 @@ async def get_due_reminders(
 ) -> list[DueReminder]:
     """Find due reminders from local attribution and verify each record in YClients."""
 
-    if not SettingsRepository(database_path).notifications_enabled():
+    if not AppSettingsRepository(database_path).notifications_enabled():
         _log_reminder_diagnostic(notification_type="all", skipped_reason="notifications_disabled", company_timezone=timezone_name)
         return []
 

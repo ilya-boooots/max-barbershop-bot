@@ -19,7 +19,8 @@ from max_barbershop_bot.max_api.client import MaxApiClient, MaxApiError
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.services.birthday_funnel import run_birthday_loop
 from max_barbershop_bot.services.cancellation_recovery import run_cancellation_recovery_loop
-from max_barbershop_bot.services.reminders import run_reminder_loop
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
+from max_barbershop_bot.services.reminder_lifecycle import shutdown_reminder_lifecycle, start_reminder_lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -49,26 +50,33 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
     sender = MaxMessageSender(client)
     diagnostics = ErrorDiagnostics.from_config(config)
     polling_task = asyncio.create_task(_poll_dev_updates(client, sender, router, stop_event, diagnostics))
-    reminder_task: asyncio.Task | None = None
     birthday_task: asyncio.Task | None = None
     cancellation_recovery_task: asyncio.Task | None = None
-    if config.reminders_enabled:
-        reminder_task = asyncio.create_task(
-            run_reminder_loop(
-                sender,
-                database_path=config.database_path,
-                stop_event=stop_event,
-                interval_seconds=config.reminders_poll_interval_seconds,
-                error_callback=lambda error: diagnostics.handle_runtime_exception(
-                    exception=error,
-                    sender=sender,
-                    location="booking_reminder_loop",
-                ),
+    settings_repository = AppSettingsRepository(config.database_path)
+    notifications_enabled = settings_repository.notifications_enabled()
+    setting_source = settings_repository.notification_setting_source()
+    if notifications_enabled:
+        await start_reminder_lifecycle(
+            sender,
+            database_path=config.database_path,
+            interval_seconds=config.reminders_poll_interval_seconds,
+            error_callback=lambda error: diagnostics.handle_runtime_exception(
+                exception=error,
+                sender=sender,
+                location="booking_reminder_loop",
             ),
-            name="booking-reminders",
         )
     else:
-        logger.info("Booking reminders disabled by REMINDERS_ENABLED")
+        logger.info(
+            "MAX notifications lifecycle diagnostic: %s",
+            {
+                "notifications_enabled": False,
+                "setting_source": setting_source,
+                "startup_attempted": False,
+                "start_result": "disabled_by_app_setting",
+                "interval_seconds": config.reminders_poll_interval_seconds,
+            },
+        )
     if config.cancellation_recovery_enabled:
         cancellation_recovery_task = asyncio.create_task(
             run_cancellation_recovery_loop(
@@ -108,9 +116,7 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
     finally:
         polling_task.cancel()
         tasks = [polling_task]
-        if reminder_task is not None:
-            reminder_task.cancel()
-            tasks.append(reminder_task)
+        await shutdown_reminder_lifecycle()
         if birthday_task is not None:
             birthday_task.cancel()
             tasks.append(birthday_task)
