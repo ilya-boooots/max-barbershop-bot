@@ -265,6 +265,7 @@ class MyBookingsService:
                 timezone_name=timezone_name,
                 now=now,
             )
+            status_diagnostics = _status_diagnostics(raw_rows)
             bookings = [
                 _booking_from_payload(item, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone)
                 for item in filtered_rows
@@ -272,7 +273,7 @@ class MyBookingsService:
             normalized_bookings = [item for item in bookings if item is not None]
             all_bookings = sort_bookings_by_datetime(normalized_bookings, timezone_name=timezone_name)
             hidden_cancelled_count = filter_counts["hidden_cancelled_count"]
-            hidden_unknown_count = filter_counts["hidden_unknown_status_count"]
+            hidden_parse_error_count = filter_counts["hidden_parse_error_count"]
         except Exception as exc:  # noqa: BLE001 - bad contact/settings/payload shape must not make the callback silent.
             logger.warning(
                 "My bookings payload normalization failed: operation=get_my_bookings platform_user_id=%s "
@@ -284,24 +285,27 @@ class MyBookingsService:
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
         logger.info(
-            "MAX my bookings live filter diagnostic: platform_user_id_present=%s yclients_client_id_present=%s "
-            "phone_present_masked=%s raw_yclients_records_count=%s owned_records_count=%s active_visible_count=%s "
+            "MAX my bookings telegram parity diagnostic: platform_user_id_present=%s yclients_client_id_present=%s "
+            "saved_phone_present_masked=%s raw_records_count=%s candidates_count=%s owned_count=%s future_count=%s visible_active_count=%s "
             "hidden_not_owned_count=%s hidden_cancelled_count=%s hidden_deleted_count=%s hidden_past_count=%s "
-            "hidden_unknown_status_count=%s hidden_missing_revalidation_count=%s state_map_size=%s branch_timezone=%s",
+            "hidden_parse_error_count=%s status_raw=%s status_mapped=%s branch_timezone=%s telegram_reference_rule_used=%s",
             bool(platform_user_id),
             bool(yclients_client_id),
             _mask_phone(phone),
             len(raw_rows),
+            len(raw_rows),
             filter_counts["owned_records_count"],
+            len(all_bookings),
             len(all_bookings),
             filter_counts["hidden_not_owned_count"],
             hidden_cancelled_count,
             filter_counts["hidden_deleted_count"],
             filter_counts["hidden_past_count"],
-            hidden_unknown_count,
-            0,
-            len(all_bookings),
+            hidden_parse_error_count,
+            status_diagnostics["raw"],
+            status_diagnostics["mapped"],
             timezone_name,
+            "future_and_not_explicitly_cancelled_or_completed",
         )
         logger.info(
             "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
@@ -829,10 +833,16 @@ def is_future_booking(
     timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
     now: datetime | None = None,
 ) -> bool:
-    """Return whether a record is future and not explicitly cancelled/deleted."""
+    """Return whether a record is future and not explicitly cancelled/deleted.
+
+    Telegram reference parity: ``Мои записи`` does not require an allow-list
+    active status for upcoming records. Unknown/unmapped statuses are still
+    visible when the record exists in fresh YClients data and is not explicitly
+    cancelled/deleted/completed.
+    """
 
     status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
-    if _normalize_status(status) not in _ACTIVE_BOOKING_STATUSES:
+    if _is_explicitly_inactive_status(status):
         return False
     parsed = parse_booking_datetime(item, timezone_name=timezone_name)
     if parsed is None:
@@ -840,7 +850,7 @@ def is_future_booking(
     current = now or datetime.now(_zoneinfo(timezone_name))
     if current.tzinfo is None:
         current = current.replace(tzinfo=_zoneinfo(timezone_name))
-    return parsed > current.astimezone(_zoneinfo(timezone_name))
+    return parsed >= current.astimezone(_zoneinfo(timezone_name)) - timedelta(minutes=5)
 
 
 def is_completed_visit(
@@ -880,7 +890,11 @@ def is_booking_cancelable(
     timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
     now: datetime | None = None,
 ) -> bool:
-    """Return whether the bot should show/call YClients cancellation for this record."""
+    """Return whether the bot should show/call YClients cancellation for this record.
+
+    Telegram reference shows cancellation for upcoming active cards without
+    hiding the action only because a status is unknown/unmapped.
+    """
 
     if not is_future_booking(item, timezone_name=timezone_name, now=now):
         return False
@@ -894,10 +908,7 @@ def is_booking_cancelable(
     if parsed - current <= timedelta(minutes=_CANCEL_CUTOFF_MINUTES):
         return False
     raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
-    normalized = _normalize_status(raw_status)
-    if normalized in {"неизвестен", "unknown", "—"}:
-        return False
-    return normalized in _ACTIVE_CANCELABLE_STATUSES
+    return not _is_explicitly_inactive_status(raw_status)
 
 
 def sort_bookings_by_datetime(
@@ -1397,6 +1408,24 @@ def _mask_phone(phone: str | None) -> str:
     return f"***{suffix}"
 
 
+def _status_diagnostics(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Return compact non-sensitive status samples for parity diagnostics."""
+
+    raw_values: list[str] = []
+    mapped_values: list[str] = []
+    for row in rows[:10]:
+        raw = _clean_text(row.get("status") or row.get("record_status") or row.get("state")) or "empty"
+        mapped = format_booking_status(raw)
+        if raw not in raw_values:
+            raw_values.append(raw)
+        if mapped not in mapped_values:
+            mapped_values.append(mapped)
+    return {
+        "raw": ",".join(raw_values)[:120] or "none",
+        "mapped": ",".join(mapped_values)[:120] or "none",
+    }
+
+
 def _extract_service_name(item: dict[str, Any]) -> str:
     services = item.get("services")
     if isinstance(services, list) and services:
@@ -1523,7 +1552,7 @@ def _filter_owned_active_rows(
         "hidden_cancelled_count": 0,
         "hidden_deleted_count": 0,
         "hidden_past_count": 0,
-        "hidden_unknown_status_count": 0,
+        "hidden_parse_error_count": 0,
     }
     visible: list[dict[str, Any]] = []
     for row in rows:
@@ -1538,11 +1567,11 @@ def _filter_owned_active_rows(
         if status in _CANCELLED_STATUSES:
             counts["hidden_cancelled_count"] += 1
             continue
-        if status not in _ACTIVE_BOOKING_STATUSES:
-            counts["hidden_unknown_status_count"] += 1
-            continue
         booking = _booking_from_payload(row, timezone_name=timezone_name)
-        if booking is None or not is_future_booking(booking, timezone_name=timezone_name, now=now):
+        if booking is None:
+            counts["hidden_parse_error_count"] += 1
+            continue
+        if not is_future_booking(booking, timezone_name=timezone_name, now=now):
             counts["hidden_past_count"] += 1
             continue
         visible.append(row)
@@ -1568,16 +1597,36 @@ def _extract_record_client_id(row: dict[str, Any]) -> str:
 
 def _extract_record_client_phone(row: dict[str, Any]) -> str:
     client = row.get("client") if isinstance(row.get("client"), dict) else {}
-    for value in (client.get("phone"), row.get("phone"), row.get("client_phone")):
+    for value in (client.get("phone"), client.get("tel"), row.get("phone"), row.get("client_phone"), row.get("tel")):
         normalized = _normalize_phone_digits(value)
         if normalized:
             return normalized
+    for container in (client.get("phones"), row.get("phones")):
+        if not isinstance(container, list):
+            continue
+        for item in container:
+            value = item
+            if isinstance(item, dict):
+                value = item.get("phone") or item.get("number") or item.get("tel")
+            normalized = _normalize_phone_digits(value)
+            if normalized:
+                return normalized
     return ""
 
 
 def _normalize_phone_digits(value: Any) -> str:
     normalized = normalize_phone(str(value or "")) if value else ""
-    return "".join(ch for ch in normalized if ch.isdigit())
+    digits = "".join(ch for ch in normalized if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("8"):
+        return f"7{digits[1:]}"
+    return digits
+
+
+def _is_explicitly_inactive_status(status: Any) -> bool:
+    """Return True only for statuses Telegram reference hides from active records."""
+
+    normalized = _normalize_status(status)
+    return normalized in _CANCELLED_OR_PAST_STATUSES or normalized in {"deleted", "delete", "removed", "archived", "archive"}
 
 def _to_int(value: Any) -> int | None:
     try:
