@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender, MaxSendResult
-from max_barbershop_bot.repositories.settings import SettingsRepository
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.repositories.users import UserProfileUpdate, UsersRepository
 
 logger = logging.getLogger(__name__)
@@ -200,7 +200,7 @@ async def send_business_notification(
 ) -> NotificationHistoryRecord | None:
     """Send one business notification once and persist both history and delivery."""
 
-    if not SettingsRepository(database_path).notifications_enabled():
+    if not AppSettingsRepository(database_path).notifications_enabled():
         return mark_notification_history_skipped(
             database_path,
             platform=platform,
