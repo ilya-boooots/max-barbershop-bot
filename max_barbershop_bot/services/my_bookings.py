@@ -1019,8 +1019,6 @@ def format_visit_history_screen(bookings: list[MyBookingItem | dict[str, Any]], 
         lines.append(f"   👤 {display['master_name'] or 'Любой мастер'}")
         lines.append(f"   📅 {display['date']} {display['time']}")
         lines.append(f"   💰 {display['price'] or '—'}")
-        if display.get("status"):
-            lines.append(f"   🧾 {display['status']}")
     return "\n".join(lines)
 
 
@@ -1038,25 +1036,26 @@ def format_booking_details_text(
     *,
     timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
     title: str = "📋 Активная запись",
+    include_status: bool = True,
 ) -> str:
     """Format selected booking details in the Telegram reference style."""
 
     display = booking_display_data(booking, timezone_name=timezone_name)
-    return "\n".join(
-        [
-            title,
-            "",
-            f"✂️ Услуга: {display['service_name']}",
-            f"👤 Мастер: {display['master_name'] or 'Любой мастер'}",
-            f"📅 Дата: {display['date']}",
-            f"🕒 Время: {display['time']}",
-            f"⏳ Длительность: {display['duration_minutes'] + ' мин' if display['duration_minutes'] else '—'}",
-            f"💰 Цена: {display['price'] or '—'}",
-            f"📍 Адрес: {display['address'] or '—'}",
-            f"📞 Контакты: {display['phone'] or '—'}",
-            f"🧾 Статус: {display['status']}",
-        ]
-    )
+    lines = [
+        title,
+        "",
+        f"✂️ Услуга: {display['service_name']}",
+        f"👤 Мастер: {display['master_name'] or 'Любой мастер'}",
+        f"📅 Дата: {display['date']}",
+        f"🕒 Время: {display['time']}",
+        f"⏳ Длительность: {display['duration_minutes'] + ' мин' if display['duration_minutes'] else '—'}",
+        f"💰 Цена: {display['price'] or '—'}",
+        f"📍 Адрес: {display['address'] or '—'}",
+        f"📞 Контакты: {display['phone'] or '—'}",
+    ]
+    if include_status and display.get("status"):
+        lines.append(f"🧾 Статус: {display['status']}")
+    return "\n".join(lines)
 
 
 def format_cancel_confirmation_text(booking: MyBookingItem | dict[str, Any], *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> str:
