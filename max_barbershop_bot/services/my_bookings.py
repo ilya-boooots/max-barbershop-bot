@@ -850,16 +850,9 @@ def is_future_booking(
     timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
     now: datetime | None = None,
 ) -> bool:
-    """Return whether a record is future and not explicitly cancelled/deleted.
+    """Return whether a record is a fresh future active YClients booking."""
 
-    Telegram reference parity: ``Мои записи`` does not require an allow-list
-    active status for upcoming records. Unknown/unmapped statuses are still
-    visible when the record exists in fresh YClients data and is not explicitly
-    cancelled/deleted/completed.
-    """
-
-    status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
-    if _is_explicitly_inactive_status(status):
+    if not _is_yclients_record_active(item):
         return False
     parsed = parse_booking_datetime(item, timezone_name=timezone_name)
     if parsed is None:
@@ -924,8 +917,7 @@ def is_booking_cancelable(
     current = current.astimezone(_zoneinfo(timezone_name))
     if parsed - current <= timedelta(minutes=_CANCEL_CUTOFF_MINUTES):
         return False
-    raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
-    return not _is_explicitly_inactive_status(raw_status)
+    return _is_yclients_record_active(item)
 
 
 def sort_bookings_by_datetime(
@@ -1307,13 +1299,7 @@ async def _fetch_all_relevant_records(
 
     rows: list[dict[str, Any]] = []
     for record_id in attributed_record_ids:
-        try:
-            payload = await yclients.get_booking_details(company_id=company_id, yclients_record_id=record_id)
-        except YClientsNotFoundError:
-            continue
-        row = _extract_record_detail_row(payload)
-        if row:
-            rows.append(row)
+        rows.append({"id": record_id})
     if yclients_client_id:
         rows.extend(
             await _fetch_all_client_records_page_set(
@@ -1337,7 +1323,19 @@ async def _fetch_all_relevant_records(
             )
         )
 
-    return _deduplicate_record_rows(rows)
+    fresh_rows: list[dict[str, Any]] = []
+    for row in _deduplicate_record_rows(rows):
+        record_id = _clean_text(row.get("record_id") or row.get("id") or row.get("booking_id") or row.get("visit_id"))
+        if not record_id:
+            continue
+        try:
+            payload = await yclients.get_booking_details(company_id=company_id, yclients_record_id=record_id)
+        except YClientsNotFoundError:
+            continue
+        fresh_row = _extract_record_detail_row(payload)
+        if fresh_row:
+            fresh_rows.append(fresh_row)
+    return _deduplicate_record_rows(fresh_rows)
 
 
 async def _fetch_all_client_records_page_set(
@@ -1598,10 +1596,10 @@ def _filter_owned_active_rows(
             continue
         counts["owned_records_count"] += 1
         status = _normalize_status(row.get("status") or row.get("record_status") or row.get("state"))
-        if status in {"deleted", "delete", "removed", "archived", "archive"}:
+        if _has_deleted_flag(row) or status in {"deleted", "delete", "removed", "archived", "archive"}:
             counts["hidden_deleted_count"] += 1
             continue
-        if status in _CANCELLED_STATUSES:
+        if not _is_yclients_record_active(row):
             counts["hidden_cancelled_count"] += 1
             continue
         booking = _booking_from_payload(row, timezone_name=timezone_name)
@@ -1650,8 +1648,7 @@ def is_record_owned_by_user(
 
 
 def is_record_visible_active(row: dict[str, Any], branch_now: datetime, *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> bool:
-    status = _normalize_status(row.get("status") or row.get("record_status") or row.get("state"))
-    if status in _CANCELLED_STATUSES or status in {"deleted", "delete", "removed", "archived", "archive"}:
+    if not _is_yclients_record_active(row):
         return False
     booking = _booking_from_payload(row, timezone_name=timezone_name)
     return bool(booking and is_future_booking(booking, timezone_name=timezone_name, now=branch_now))
@@ -1688,6 +1685,40 @@ def _normalize_phone_digits(value: Any) -> str:
         return f"7{digits[1:]}"
     return digits
 
+
+
+def _is_yclients_record_active(item: dict[str, Any] | MyBookingItem) -> bool:
+    raw = item.raw if isinstance(item, MyBookingItem) else item
+    raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(raw.get("raw_status") or raw.get("status") or raw.get("record_status") or raw.get("state"))
+    if _has_deleted_flag(raw) or _is_explicitly_inactive_status(raw_status):
+        return False
+    attendance = _extract_attendance(raw)
+    if attendance in {"-1", "1"}:
+        return False
+    if attendance in {"0", "2"}:
+        return True
+    return _normalize_status(raw_status) in _ACTIVE_BOOKING_STATUSES
+
+
+def _has_deleted_flag(row: dict[str, Any] | None) -> bool:
+    if not isinstance(row, dict):
+        return False
+    for key in ("deleted", "is_deleted", "removed", "is_removed"):
+        value = row.get(key)
+        if value is True:
+            return True
+        if _clean_text(value).lower() in {"1", "true", "yes", "y", "да"}:
+            return True
+    return False
+
+
+def _extract_attendance(row: dict[str, Any] | None) -> str:
+    if not isinstance(row, dict):
+        return ""
+    value = row.get("attendance")
+    if value is None:
+        value = row.get("visit_attendance")
+    return _clean_text(value)
 
 def _is_explicitly_inactive_status(status: Any) -> bool:
     """Return True only for statuses Telegram reference hides from active records."""
