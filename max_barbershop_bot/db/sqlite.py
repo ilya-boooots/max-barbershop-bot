@@ -97,6 +97,13 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS platform_attribution (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -385,6 +392,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON notification_history(scheduled_for);
         """
     )
+    connection.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
     _ensure_column(connection, "users", "display_name", "TEXT")
     _ensure_column(connection, "users", "first_name", "TEXT")
     _ensure_column(connection, "users", "last_name", "TEXT")

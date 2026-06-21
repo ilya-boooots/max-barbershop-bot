@@ -14,6 +14,7 @@ from max_barbershop_bot.integrations.yclients.service import YClientsServiceLaye
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
+from max_barbershop_bot.repositories.settings import SettingsRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import normalize_branch_timezone, zoneinfo_or_default
@@ -40,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 REMINDER_OFFSETS = {
     BOOKING_REMINDER_48H: timedelta(hours=48),
-    BOOKING_REMINDER_6H: timedelta(hours=6),
     BOOKING_REMINDER_2H: timedelta(hours=2),
 }
 _NOTIFICATION_TYPE_LABELS = {
@@ -139,13 +139,6 @@ def render_booking_notification_text(context: BookingNotificationContext, timezo
             f"{client_name}, здравствуйте! {master_name} ждёт вас {date_fragment} "
             f"на услугу \"{service_name}\" к {time_text}.\n\n"
             "Подтвердите, пожалуйста, запись 👇"
-        )
-    if context.notification_type == BOOKING_REMINDER_6H:
-        return (
-            "Напоминаем о записи сегодня ⏰\n\n"
-            f"Услуга: {service_name}\n"
-            f"Мастер: {master_name}\n"
-            f"Время: {time_text}"
         )
     if context.notification_type == BOOKING_REMINDER_2H:
         lines = [
@@ -270,6 +263,10 @@ async def get_due_reminders(
     limit: int = 200,
 ) -> list[DueReminder]:
     """Find due reminders from local attribution and verify each record in YClients."""
+
+    if not SettingsRepository(database_path).notifications_enabled():
+        _log_reminder_diagnostic(notification_type="all", skipped_reason="notifications_disabled", company_timezone=timezone_name)
+        return []
 
     settings = load_active_yclients_settings(
         YClientsSettingsRepository(database_path),
@@ -635,4 +632,4 @@ def _log_reminder_diagnostic(**fields: Any) -> None:
     }
     safe_fields["platform_user_id_present"] = bool(fields.get("platform_user_id"))
     safe_fields["yclients_record_id_present"] = bool(fields.get("yclients_record_id"))
-    logger.info("MAX booking reminder diagnostic: %s", safe_fields)
+    logger.info("MAX notifications diagnostic: %s", safe_fields)
