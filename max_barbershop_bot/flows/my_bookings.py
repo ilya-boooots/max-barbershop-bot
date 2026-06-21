@@ -273,6 +273,8 @@ async def handle_my_booking_details(context: RouterContext) -> None:
             bool(_booking_record_id(booking)),
             False,
         )
+        await context.send_text("Эта запись уже недоступна 🙏", keyboard=my_booking_cancel_result_keyboard())
+        return
     if not is_visible_my_booking(booking, timezone_name=timezone_name):
         await context.send_text("Эта запись уже недоступна 🙏", keyboard=my_booking_cancel_result_keyboard())
         return
@@ -317,6 +319,8 @@ async def handle_my_booking_cancel_start(context: RouterContext) -> None:
             None,
             None,
         )
+        await context.send_text("Эта запись уже недоступна 🙏", keyboard=my_booking_cancel_result_keyboard())
+        return
     if not is_booking_cancelable(booking, timezone_name=timezone_name):
         await context.send_text(MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT, keyboard=my_booking_cancel_result_keyboard())
         return

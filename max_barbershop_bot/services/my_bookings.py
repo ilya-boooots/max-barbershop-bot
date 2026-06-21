@@ -186,7 +186,7 @@ class MyBookingsService:
                 bool(yclients_client_id),
                 bool(phone),
             )
-            raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
+            return MyBookingsResult(bookings=[], branch_timezone=DEFAULT_BRANCH_TIMEZONE, yclients_client_id=None, phone_exists=False)
 
         try:
             settings = load_active_yclients_settings(self._settings_repository, operation="get_my_bookings")
@@ -230,7 +230,7 @@ class MyBookingsService:
                     phone=phone,
                     platform_user_id=platform_user_id,
                     database_path=self._settings_repository.database_path,
-                    start_date=(now.date() - timedelta(days=365)).isoformat(),
+                    start_date=now.date().isoformat(),
                     end_date=(now.date() + timedelta(days=365)).isoformat(),
                 )
         except YClientsError as exc:
@@ -258,20 +258,21 @@ class MyBookingsService:
         try:
             contacts = await ContactsService(self._settings_repository).get_contacts()
             raw_rows = _deduplicate_record_rows(_extract_record_rows(payload))
+            filtered_rows, filter_counts = _filter_owned_active_rows(
+                raw_rows,
+                yclients_client_id=yclients_client_id,
+                phone=phone,
+                timezone_name=timezone_name,
+                now=now,
+            )
             bookings = [
                 _booking_from_payload(item, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone)
-                for item in raw_rows
+                for item in filtered_rows
             ]
             normalized_bookings = [item for item in bookings if item is not None]
-            split = split_bookings_by_period(normalized_bookings, timezone_name=timezone_name, now=now)
-            all_bookings = [*split.upcoming, *split.past]
-            hidden_cancelled_count = sum(1 for item in normalized_bookings if _normalize_status(item.raw_status) in _CANCELLED_STATUSES)
-            hidden_unknown_count = sum(
-                1
-                for item in normalized_bookings
-                if _normalize_status(item.raw_status) not in (_ACTIVE_BOOKING_STATUSES | _COMPLETED_VISIT_STATUSES | _CANCELLED_STATUSES | _NO_SHOW_STATUSES)
-                and not is_future_booking(item, timezone_name=timezone_name, now=now)
-            )
+            all_bookings = sort_bookings_by_datetime(normalized_bookings, timezone_name=timezone_name)
+            hidden_cancelled_count = filter_counts["hidden_cancelled_count"]
+            hidden_unknown_count = filter_counts["hidden_unknown_status_count"]
         except Exception as exc:  # noqa: BLE001 - bad contact/settings/payload shape must not make the callback silent.
             logger.warning(
                 "My bookings payload normalization failed: operation=get_my_bookings platform_user_id=%s "
@@ -283,13 +284,23 @@ class MyBookingsService:
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
         logger.info(
-            "MAX my bookings status filter diagnostic: raw_records_count=%s active_count=%s history_count=%s "
-            "hidden_cancelled_count=%s hidden_unknown_count=%s branch_timezone=%s",
+            "MAX my bookings live filter diagnostic: platform_user_id_present=%s yclients_client_id_present=%s "
+            "phone_present_masked=%s raw_yclients_records_count=%s owned_records_count=%s active_visible_count=%s "
+            "hidden_not_owned_count=%s hidden_cancelled_count=%s hidden_deleted_count=%s hidden_past_count=%s "
+            "hidden_unknown_status_count=%s hidden_missing_revalidation_count=%s state_map_size=%s branch_timezone=%s",
+            bool(platform_user_id),
+            bool(yclients_client_id),
+            _mask_phone(phone),
             len(raw_rows),
-            len(split.upcoming),
-            len(split.past),
+            filter_counts["owned_records_count"],
+            len(all_bookings),
+            filter_counts["hidden_not_owned_count"],
             hidden_cancelled_count,
+            filter_counts["hidden_deleted_count"],
+            filter_counts["hidden_past_count"],
             hidden_unknown_count,
+            0,
+            len(all_bookings),
             timezone_name,
         )
         logger.info(
@@ -302,9 +313,9 @@ class MyBookingsService:
             bool(yclients_client_id),
             len(raw_rows),
             len(normalized_bookings),
-            len(split.upcoming),
-            len(split.past),
-            min(len(all_bookings), len(all_bookings)),
+            len(all_bookings),
+            0,
+            len(all_bookings),
             len(all_bookings),
             "all",
             _MY_BOOKINGS_PAGE_SIZE,
@@ -369,6 +380,10 @@ class MyBookingsService:
         booking = _booking_from_payload(row, timezone_name=timezone_name, address=contacts.address, phone=contacts.phone) if row else None
         if booking is None:
             raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
+        if not _record_belongs_to_user(row, yclients_client_id=yclients_client_id, phone=phone):
+            raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
+        if not is_future_booking(booking, timezone_name=timezone_name):
+            raise MyBookingsLoadError(MY_BOOKING_NOT_FOUND_TEXT)
         return booking
 
     async def cancel_booking_for_user(
@@ -428,9 +443,10 @@ class MyBookingsService:
                 current_status_raw = _clean_text(row.get("status") or row.get("record_status") or row.get("state")) if row else ""
                 current_status_mapped = format_booking_status(current_status_raw)
                 appointment_datetime = parse_booking_datetime(current, timezone_name=timezone_name) if current else None
-                is_future = bool(current and is_future_booking(current, timezone_name=timezone_name))
+                is_owned = bool(row and _record_belongs_to_user(row, yclients_client_id=yclients_client_id, phone=phone))
+                is_future = bool(current and is_owned and is_future_booking(current, timezone_name=timezone_name))
                 is_past = bool(appointment_datetime and not is_future)
-                is_cancelable = bool(current and is_booking_cancelable(current, timezone_name=timezone_name))
+                is_cancelable = bool(current and is_owned and is_booking_cancelable(current, timezone_name=timezone_name))
                 logger.info(
                     "MAX my bookings cancelability diagnostic: yclients_record_id_present=%s raw_status=%s "
                     "mapped_status=%s appointment_datetime_present=%s branch_timezone=%s is_past=%s "
@@ -816,7 +832,7 @@ def is_future_booking(
     """Return whether a record is future and not explicitly cancelled/deleted."""
 
     status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(item.get("raw_status") or item.get("status") or item.get("record_status") or item.get("state"))
-    if _normalize_status(status) in _CANCELLED_STATUSES:
+    if _normalize_status(status) not in _ACTIVE_BOOKING_STATUSES:
         return False
     parsed = parse_booking_datetime(item, timezone_name=timezone_name)
     if parsed is None:
@@ -959,7 +975,7 @@ def format_bookings_list_screen(bookings: list[MyBookingItem], *, timezone_name:
     """Format a compact bookings list split into upcoming and past sections."""
 
     if not bookings:
-        return f"{MY_BOOKINGS_TITLE_TEXT}\n\n{MY_BOOKINGS_EMPTY_TEXT}"
+        return f"{MY_BOOKINGS_TITLE_TEXT}\n\nПока у вас нет активных записей 🙏"
 
     split = split_bookings_by_period(bookings, timezone_name=timezone_name)
     parts = [MY_BOOKINGS_TITLE_TEXT, "Выберите запись, чтобы открыть детали 👇"]
@@ -1261,7 +1277,7 @@ async def _fetch_all_relevant_records(
     start_date: str,
     end_date: str,
 ) -> list[dict[str, Any]]:
-    """Fetch records by all existing user links: client id, phone and MAX attribution."""
+    """Fetch fresh YClients records only by current user's client id or phone."""
 
     rows: list[dict[str, Any]] = []
     if yclients_client_id:
@@ -1286,31 +1302,6 @@ async def _fetch_all_relevant_records(
                 end_date=end_date,
             )
         )
-
-    for record_id in _platform_user_attributed_record_ids(database_path, platform_user_id):
-        try:
-            details = await yclients.get_booking_details(company_id=company_id, yclients_record_id=record_id)
-        except YClientsError:
-            logger.info(
-                "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
-                "yclients_client_id_present=%s raw_records_count=%s after_status_filter_count=%s "
-                "upcoming_count=%s past_count=%s rendered_buttons_count=%s state_map_size=%s page=%s page_size=%s "
-                "branch_timezone=%s",
-                bool(platform_user_id),
-                _mask_phone(phone),
-                bool(yclients_client_id),
-                len(rows),
-                len(rows),
-                0,
-                0,
-                0,
-                0,
-                "attribution_detail_skipped",
-                _MY_BOOKINGS_PAGE_SIZE,
-                "unknown",
-            )
-            continue
-        rows.extend(_extract_record_rows(details))
 
     return _deduplicate_record_rows(rows)
 
@@ -1516,6 +1507,77 @@ def _extract_seance_length(row: dict[str, Any]) -> int | None:
             return total
     return None
 
+
+
+def _filter_owned_active_rows(
+    rows: list[dict[str, Any]],
+    *,
+    yclients_client_id: str | None,
+    phone: str | None,
+    timezone_name: str,
+    now: datetime,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    counts = {
+        "owned_records_count": 0,
+        "hidden_not_owned_count": 0,
+        "hidden_cancelled_count": 0,
+        "hidden_deleted_count": 0,
+        "hidden_past_count": 0,
+        "hidden_unknown_status_count": 0,
+    }
+    visible: list[dict[str, Any]] = []
+    for row in rows:
+        if not _record_belongs_to_user(row, yclients_client_id=yclients_client_id, phone=phone):
+            counts["hidden_not_owned_count"] += 1
+            continue
+        counts["owned_records_count"] += 1
+        status = _normalize_status(row.get("status") or row.get("record_status") or row.get("state"))
+        if status in {"deleted", "delete", "removed", "archived", "archive"}:
+            counts["hidden_deleted_count"] += 1
+            continue
+        if status in _CANCELLED_STATUSES:
+            counts["hidden_cancelled_count"] += 1
+            continue
+        if status not in _ACTIVE_BOOKING_STATUSES:
+            counts["hidden_unknown_status_count"] += 1
+            continue
+        booking = _booking_from_payload(row, timezone_name=timezone_name)
+        if booking is None or not is_future_booking(booking, timezone_name=timezone_name, now=now):
+            counts["hidden_past_count"] += 1
+            continue
+        visible.append(row)
+    return visible, counts
+
+
+def _record_belongs_to_user(row: dict[str, Any], *, yclients_client_id: str | None, phone: str | None) -> bool:
+    expected_client_id = _clean_text(yclients_client_id)
+    expected_phone = _normalize_phone_digits(phone)
+    actual_client_id = _extract_record_client_id(row)
+    actual_phone = _extract_record_client_phone(row)
+    if expected_client_id and actual_client_id and actual_client_id == expected_client_id:
+        return True
+    if expected_phone and actual_phone and actual_phone == expected_phone:
+        return True
+    return False
+
+
+def _extract_record_client_id(row: dict[str, Any]) -> str:
+    client = row.get("client") if isinstance(row.get("client"), dict) else {}
+    return _clean_text(client.get("id") or client.get("client_id") or row.get("client_id") or row.get("yclients_client_id"))
+
+
+def _extract_record_client_phone(row: dict[str, Any]) -> str:
+    client = row.get("client") if isinstance(row.get("client"), dict) else {}
+    for value in (client.get("phone"), row.get("phone"), row.get("client_phone")):
+        normalized = _normalize_phone_digits(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _normalize_phone_digits(value: Any) -> str:
+    normalized = normalize_phone(str(value or "")) if value else ""
+    return "".join(ch for ch in normalized if ch.isdigit())
 
 def _to_int(value: Any) -> int | None:
     try:
