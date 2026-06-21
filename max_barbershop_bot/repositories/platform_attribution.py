@@ -20,7 +20,10 @@ class AttributionRecord:
     yclients_record_id: str | None = None
     yclients_client_id: str | None = None
     marker: str = DEFAULT_ATTRIBUTION_MARKER
+    booking_phone: str | None = None
+    source: str | None = None
     created_at: str | None = None
+    updated_at: str | None = None
 
 
 class PlatformAttributionRepository:
@@ -36,6 +39,8 @@ class PlatformAttributionRepository:
         yclients_client_id: str | None = None,
         marker: str = DEFAULT_ATTRIBUTION_MARKER,
         platform: str = PLATFORM_MAX,
+        booking_phone: str | None = None,
+        source: str | None = None,
     ) -> AttributionRecord:
         """Create an attribution row and return the persisted record."""
 
@@ -47,9 +52,11 @@ class PlatformAttributionRepository:
                     platform_user_id,
                     yclients_record_id,
                     yclients_client_id,
-                    marker
+                    marker,
+                    booking_phone,
+                    source
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _required_text(platform, "platform"),
@@ -57,6 +64,8 @@ class PlatformAttributionRepository:
                     _optional_text(yclients_record_id),
                     _optional_text(yclients_client_id),
                     _required_text(marker, "marker"),
+                    _optional_text(booking_phone),
+                    _optional_text(source),
                 ),
             )
             connection.commit()
@@ -69,13 +78,22 @@ class PlatformAttributionRepository:
         yclients_client_id: str | None = None,
         marker: str = DEFAULT_ATTRIBUTION_MARKER,
         platform: str = PLATFORM_MAX,
+        booking_phone: str | None = None,
+        source: str | None = None,
     ) -> AttributionRecord:
         """Return an existing record for a YClients record id or create a new one."""
 
         if yclients_record_id is not None:
             existing_record = self.get_by_yclients_record_id(yclients_record_id)
             if existing_record is not None:
-                return existing_record
+                self.update_record_metadata(
+                    existing_record.id,
+                    platform_user_id=platform_user_id,
+                    yclients_client_id=yclients_client_id,
+                    booking_phone=booking_phone,
+                    source=source,
+                )
+                return self.get_by_id(existing_record.id) or existing_record
 
         return self.create_record(
             platform_user_id=platform_user_id,
@@ -83,7 +101,44 @@ class PlatformAttributionRepository:
             yclients_client_id=yclients_client_id,
             marker=marker,
             platform=platform,
+            booking_phone=booking_phone,
+            source=source,
         )
+
+
+    def update_record_metadata(
+        self,
+        record_id: int | None,
+        *,
+        platform_user_id: str | None = None,
+        yclients_client_id: str | None = None,
+        booking_phone: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        """Safely enrich an existing attribution row without changing its YClients record id."""
+
+        if record_id is None:
+            return
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE platform_attribution
+                SET platform_user_id = COALESCE(?, platform_user_id),
+                    yclients_client_id = COALESCE(?, yclients_client_id),
+                    booking_phone = COALESCE(?, booking_phone),
+                    source = COALESCE(?, source),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    _optional_text(platform_user_id),
+                    _optional_text(yclients_client_id),
+                    _optional_text(booking_phone),
+                    _optional_text(source),
+                    record_id,
+                ),
+            )
+            connection.commit()
 
     def get_by_id(self, record_id: int) -> AttributionRecord | None:
         """Find an attribution row by its database id."""
@@ -220,6 +275,7 @@ class PlatformAttributionRepository:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path)
         connection.execute("PRAGMA foreign_keys = ON")
+        _ensure_optional_columns(connection)
         connection.row_factory = sqlite3.Row
         return connection
 
@@ -264,7 +320,10 @@ def _row_to_record(row: sqlite3.Row | None) -> AttributionRecord | None:
         yclients_record_id=_row_optional_text(row, "yclients_record_id"),
         yclients_client_id=_row_optional_text(row, "yclients_client_id"),
         marker=str(row["marker"]),
+        booking_phone=_row_optional_text(row, "booking_phone"),
+        source=_row_optional_text(row, "source"),
         created_at=_row_optional_text(row, "created_at"),
+        updated_at=_row_optional_text(row, "updated_at"),
     )
 
 
@@ -283,5 +342,26 @@ def _optional_text(value: str | None) -> str | None:
 
 
 def _row_optional_text(row: sqlite3.Row, column: str) -> str | None:
+    if column not in row.keys():
+        return None
     value = row[column]
     return str(value) if value is not None else None
+
+
+def _ensure_optional_columns(connection: sqlite3.Connection) -> None:
+    try:
+        rows = connection.execute("PRAGMA table_info(platform_attribution)").fetchall()
+    except sqlite3.OperationalError:
+        return
+    existing = {str(row[1]) for row in rows}
+    statements = []
+    if "booking_phone" not in existing:
+        statements.append("ALTER TABLE platform_attribution ADD COLUMN booking_phone TEXT")
+    if "source" not in existing:
+        statements.append("ALTER TABLE platform_attribution ADD COLUMN source TEXT")
+    if "updated_at" not in existing:
+        statements.append("ALTER TABLE platform_attribution ADD COLUMN updated_at TEXT")
+    for statement in statements:
+        connection.execute(statement)
+    if statements:
+        connection.commit()

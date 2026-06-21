@@ -767,6 +767,8 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
             timezone_name=booking_service.get_branch_timezone(),
             action_type="local_booking_attribution",
         ),
+        booking_phone=booking_phone,
+        source="booking_created_from_max",
     )
     if created.datetime_iso:
         state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, created.datetime_iso)
@@ -1548,6 +1550,8 @@ def _save_attribution_safely(
     yclients_record_id: str,
     yclients_client_id: str | None,
     marker: str = MAX_BOOKING_COMMENT_MARKER,
+    booking_phone: str | None = None,
+    source: str | None = None,
 ) -> None:
     try:
         PlatformAttributionRepository(_database_path()).create_if_missing(
@@ -1556,6 +1560,8 @@ def _save_attribution_safely(
             yclients_record_id=yclients_record_id,
             yclients_client_id=yclients_client_id,
             marker=marker,
+            booking_phone=booking_phone,
+            source=source,
         )
     except Exception as exc:  # noqa: BLE001 - booking already exists in YClients, only local attribution failed.
         logger.exception(
