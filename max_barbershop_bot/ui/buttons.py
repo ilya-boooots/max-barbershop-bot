@@ -1169,8 +1169,7 @@ def my_booking_entry_keyboard(*, can_cancel: bool = True, show_all: bool = False
     """Build Telegram-reference actions for the nearest My bookings card."""
 
     rows: list[list[MaxButton]] = [[MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)]]
-    if can_cancel:
-        rows.append([MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
+    rows.append([MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
     rows.append([MaxButton(text="🔁 Повторить запись", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)])
     if show_all:
         rows.append([MaxButton(text="📋 Показать все активные записи", payload=MY_BOOKINGS_SHOW_ALL_ACTIVE_PAYLOAD)])
@@ -1193,8 +1192,7 @@ def my_booking_active_card_keyboard(*, index: int, total: int, can_cancel: bool 
 
     rows: list[list[MaxButton]] = [pager]
     rows.append([MaxButton(text="🔁 Перенести", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)])
-    if can_cancel:
-        rows.append([MaxButton(text="❌ Отменить", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
+    rows.append([MaxButton(text="❌ Отменить", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
     rows.append([MaxButton(text="🔁 Повторить", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=MENU_MY_BOOKINGS_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
@@ -1235,8 +1233,7 @@ def my_booking_details_keyboard(*, can_cancel: bool = True, is_active: bool = Tr
     rows: list[list[MaxButton]] = []
     if is_active:
         rows.append([MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)])
-        if can_cancel:
-            rows.append([MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
+        rows.append([MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
     rows.append([MaxButton(text="🔁 Повторить запись", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
