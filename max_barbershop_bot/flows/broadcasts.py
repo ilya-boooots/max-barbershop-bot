@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-from os import getenv
-from pathlib import Path
+import os
 from uuid import uuid4
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.action_locks import DEFAULT_ACTION_LOCK_TTL_SECONDS, acquire_action_lock, is_action_locked, release_action_lock
-from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
+from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH, ConfigError, load_config
 from max_barbershop_bot.core.permissions import can_view_broadcasts
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
@@ -508,7 +507,7 @@ async def _fetch_yclients_clients(context: RouterContext):
 
 
 def _omnichannel_service(context: RouterContext) -> OmnichannelBroadcastService:
-    telegram_adapter, telegram_repo = _telegram_delivery_dependencies()
+    telegram_adapter, telegram_repo, telegram_unavailable_reason = _telegram_delivery_dependencies()
     return OmnichannelBroadcastService(
         users_repository=_users_repository(),
         telegram_users_repository=telegram_repo,
@@ -518,39 +517,76 @@ def _omnichannel_service(context: RouterContext) -> OmnichannelBroadcastService:
             PLATFORM_MAX: MaxBroadcastDeliveryAdapter(context.sender),
             PLATFORM_TELEGRAM: telegram_adapter,
         },
+        telegram_unavailable_reason=telegram_unavailable_reason,
     )
 
 
 def _telegram_delivery_dependencies():
-    token = (getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-    db_path = (getenv("TELEGRAM_DB_PATH") or "").strip()
+    try:
+        config = load_config()
+        token = (config.telegram_bot_token or "").strip()
+        db_path = (config.telegram_db_path or "").strip()
+    except ConfigError:
+        token = ""
+        db_path = ""
     token_configured = bool(token)
     db_configured = bool(db_path)
-    if not token_configured or not db_configured:
-        logger.info(
-            "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s",
-            token_configured,
-            db_configured,
-        )
-        return TelegramUnavailableBroadcastAdapter(), None
+    if not db_configured:
+        _log_telegram_db_diagnostics(None, token_configured=token_configured, db_path_configured=False)
+        return TelegramUnavailableBroadcastAdapter(), None, "telegram_env_missing"
     repo = TelegramUsersRepository(db_path)
-    if not Path(db_path).exists():
-        logger.warning(
-            "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s error_code=%s",
-            True,
-            True,
-            "telegram_db_not_found",
+    diagnostics = repo.inspect_database(token_configured=token_configured)
+    _log_telegram_db_diagnostics(diagnostics)
+    if not token_configured or diagnostics.unavailable_reason:
+        return TelegramUnavailableBroadcastAdapter(), repo if diagnostics.users_table_found else None, diagnostics.unavailable_reason
+    return TelegramBotApiBroadcastAdapter(bot_token=token), repo, None
+
+
+def _log_telegram_db_diagnostics(diagnostics, *, token_configured: bool | None = None, db_path_configured: bool | None = None) -> None:
+    if diagnostics is None:
+        logger.info(
+            "MAX Telegram broadcast diagnostic: telegram_token_configured=%s telegram_db_path_configured=%s telegram_db_exists=%s telegram_db_readable=%s telegram_users_table_found=%s telegram_users_count=%s telegram_users_with_chat_id_count=%s telegram_users_with_phone_count=%s telegram_users_with_yclients_client_id_count=%s",
+            bool(token_configured), bool(db_path_configured), False, False, False, 0, 0, 0, 0,
         )
-        return TelegramUnavailableBroadcastAdapter(), None
-    columns = repo.get_columns()
+        return
     logger.info(
-        "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s telegram_users_count=%s columns_count=%s",
-        True,
-        True,
-        repo.count_users(),
-        len(columns),
+        "MAX Telegram broadcast diagnostic: telegram_token_configured=%s telegram_db_path_configured=%s telegram_db_exists=%s telegram_db_readable=%s telegram_users_table_found=%s telegram_users_count=%s telegram_users_with_chat_id_count=%s telegram_users_with_phone_count=%s telegram_users_with_yclients_client_id_count=%s telegram_db_columns=%s",
+        diagnostics.token_configured, diagnostics.db_path_configured, diagnostics.db_exists, diagnostics.db_readable, diagnostics.users_table_found, diagnostics.users_count, diagnostics.users_with_chat_id_count, diagnostics.users_with_phone_count, diagnostics.users_with_yclients_client_id_count, ",".join(diagnostics.columns),
     )
-    return TelegramBotApiBroadcastAdapter(bot_token=token), repo
+
+
+
+async def run_telegram_broadcast_smoke_check() -> dict[str, object]:
+    """Safe Telegram adapter smoke check; never sends to clients."""
+
+    try:
+        config = load_config()
+        test_chat_id = config.telegram_test_chat_id
+    except ConfigError:
+        config = None
+        test_chat_id = None
+    adapter, repo, _ = _telegram_delivery_dependencies()
+    db_result = repo.inspect_database(token_configured=bool(config and config.telegram_bot_token)) if repo else None
+    result: dict[str, object] = {
+        "token_configured": bool(config and config.telegram_bot_token),
+        "db_path_configured": bool(config and config.telegram_db_path),
+        "db_exists": bool(db_result and db_result.db_exists),
+        "db_readable": bool(db_result and db_result.db_readable),
+        "users_table_readable": bool(db_result and db_result.users_table_found),
+        "users_count": int(db_result.users_count) if db_result else 0,
+        "users_with_chat_id_count": int(db_result.users_with_chat_id_count) if db_result else 0,
+        "test_send_message": "Тестовая отправка пропущена: TELEGRAM_TEST_CHAT_ID не задан",
+    }
+    if isinstance(adapter, TelegramBotApiBroadcastAdapter):
+        smoke = await adapter.smoke_check(test_chat_id=test_chat_id)
+        result.update(smoke)
+        if test_chat_id and smoke.get("test_send_ok"):
+            result["test_send_message"] = "✅ Тестовая отправка Telegram выполнена"
+    logger.info(
+        "MAX Telegram broadcast diagnostic: smoke_check token_configured=%s telegram_db_path_configured=%s telegram_db_exists=%s telegram_db_readable=%s telegram_users_table_found=%s telegram_users_count=%s telegram_users_with_chat_id_count=%s get_me_ok=%s test_send_skipped=%s",
+        result["token_configured"], result["db_path_configured"], result["db_exists"], result["db_readable"], result["users_table_readable"], result["users_count"], result["users_with_chat_id_count"], result.get("get_me_ok"), result.get("test_send_skipped"),
+    )
+    return result
 
 
 def _normalized_attachment(context: RouterContext) -> BroadcastAttachmentPayload | None:
@@ -595,17 +631,49 @@ def _format_omnichannel_confirm(estimate) -> str:
 
 
 def _format_omnichannel_report(report) -> str:
+    telegram_reason = _telegram_report_reason(report)
+    reason_line = f"\nПричина Telegram: {telegram_reason}" if telegram_reason else ""
     return (
         "✅ Рассылка завершена\n\n"
         f"Клиентов в YClients: {report.total_yclients_clients}\n"
-        f"Отправлено в Telegram: {report.telegram_sent}\n"
-        f"Отправлено в MAX: {report.max_sent}\n"
+        f"Выбрано в Telegram: {getattr(report, 'telegram_selected', 0)}\n"
+        f"Выбрано в MAX: {getattr(report, 'max_selected', 0)}\n"
+        f"Telegram: {report.telegram_sent} отправлено\n"
+        f"MAX: {report.max_sent} отправлено\n"
         f"Не доставлено: {report.not_delivered}\n"
         f"Ошибок: {report.failed}\n"
         f"Дубликатов исключено: {report.skipped_duplicate}\n"
         f"Telegram недоступен: {report.skipped_sender_unavailable}\n"
+        f"Заблокировали бота: {report.skipped_blocked}\n"
         f"Медиа не поддержано: {report.skipped_media_unsupported}"
+        f"{reason_line}"
     )
+
+
+def _telegram_report_reason(report) -> str | None:
+    if report.telegram_sent > 0:
+        return None
+    if getattr(report, "telegram_unavailable_reason", None) == "telegram_env_missing":
+        return "Telegram: не подключён — не найден TELEGRAM_BOT_TOKEN/TELEGRAM_DB_PATH"
+    if getattr(report, "telegram_unavailable_reason", None) == "telegram_db_not_found":
+        return "Telegram DB не найдена"
+    if getattr(report, "telegram_unavailable_reason", None) == "telegram_db_unreadable":
+        return "Telegram DB недоступна для чтения"
+    if getattr(report, "telegram_unavailable_reason", None) == "telegram_users_table_missing":
+        return "Telegram users table не найдена"
+    if getattr(report, "telegram_selected", 0) == 0:
+        return "Telegram users matched: 0"
+    if report.skipped_sender_unavailable:
+        return "Telegram adapter unavailable — проверьте TELEGRAM_BOT_TOKEN/TELEGRAM_DB_PATH"
+    if report.skipped_blocked:
+        return "Telegram API 403 blocked"
+    if report.skipped_media_unsupported:
+        return "media unsupported"
+    if getattr(report, "last_telegram_error_short", None):
+        return str(report.last_telegram_error_short)
+    if report.failed:
+        return "Telegram API error"
+    return None
 
 def _save_broadcast_text(context: RouterContext, text: str) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY, text)
@@ -770,4 +838,4 @@ def _staff_repository() -> StaffRolesRepository:
 
 
 def _database_path() -> str:
-    return getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH
+    return os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH

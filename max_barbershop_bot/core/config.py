@@ -44,6 +44,7 @@ class Config:
     developer_diagnostics_enabled: bool = DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED
     telegram_bot_token: str | None = None
     telegram_db_path: str | None = None
+    telegram_test_chat_id: str | None = None
 
 
 def load_config() -> Config:
@@ -92,6 +93,7 @@ def load_config() -> Config:
         ),
         telegram_bot_token=_optional_env("TELEGRAM_BOT_TOKEN"),
         telegram_db_path=_optional_env("TELEGRAM_DB_PATH"),
+        telegram_test_chat_id=_optional_env("TELEGRAM_TEST_CHAT_ID"),
     )
 
 
