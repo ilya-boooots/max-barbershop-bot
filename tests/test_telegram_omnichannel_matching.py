@@ -25,6 +25,9 @@ class FakeUsersRepo:
     def __init__(self, users=()):
         self.users = list(users)
 
+    def list_users_for_broadcast_audience(self, *, platform=None):
+        return [u for u in self.users if platform is None or u.platform == platform]
+
     def list_by_yclients_client_id(self, yclients_client_id, *, platform=None):
         return [u for u in self.users if u.yclients_client_id == str(yclients_client_id) and (platform is None or u.platform == platform)]
 
@@ -120,3 +123,50 @@ def test_telegram_null_notifications_deliverable_by_default():
 def test_telegram_blocked_skipped():
     target = target_for(service([tg_user(phone="+79198332692", blocked=True)]), YClientsNormalizedClient(id="1", phones=("89198332692",)))
     assert target.platform is None
+
+
+def test_required_case_phone_match_counters_select_telegram_not_max():
+    svc = service([tg_user(chat_id="111", phone="+79198332692")], [max_user(phone="89198332692")])
+    estimate = svc.estimate([YClientsNormalizedClient(id="1", phones=("89198332692",))])
+    assert estimate.telegram_selected == 1
+    assert estimate.max_selected == 0
+    assert estimate.telegram_matching_diagnostics["telegram_matched_by_phone_count"] == 1
+
+
+def test_required_case_client_id_match_counters():
+    svc = service([tg_user(chat_id="111", yclients_client_id="123")])
+    estimate = svc.estimate([YClientsNormalizedClient(id="123")])
+    assert estimate.telegram_selected == 1
+    assert estimate.telegram_matching_diagnostics["telegram_matched_by_client_id_count"] == 1
+
+
+def test_required_case_telegram_and_max_duplicate_priority_count():
+    svc = service([tg_user(chat_id="111", yclients_client_id="123")], [max_user(yclients_client_id="123")])
+    estimate = svc.estimate([YClientsNormalizedClient(id="123")])
+    assert estimate.telegram_selected == 1
+    assert estimate.max_selected == 0
+    assert estimate.duplicates_excluded == 1
+    assert estimate.telegram_matching_diagnostics["telegram_priority_duplicate_skipped_count"] == 1
+
+
+def test_required_case_null_notifications_deliverable():
+    svc = service([tg_user(chat_id="111", phone="+79198332692", notifications_enabled=None)])
+    estimate = svc.estimate([YClientsNormalizedClient(id="1", phones=("89198332692",))])
+    assert estimate.telegram_selected == 1
+    assert estimate.telegram_matching_diagnostics["telegram_matches_rejected_not_deliverable_count"] == 0
+
+
+def test_required_case_blocked_falls_back_to_max_and_counts_rejection():
+    svc = service([tg_user(chat_id="111", phone="+79198332692", blocked=True)], [max_user(phone="89198332692")])
+    estimate = svc.estimate([YClientsNormalizedClient(id="1", phones=("89198332692",))])
+    assert estimate.telegram_selected == 0
+    assert estimate.max_selected == 1
+    assert estimate.telegram_matching_diagnostics["rejected_blocked_count"] == 1
+
+
+def test_required_case_intersection_selects_unless_rejected():
+    svc = service([tg_user(chat_id="111", phone="+79198332692")])
+    diagnostics = svc.telegram_matching_diagnostics([YClientsNormalizedClient(id="1", phones=("89198332692",))])
+    assert diagnostics["phone_key_intersection_count"] > 0
+    assert diagnostics["telegram_matched_by_phone_count"] > 0
+    assert diagnostics["telegram_matching_resolver_invariant_failed"] is False
