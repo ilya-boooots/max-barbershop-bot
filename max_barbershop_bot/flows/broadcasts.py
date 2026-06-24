@@ -22,7 +22,9 @@ from max_barbershop_bot.services.broadcasts import (
     build_broadcast_preview,
     build_recipients_from_users,
     format_broadcast_report,
+    BroadcastDraft,
     BroadcastSendReport,
+    extract_broadcast_attachment,
     send_one_time_broadcast,
     validate_broadcast_text,
 )
@@ -38,6 +40,8 @@ from max_barbershop_bot.ui.buttons import (
     BROADCAST_ONE_TIME_START_PAYLOAD,
     BROADCAST_PREVIEW_EDIT_PAYLOAD,
     BROADCAST_PREVIEW_NEXT_PAYLOAD,
+    BROADCAST_PREVIEW_REMOVE_ATTACHMENT_PAYLOAD,
+    BROADCAST_PREVIEW_EDIT_ATTACHMENT_PAYLOAD,
     broadcast_audience_keyboard,
     broadcast_confirm_keyboard,
     broadcast_menu_keyboard,
@@ -54,6 +58,7 @@ from max_barbershop_bot.ui.texts import (
     BROADCAST_TEXT_INPUT_TEXT,
 )
 
+_BROADCAST_DRAFT_KEY = "broadcast_draft"
 _BROADCAST_TEXT_KEY = "broadcast_text"
 _BROADCAST_AUDIENCE_KEY = "broadcast_audience"
 _BROADCAST_AUDIENCE_LABEL_KEY = "broadcast_audience_label"
@@ -64,6 +69,8 @@ _BROADCAST_SEND_TOKEN_KEY = "broadcast_send_token"
 _BROADCAST_SKIPPED_DISABLED_KEY = "broadcast_skipped_disabled"
 _BROADCAST_SKIPPED_MISSING_KEY = "broadcast_skipped_missing"
 _BROADCAST_RETURN_SCREEN_KEY = "broadcast_return_screen"
+_BROADCAST_ATTACHMENT_TYPE_KEY = "broadcast_attachment_type"
+_BROADCAST_ATTACHMENT_KEY = "broadcast_attachment"
 
 logger = logging.getLogger(__name__)
 _BROADCAST_SEND_LOCK_KEY = "broadcast:send"
@@ -76,6 +83,8 @@ def register_broadcast_routes(router: Router) -> None:
     router.on_callback(BROADCAST_ONE_TIME_START_PAYLOAD, handle_one_time_start)
     router.on_callback(BROADCAST_PREVIEW_NEXT_PAYLOAD, handle_preview_next)
     router.on_callback(BROADCAST_PREVIEW_EDIT_PAYLOAD, handle_preview_edit)
+    router.on_callback(BROADCAST_PREVIEW_REMOVE_ATTACHMENT_PAYLOAD, handle_preview_remove_attachment)
+    router.on_callback(BROADCAST_PREVIEW_EDIT_ATTACHMENT_PAYLOAD, handle_preview_edit_attachment)
     router.on_callback(BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD, handle_audience_all_users)
     router.on_callback(BROADCAST_AUDIENCE_SELF_PAYLOAD, handle_audience_self)
     router.on_callback(BROADCAST_CONFIRM_SEND_PAYLOAD, handle_confirm_send)
@@ -113,7 +122,7 @@ async def handle_one_time_start(context: RouterContext) -> None:
 
 
 async def handle_text_input(context: RouterContext) -> None:
-    """Validate entered text and show preview."""
+    """Validate entered text/media according to the current broadcast screen and show preview."""
 
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
@@ -121,17 +130,34 @@ async def handle_text_input(context: RouterContext) -> None:
     if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
         await _send_sending_in_progress(context)
         return
-    validation = validate_broadcast_text(context.event.text)
+
+    attachment = extract_broadcast_attachment(context.event.attachments)
+    incoming_text = (context.event.text or "").strip()
+    if attachment is not None:
+        _save_broadcast_attachment(context, attachment.attachment_type, attachment.attachment)
+        logger.info(
+            "MAX broadcast diagnostic: media_input platform_user_id_present=%s role=%s screen_id=%s draft_text_present=%s attachment_type=%s attachment_present=%s",
+            bool(context.event.platform_user_id),
+            _actor_role(context),
+            state.get_current_screen(_user_id(context), _chat_id(context)),
+            bool(incoming_text or _broadcast_text(context)),
+            attachment.attachment_type,
+            True,
+        )
+    elif context.event.attachments and not incoming_text:
+        await context.send_text("Этот тип вложения пока не поддерживается в MAX 🙏", keyboard=broadcast_text_keyboard())
+        return
+
+    validation = validate_broadcast_text(incoming_text or _broadcast_text(context))
     if not validation.ok:
         await context.send_text(validation.error or "Текст рассылки не может быть пустым 🙏", keyboard=broadcast_text_keyboard())
         return
 
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY, validation.text)
+    _save_broadcast_text(context, validation.text)
     if _broadcast_recipients(context):
         await show_segment_broadcast_confirm(context)
         return
-    _push_current_screen(context, state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
-    await context.send_text(build_broadcast_preview(validation.text), keyboard=broadcast_preview_keyboard())
+    await _show_preview(context)
 
 
 async def handle_preview_next(context: RouterContext) -> None:
@@ -164,6 +190,30 @@ async def handle_preview_edit(context: RouterContext) -> None:
     await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
     await context.send_text(BROADCAST_TEXT_INPUT_TEXT, keyboard=broadcast_text_keyboard())
+
+
+async def handle_preview_edit_attachment(context: RouterContext) -> None:
+    """Ask admin to send/replace media for the draft."""
+
+    if not _can_open_broadcasts(context):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
+    await context.send_text("Отправьте фото, GIF или видео для рассылки. Можно добавить подпись текстом 👇", keyboard=broadcast_text_keyboard())
+
+
+async def handle_preview_remove_attachment(context: RouterContext) -> None:
+    """Remove selected media from the broadcast draft and return to preview."""
+
+    if not _can_open_broadcasts(context):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ATTACHMENT_TYPE_KEY, None)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ATTACHMENT_KEY, None)
+    _save_draft(context)
+    await _show_preview(context)
 
 
 async def handle_audience_all_users(context: RouterContext) -> None:
@@ -208,6 +258,7 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
             audience_label=audience.label,
             recipient_count=len(recipients),
             text=text,
+            attachment_type=_broadcast_attachment_type(context),
         ),
         keyboard=broadcast_confirm_keyboard(can_send=True),
     )
@@ -250,7 +301,7 @@ async def show_segment_broadcast_confirm(context: RouterContext) -> None:
         await context.send_text(BROADCAST_NO_RECIPIENTS_TEXT, keyboard=broadcast_confirm_keyboard(can_send=False))
         return
     await context.send_text(
-        build_broadcast_confirm_text(audience_label=label, recipient_count=len(recipients), text=text),
+        build_broadcast_confirm_text(audience_label=label, recipient_count=len(recipients), text=text, attachment_type=_broadcast_attachment_type(context)),
         keyboard=broadcast_confirm_keyboard(can_send=True),
     )
 
@@ -308,12 +359,13 @@ async def handle_confirm_send(context: RouterContext) -> None:
             database_path=_database_path(),
             text=text,
             recipients=recipients,
+            attachment=_broadcast_attachment(context),
             audience=audience,
             actor_platform_user_id=context.event.platform_user_id,
         )
     except Exception as exc:
         logger.warning(
-            "MAX broadcast diagnostic: send_failed actor_platform_user_id_present=%s audience=%s recipients_count=%s lock_active=%s error_class=%s",
+            "MAX broadcast diagnostic: send_failed actor_platform_user_id_present=%s audience_type=%s recipients_count=%s lock_active=%s error_type=%s",
             bool(context.event.platform_user_id),
             _broadcast_audience(context).key,
             len(recipients),
@@ -358,7 +410,7 @@ async def handle_broadcast_back(context: RouterContext) -> None:
         await context.send_text(BROADCAST_TEXT_INPUT_TEXT, keyboard=broadcast_text_keyboard())
     elif current == state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
-        await context.send_text(build_broadcast_preview(_broadcast_text(context) or ""), keyboard=broadcast_preview_keyboard())
+        await _show_preview(context, push_current=False)
     elif current == state.BROADCAST_ONE_TIME_CONFIRM_SCREEN:
         return_screen = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY)
         if return_screen == state.CLIENT_SEGMENT_RESULT_SCREEN:
@@ -384,6 +436,45 @@ async def handle_broadcast_home(context: RouterContext) -> None:
     await _answer_callback_if_needed(context)
     _clear_broadcast_state(context)
     await show_home(context)
+
+
+async def _show_preview(context: RouterContext, *, push_current: bool = True) -> None:
+    if push_current:
+        _push_current_screen(context, state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
+    else:
+        state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
+    await context.send_text(
+        build_broadcast_preview(_broadcast_text(context) or "", _broadcast_attachment_type(context)),
+        keyboard=broadcast_preview_keyboard(has_attachment=_broadcast_attachment(context) is not None),
+        attachments=[_broadcast_attachment(context)] if _broadcast_attachment(context) else None,
+    )
+
+
+def _save_broadcast_text(context: RouterContext, text: str) -> None:
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY, text)
+    _save_draft(context)
+
+
+def _save_broadcast_attachment(context: RouterContext, attachment_type: str, attachment: dict[str, object]) -> None:
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ATTACHMENT_TYPE_KEY, attachment_type)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ATTACHMENT_KEY, attachment)
+    _save_draft(context)
+
+
+def _save_draft(context: RouterContext) -> None:
+    audience = _broadcast_audience(context)
+    state.set_state_data_value(
+        _user_id(context),
+        _chat_id(context),
+        _BROADCAST_DRAFT_KEY,
+        BroadcastDraft(
+            text=_broadcast_text(context),
+            attachment_type=_broadcast_attachment_type(context),
+            attachment=_broadcast_attachment(context),
+            audience_key=audience.key,
+            audience_label=audience.label,
+        ),
+    )
 
 
 def _resolve_audience_recipients(
@@ -472,6 +563,16 @@ async def _answer_callback_if_needed(context: RouterContext, notification: str |
 def _broadcast_text(context: RouterContext) -> str | None:
     value = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY)
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _broadcast_attachment_type(context: RouterContext) -> str | None:
+    value = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ATTACHMENT_TYPE_KEY)
+    return value if isinstance(value, str) and value in {"photo", "gif", "video"} else None
+
+
+def _broadcast_attachment(context: RouterContext) -> dict[str, object] | None:
+    value = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ATTACHMENT_KEY)
+    return value if isinstance(value, dict) else None
 
 
 def _broadcast_audience(context: RouterContext) -> BroadcastAudience:

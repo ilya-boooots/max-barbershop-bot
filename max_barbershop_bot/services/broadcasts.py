@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +28,26 @@ DEFAULT_SEND_DELAY_SECONDS = 0.1
 DEFAULT_BATCH_SIZE = 20
 DEFAULT_BATCH_PAUSE_SECONDS = 1.0
 
+
+
+
+@dataclass(frozen=True)
+class BroadcastAttachment:
+    """Reusable MAX broadcast media attachment."""
+
+    attachment_type: str
+    attachment: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BroadcastDraft:
+    """One-time broadcast draft stored in navigation state."""
+
+    text: str | None = None
+    attachment_type: str | None = None
+    attachment: dict[str, Any] | None = None
+    audience_key: str | None = None
+    audience_label: str | None = None
 
 @dataclass(frozen=True)
 class BroadcastAudience:
@@ -105,19 +125,21 @@ def validate_broadcast_text(text: str | None) -> BroadcastTextValidation:
     return BroadcastTextValidation(ok=True, text=clean)
 
 
-def build_broadcast_preview(text: str) -> str:
+def build_broadcast_preview(text: str, attachment_type: str | None = None) -> str:
     """Build the preview screen text."""
 
-    return f"👀 Предпросмотр рассылки\n\n{text}"
+    media_line = f"\n\nВложение: {_attachment_label(attachment_type)}" if attachment_type else ""
+    return f"👀 Предпросмотр рассылки\n\n{text}{media_line}"
 
 
-def build_broadcast_confirm_text(*, audience_label: str, recipient_count: int, text: str) -> str:
+def build_broadcast_confirm_text(*, audience_label: str, recipient_count: int, text: str, attachment_type: str | None = None) -> str:
     """Build the final confirmation screen text."""
 
+    media_line = f"\nВложение: {_attachment_label(attachment_type)}" if attachment_type else ""
     return (
         f"👀 Предпросмотр рассылки\n\n"
         f"Аудитория: {audience_label}\n"
-        f"Получателей: {recipient_count}\n\n"
+        f"Получателей: {recipient_count}{media_line}\n\n"
         f"{text}\n\n"
         "Отправить рассылку?"
     )
@@ -179,6 +201,7 @@ async def send_one_time_broadcast(
     database_path: str,
     text: str,
     recipients: Sequence[BroadcastRecipient],
+    attachment: Mapping[str, Any] | None = None,
     audience: BroadcastAudience = ALL_USERS_AUDIENCE,
     actor_platform_user_id: str | None = None,
     broadcast_id: str | None = None,
@@ -211,7 +234,7 @@ async def send_one_time_broadcast(
             "actor_platform_user_id": actor_platform_user_id,
         }
         try:
-            result = await _send_to_recipient(sender, recipient, text, metadata=metadata)
+            result = await _send_to_recipient(sender, recipient, text, attachment=attachment, metadata=metadata)
         except Exception as exc:  # defensive isolation per recipient
             logger.warning(
                 "broadcast_one_time_recipient_exception broadcast_id=%s recipient_type=%s error_class=%s",
@@ -285,11 +308,13 @@ async def _send_to_recipient(
     recipient: BroadcastRecipient,
     text: str,
     *,
+    attachment: Mapping[str, Any] | None = None,
     metadata: dict[str, object],
 ) -> MaxSendResult:
+    attachments = [dict(attachment)] if attachment else None
     if recipient.chat_id:
-        return await sender.send_to_chat(recipient.chat_id, text, metadata=metadata)
-    return await sender.send_to_user(recipient.max_user_id or recipient.platform_user_id, text, metadata=metadata)
+        return await sender.send_to_chat(recipient.chat_id, text, attachments=attachments, metadata=metadata)
+    return await sender.send_to_user(recipient.max_user_id or recipient.platform_user_id, text, attachments=attachments, metadata=metadata)
 
 
 def _save_broadcast_delivery(
@@ -355,3 +380,73 @@ def _disable_recipient_notifications(
             recipient.platform_user_id,
             exc_info=True,
         )
+
+
+def extract_broadcast_attachment(attachments: Sequence[Any]) -> BroadcastAttachment | None:
+    """Extract a reusable photo/GIF/video attachment from a MAX message."""
+
+    for attachment in attachments:
+        normalized = _normalize_broadcast_attachment(attachment)
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def _normalize_broadcast_attachment(attachment: Any) -> BroadcastAttachment | None:
+    if not isinstance(attachment, Mapping):
+        return None
+    raw_type = str(attachment.get("type") or "").strip().lower()
+    normalized_type = {"photo": "photo", "image": "photo", "video": "video", "gif": "gif", "animation": "gif"}.get(raw_type)
+    if normalized_type is None:
+        return None
+    max_type = "image" if normalized_type in {"photo", "gif"} else "video"
+    payload = attachment.get("payload") if isinstance(attachment.get("payload"), Mapping) else {}
+    token = _first_text_value((payload, attachment), keys=("token", "file_id", "id"))
+    url = _first_text_value((payload, attachment), keys=("url", "download_url"))
+    compact_payload: dict[str, Any] = {}
+    if token:
+        compact_payload["token"] = token
+    if url:
+        compact_payload["url"] = url
+    if not compact_payload:
+        return None
+    result = {"type": max_type, "payload": compact_payload}
+    if normalized_type == "gif":
+        result["payload"]["content_type"] = "image/gif"
+    return BroadcastAttachment(attachment_type=normalized_type, attachment=result)
+
+
+def _first_text_value(roots: Sequence[Mapping[str, Any]], *, keys: tuple[str, ...]) -> str:
+    for root in roots:
+        for key in keys:
+            value = root.get(key)
+            if value:
+                return str(value).strip()
+        nested = _first_nested_text_value(root, keys=keys)
+        if nested:
+            return nested
+    return ""
+
+
+def _first_nested_text_value(value: Any, *, keys: tuple[str, ...]) -> str:
+    if isinstance(value, Mapping):
+        for key in keys:
+            found = value.get(key)
+            if found:
+                return str(found).strip()
+        for child_key, child in value.items():
+            if child_key in {"bytes", "data", "content", "file", "raw", "thumbnail"}:
+                continue
+            found = _first_nested_text_value(child, keys=keys)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _first_nested_text_value(child, keys=keys)
+            if found:
+                return found
+    return ""
+
+
+def _attachment_label(attachment_type: str | None) -> str:
+    return {"photo": "🖼 фото", "gif": "🎞 GIF", "video": "🎬 видео"}.get(attachment_type or "", "медиа")

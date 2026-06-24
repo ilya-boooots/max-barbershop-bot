@@ -274,7 +274,7 @@ class Router:
         return event
 
     def _recover_screen_text_chat(self, event: NormalizedEvent) -> NormalizedEvent:
-        if event.update_type != "message_created" or event.text is None:
+        if event.update_type != "message_created" or (event.text is None and not event.attachments):
             return event
 
         current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
@@ -312,10 +312,10 @@ class Router:
             return event
 
         current_screen = state.get_current_screen(event.platform_user_id, event.chat_id)
-        if current_screen in state.REGISTRATION_SCREENS:
+        if current_screen in state.REGISTRATION_SCREENS or current_screen in state.BROADCAST_FLOW_SCREENS:
             return event
 
-        for screen_id in state.REGISTRATION_SCREENS:
+        for screen_id in tuple(state.REGISTRATION_SCREENS) + tuple(state.BROADCAST_FLOW_SCREENS):
             recovered_chat_id = state.find_chat_id_for_current_screen(event.platform_user_id, screen_id)
             if recovered_chat_id is None:
                 continue
