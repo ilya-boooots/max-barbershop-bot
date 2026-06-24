@@ -507,7 +507,7 @@ async def _fetch_yclients_clients(context: RouterContext):
 
 
 def _omnichannel_service(context: RouterContext) -> OmnichannelBroadcastService:
-    telegram_adapter, telegram_repo, telegram_unavailable_reason = _telegram_delivery_dependencies()
+    telegram_adapter, telegram_repo, telegram_unavailable_reason, telegram_diagnostics = _telegram_delivery_dependencies()
     return OmnichannelBroadcastService(
         users_repository=_users_repository(),
         telegram_users_repository=telegram_repo,
@@ -518,6 +518,7 @@ def _omnichannel_service(context: RouterContext) -> OmnichannelBroadcastService:
             PLATFORM_TELEGRAM: telegram_adapter,
         },
         telegram_unavailable_reason=telegram_unavailable_reason,
+        telegram_diagnostics=telegram_diagnostics,
     )
 
 
@@ -526,32 +527,84 @@ def _telegram_delivery_dependencies():
         config = load_config()
         token = (config.telegram_bot_token or "").strip()
         db_path = (config.telegram_db_path or "").strip()
+        config_source = config.config_source
     except ConfigError:
         token = ""
         db_path = ""
+        config_source = "config"
     token_configured = bool(token)
     db_configured = bool(db_path)
     if not db_configured:
-        _log_telegram_db_diagnostics(None, token_configured=token_configured, db_path_configured=False)
-        return TelegramUnavailableBroadcastAdapter(), None, "telegram_env_missing"
+        _log_telegram_db_diagnostics(None, token_configured=token_configured, db_path_configured=False, adapter="unavailable", config_source=config_source)
+        adapter = TelegramUnavailableBroadcastAdapter()
+        _assert_telegram_adapter_selection(token_configured=token_configured, db_path_configured=False, db_available=False, adapter=adapter)
+        return adapter, None, "db_path_missing" if token_configured else "token_missing", _telegram_diag_dict(
+            token_configured=token_configured,
+            db_path_configured=False,
+            db_exists=False,
+            db_readable=False,
+            users_table_found=False,
+            adapter="unavailable",
+            reason="db_path_missing" if token_configured else "token_missing",
+        )
     repo = TelegramUsersRepository(db_path)
     diagnostics = repo.inspect_database(token_configured=token_configured)
-    _log_telegram_db_diagnostics(diagnostics)
+    adapter_name = "real" if token_configured and diagnostics.unavailable_reason is None else "unavailable"
+    _log_telegram_db_diagnostics(diagnostics, adapter=adapter_name, config_source=config_source)
     if not token_configured or diagnostics.unavailable_reason:
-        return TelegramUnavailableBroadcastAdapter(), repo if diagnostics.users_table_found else None, diagnostics.unavailable_reason
-    return TelegramBotApiBroadcastAdapter(bot_token=token), repo, None
+        adapter = TelegramUnavailableBroadcastAdapter()
+        _assert_telegram_adapter_selection(token_configured=token_configured, db_path_configured=db_configured, db_available=diagnostics.unavailable_reason is None, adapter=adapter)
+        return adapter, repo if diagnostics.users_table_found else None, diagnostics.unavailable_reason, _telegram_diag_dict(
+            token_configured=token_configured,
+            db_path_configured=db_configured,
+            db_exists=diagnostics.db_exists,
+            db_readable=diagnostics.db_readable,
+            users_table_found=diagnostics.users_table_found,
+            adapter="unavailable",
+            reason=diagnostics.unavailable_reason,
+        )
+    adapter = TelegramBotApiBroadcastAdapter(bot_token=token)
+    _assert_telegram_adapter_selection(token_configured=token_configured, db_path_configured=db_configured, db_available=diagnostics.unavailable_reason is None, adapter=adapter)
+    return adapter, repo, None, _telegram_diag_dict(
+        token_configured=True,
+        db_path_configured=True,
+        db_exists=diagnostics.db_exists,
+        db_readable=diagnostics.db_readable,
+        users_table_found=diagnostics.users_table_found,
+        adapter="real",
+        reason=None,
+    )
 
 
-def _log_telegram_db_diagnostics(diagnostics, *, token_configured: bool | None = None, db_path_configured: bool | None = None) -> None:
+def _telegram_diag_dict(*, token_configured: bool, db_path_configured: bool, db_exists: bool, db_readable: bool, users_table_found: bool, adapter: str, reason: str | None) -> dict[str, object]:
+    return {
+        "token_configured": token_configured,
+        "db_path_configured": db_path_configured,
+        "db_exists": db_exists,
+        "db_readable": db_readable,
+        "users_table_found": users_table_found,
+        "adapter": adapter,
+        "reason": reason,
+    }
+
+
+def _assert_telegram_adapter_selection(*, token_configured: bool, db_path_configured: bool, db_available: bool, adapter) -> None:
+    if token_configured and db_path_configured and db_available:
+        assert isinstance(adapter, TelegramBotApiBroadcastAdapter)
+    else:
+        assert isinstance(adapter, TelegramUnavailableBroadcastAdapter)
+
+
+def _log_telegram_db_diagnostics(diagnostics, *, token_configured: bool | None = None, db_path_configured: bool | None = None, adapter: str = "unavailable", config_source: str = "config") -> None:
     if diagnostics is None:
         logger.info(
-            "MAX Telegram broadcast diagnostic: telegram_token_configured=%s telegram_db_path_configured=%s telegram_db_exists=%s telegram_db_readable=%s telegram_users_table_found=%s telegram_users_count=%s telegram_users_with_chat_id_count=%s telegram_users_with_phone_count=%s telegram_users_with_yclients_client_id_count=%s",
-            bool(token_configured), bool(db_path_configured), False, False, False, 0, 0, 0, 0,
+            "MAX Telegram config diagnostic: telegram_token_configured=%s telegram_db_path_configured=%s telegram_db_exists=%s telegram_adapter=%s config_source=%s",
+            bool(token_configured), bool(db_path_configured), False, adapter, config_source,
         )
         return
     logger.info(
-        "MAX Telegram broadcast diagnostic: telegram_token_configured=%s telegram_db_path_configured=%s telegram_db_exists=%s telegram_db_readable=%s telegram_users_table_found=%s telegram_users_count=%s telegram_users_with_chat_id_count=%s telegram_users_with_phone_count=%s telegram_users_with_yclients_client_id_count=%s telegram_db_columns=%s",
-        diagnostics.token_configured, diagnostics.db_path_configured, diagnostics.db_exists, diagnostics.db_readable, diagnostics.users_table_found, diagnostics.users_count, diagnostics.users_with_chat_id_count, diagnostics.users_with_phone_count, diagnostics.users_with_yclients_client_id_count, ",".join(diagnostics.columns),
+        "MAX Telegram config diagnostic: telegram_token_configured=%s telegram_db_path_configured=%s telegram_db_exists=%s telegram_adapter=%s config_source=%s",
+        diagnostics.token_configured, diagnostics.db_path_configured, diagnostics.db_exists, adapter, config_source,
     )
 
 
@@ -565,7 +618,7 @@ async def run_telegram_broadcast_smoke_check() -> dict[str, object]:
     except ConfigError:
         config = None
         test_chat_id = None
-    adapter, repo, _ = _telegram_delivery_dependencies()
+    adapter, repo, _, _ = _telegram_delivery_dependencies()
     db_result = repo.inspect_database(token_configured=bool(config and config.telegram_bot_token)) if repo else None
     result: dict[str, object] = {
         "token_configured": bool(config and config.telegram_bot_token),
@@ -599,6 +652,7 @@ def _normalized_attachment(context: RouterContext) -> BroadcastAttachmentPayload
 
 def _format_omnichannel_preview_estimate(estimate) -> str:
     warning = f"\n{estimate.media_warning}" if estimate.media_warning else ""
+    _, _, _, telegram_diagnostics = _telegram_delivery_dependencies()
     return (
         "Аудитория: база YClients\n"
         f"Клиентов в YClients: {estimate.total_yclients_clients}\n"
@@ -609,6 +663,7 @@ def _format_omnichannel_preview_estimate(estimate) -> str:
         f"Будет отправлено в MAX: {estimate.max_selected}\n"
         f"Недоступны: {estimate.unreachable}\n"
         f"Дубликаты исключены: {estimate.duplicates_excluded}"
+        f"\n\n{_format_telegram_admin_diagnostics(telegram_diagnostics)}"
         f"{warning}"
     )
 
@@ -633,6 +688,7 @@ def _format_omnichannel_confirm(estimate) -> str:
 def _format_omnichannel_report(report) -> str:
     telegram_reason = _telegram_report_reason(report)
     reason_line = f"\nПричина Telegram: {telegram_reason}" if telegram_reason else ""
+    diagnostics_line = _format_telegram_admin_diagnostics(getattr(report, "telegram_diagnostics", {}))
     return (
         "✅ Рассылка завершена\n\n"
         f"Клиентов в YClients: {report.total_yclients_clients}\n"
@@ -646,6 +702,7 @@ def _format_omnichannel_report(report) -> str:
         f"Telegram недоступен: {report.skipped_sender_unavailable}\n"
         f"Заблокировали бота: {report.skipped_blocked}\n"
         f"Медиа не поддержано: {report.skipped_media_unsupported}"
+        f"\n\n{diagnostics_line}"
         f"{reason_line}"
     )
 
@@ -653,13 +710,15 @@ def _format_omnichannel_report(report) -> str:
 def _telegram_report_reason(report) -> str | None:
     if report.telegram_sent > 0:
         return None
-    if getattr(report, "telegram_unavailable_reason", None) == "telegram_env_missing":
-        return "Telegram: не подключён — не найден TELEGRAM_BOT_TOKEN/TELEGRAM_DB_PATH"
-    if getattr(report, "telegram_unavailable_reason", None) == "telegram_db_not_found":
+    if getattr(report, "telegram_unavailable_reason", None) == "token_missing":
+        return "Telegram: не подключён — token_missing"
+    if getattr(report, "telegram_unavailable_reason", None) == "db_path_missing":
+        return "Telegram: не подключён — db_path_missing"
+    if getattr(report, "telegram_unavailable_reason", None) == "db_not_found":
         return "Telegram DB не найдена"
-    if getattr(report, "telegram_unavailable_reason", None) == "telegram_db_unreadable":
+    if getattr(report, "telegram_unavailable_reason", None) == "db_unreadable":
         return "Telegram DB недоступна для чтения"
-    if getattr(report, "telegram_unavailable_reason", None) == "telegram_users_table_missing":
+    if getattr(report, "telegram_unavailable_reason", None) == "users_table_missing":
         return "Telegram users table не найдена"
     if getattr(report, "telegram_selected", 0) == 0:
         return "Telegram users matched: 0"
@@ -674,6 +733,21 @@ def _telegram_report_reason(report) -> str | None:
     if report.failed:
         return "Telegram API error"
     return None
+
+
+def _format_telegram_admin_diagnostics(diagnostics: dict[str, object] | None) -> str:
+    diagnostics = diagnostics or {}
+    connected = diagnostics.get("adapter") == "real"
+    db_found = bool(diagnostics.get("db_exists"))
+    adapter = str(diagnostics.get("adapter") or "unavailable")
+    reason = diagnostics.get("reason")
+    reason_line = f"\nTelegram reason: {reason}" if not connected and reason else ""
+    return (
+        f"Telegram config: {'connected' if connected else 'not connected'}\n"
+        f"Telegram DB: {'found' if db_found else 'not found'}\n"
+        f"Telegram adapter: {adapter}"
+        f"{reason_line}"
+    )
 
 def _save_broadcast_text(context: RouterContext, text: str) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY, text)

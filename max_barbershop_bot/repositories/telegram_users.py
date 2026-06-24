@@ -71,20 +71,26 @@ class TelegramUsersRepository:
     def inspect_database(self, *, token_configured: bool = False) -> TelegramDbDiagnostics:
         db_path_configured = bool(str(self._database_path or '').strip())
         path = Path(self._database_path) if db_path_configured else None
-        db_exists = bool(path and path.exists())
-        db_readable = bool(path and path.is_file() and path.stat().st_size >= 0) if db_exists else False
+        try:
+            db_exists = bool(path and path.exists())
+            db_readable = bool(path and path.is_file() and path.stat().st_size >= 0) if db_exists else False
+        except OSError:
+            db_exists = bool(path)
+            db_readable = False
         columns = self.get_columns() if db_readable else set()
         users_table_found = bool(columns)
         all_users = self.list_users_for_broadcast_audience() if users_table_found else []
         reason = None
-        if not token_configured or not db_path_configured:
-            reason = 'telegram_env_missing'
+        if not token_configured:
+            reason = "token_missing"
+        elif not db_path_configured:
+            reason = "db_path_missing"
         elif not db_exists:
-            reason = 'telegram_db_not_found'
+            reason = "db_not_found"
         elif not db_readable:
-            reason = 'telegram_db_unreadable'
+            reason = "db_unreadable"
         elif not users_table_found:
-            reason = 'telegram_users_table_missing'
+            reason = "users_table_missing"
         return TelegramDbDiagnostics(
             token_configured=token_configured,
             db_path_configured=db_path_configured,
