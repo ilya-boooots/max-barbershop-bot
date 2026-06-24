@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from os import getenv
+from pathlib import Path
 from uuid import uuid4
 
 from max_barbershop_bot.core import state
@@ -12,7 +13,8 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.permissions import can_view_broadcasts
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
-from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
+from max_barbershop_bot.repositories.users import PLATFORM_MAX, PLATFORM_TELEGRAM, UsersRepository
+from max_barbershop_bot.repositories.telegram_users import TelegramUsersRepository
 from max_barbershop_bot.repositories.omnichannel_broadcasts import OmnichannelBroadcastRepository
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
@@ -21,6 +23,7 @@ from max_barbershop_bot.services.omnichannel_broadcasts import (
     BroadcastAttachmentPayload,
     MaxBroadcastDeliveryAdapter,
     OmnichannelBroadcastService,
+    TelegramBotApiBroadcastAdapter,
     TelegramUnavailableBroadcastAdapter,
 )
 from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials, load_active_yclients_settings
@@ -505,15 +508,49 @@ async def _fetch_yclients_clients(context: RouterContext):
 
 
 def _omnichannel_service(context: RouterContext) -> OmnichannelBroadcastService:
+    telegram_adapter, telegram_repo = _telegram_delivery_dependencies()
     return OmnichannelBroadcastService(
         users_repository=_users_repository(),
+        telegram_users_repository=telegram_repo,
         attribution_repository=PlatformAttributionRepository(_database_path()),
         history_repository=OmnichannelBroadcastRepository(_database_path()),
         adapters={
             PLATFORM_MAX: MaxBroadcastDeliveryAdapter(context.sender),
-            "telegram": TelegramUnavailableBroadcastAdapter(),
+            PLATFORM_TELEGRAM: telegram_adapter,
         },
     )
+
+
+def _telegram_delivery_dependencies():
+    token = (getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    db_path = (getenv("TELEGRAM_DB_PATH") or "").strip()
+    token_configured = bool(token)
+    db_configured = bool(db_path)
+    if not token_configured or not db_configured:
+        logger.info(
+            "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s",
+            token_configured,
+            db_configured,
+        )
+        return TelegramUnavailableBroadcastAdapter(), None
+    repo = TelegramUsersRepository(db_path)
+    if not Path(db_path).exists():
+        logger.warning(
+            "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s error_code=%s",
+            True,
+            True,
+            "telegram_db_not_found",
+        )
+        return TelegramUnavailableBroadcastAdapter(), None
+    columns = repo.get_columns()
+    logger.info(
+        "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s telegram_users_count=%s columns_count=%s",
+        True,
+        True,
+        repo.count_users(),
+        len(columns),
+    )
+    return TelegramBotApiBroadcastAdapter(bot_token=token), repo
 
 
 def _normalized_attachment(context: RouterContext) -> BroadcastAttachmentPayload | None:

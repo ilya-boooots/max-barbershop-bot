@@ -6,6 +6,8 @@ import asyncio
 import logging
 import time
 import uuid
+
+import aiohttp
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -14,6 +16,7 @@ from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.repositories.omnichannel_broadcasts import OmnichannelBroadcastRepository
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, PLATFORM_TELEGRAM, User, UsersRepository
+from max_barbershop_bot.repositories.telegram_users import TelegramUsersRepository, TelegramUserRecord
 from max_barbershop_bot.services.broadcasts import BroadcastRecipient, _send_to_recipient
 from max_barbershop_bot.services.phone_normalization import build_phone_match_keys
 
@@ -140,6 +143,83 @@ class MaxBroadcastDeliveryAdapter:
         return type(error).__name__
 
 
+
+class TelegramBotApiBroadcastAdapter:
+    """Telegram Bot API adapter using plain HTTP, without aiogram imports."""
+
+    platform = PLATFORM_TELEGRAM
+
+    def __init__(self, *, bot_token: str, timeout_seconds: float = 30.0) -> None:
+        self._bot_token = bot_token.strip()
+        self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self.sent_count = 0
+        self.failed_count = 0
+        self.skipped_count = 0
+
+    def can_send(self, target: DeliveryTarget) -> bool:
+        return bool(self._bot_token and target.platform == PLATFORM_TELEGRAM and (target.chat_id or target.platform_user_id))
+
+    async def send_text(self, target: DeliveryTarget, text: str) -> tuple[bool, str | None]:
+        return await self._request("sendMessage", {"chat_id": target.chat_id or target.platform_user_id, "text": text})
+
+    async def send_media(self, target: DeliveryTarget, text: str, attachment: BroadcastAttachmentPayload) -> tuple[bool, str | None]:
+        media = _telegram_media_reference(attachment)
+        if not media:
+            self.skipped_count += 1
+            return False, "skipped_media_unsupported"
+        method_by_type = {"photo": "sendPhoto", "video": "sendVideo", "gif": "sendAnimation"}
+        media_field_by_type = {"photo": "photo", "video": "video", "gif": "animation"}
+        method = method_by_type.get(attachment.type or "")
+        field = media_field_by_type.get(attachment.type or "")
+        if not method or not field:
+            self.skipped_count += 1
+            return False, "skipped_media_unsupported"
+        payload = {"chat_id": target.chat_id or target.platform_user_id, field: media}
+        if text:
+            payload["caption"] = text[:1024]
+        return await self._request(method, payload)
+
+    async def _request(self, method: str, payload: dict[str, Any], *, retry_once: bool = True) -> tuple[bool, str | None]:
+        url = f"https://api.telegram.org/bot{self._bot_token}/{method}"
+        try:
+            async with aiohttp.ClientSession(timeout=self._timeout) as session:
+                async with session.post(url, json=payload) as response:
+                    data = await _safe_json(response)
+                    if response.status == 429:
+                        retry_after = _retry_after(data)
+                        logger.warning(
+                            "MAX Telegram broadcast adapter diagnostic: telegram_method=%s http_status=%s retry_after_present=%s",
+                            method, response.status, retry_after is not None,
+                        )
+                        if retry_once and retry_after is not None and retry_after <= 5:
+                            await asyncio.sleep(float(retry_after))
+                            return await self._request(method, payload, retry_once=False)
+                    ok = bool(isinstance(data, dict) and data.get("ok"))
+                    if ok:
+                        self.sent_count += 1
+                        logger.info("MAX Telegram broadcast adapter diagnostic: telegram_method=%s http_status=%s sent_count=%s", method, response.status, self.sent_count)
+                        return True, None
+                    reason = _telegram_error_reason(response.status, data)
+                    if reason.startswith("skipped"):
+                        self.skipped_count += 1
+                    else:
+                        self.failed_count += 1
+                    logger.warning(
+                        "MAX Telegram broadcast adapter diagnostic: telegram_method=%s http_status=%s error_code=%s retry_after_present=%s",
+                        method, response.status, reason, _retry_after(data) is not None,
+                    )
+                    return False, reason
+        except Exception as exc:  # noqa: BLE001 - isolate one recipient.
+            self.failed_count += 1
+            logger.warning(
+                "MAX Telegram broadcast adapter diagnostic: telegram_method=%s error_code=%s",
+                method, type(exc).__name__,
+            )
+            return False, type(exc).__name__
+
+    def format_error(self, error: Exception) -> str:
+        return type(error).__name__
+
 class TelegramUnavailableBroadcastAdapter:
     platform = PLATFORM_TELEGRAM
 
@@ -156,11 +236,60 @@ class TelegramUnavailableBroadcastAdapter:
         return "telegram_sender_unavailable"
 
 
+
+def _telegram_media_reference(attachment: BroadcastAttachmentPayload) -> str | None:
+    roots = []
+    if attachment.telegram_payload:
+        roots.append(attachment.telegram_payload)
+    if attachment.max_payload:
+        roots.append(attachment.max_payload)
+        payload = attachment.max_payload.get("payload") if isinstance(attachment.max_payload.get("payload"), dict) else None
+        if payload:
+            roots.append(payload)
+    for root in roots:
+        for key in ("file_id", "telegram_file_id", "url", "download_url"):
+            value = root.get(key)
+            if value:
+                return str(value).strip()
+    return None
+
+
+async def _safe_json(response: aiohttp.ClientResponse) -> dict[str, Any] | None:
+    try:
+        data = await response.json(content_type=None)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _retry_after(data: dict[str, Any] | None) -> int | None:
+    params = data.get("parameters") if isinstance(data, dict) else None
+    if not isinstance(params, dict):
+        return None
+    value = params.get("retry_after")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _telegram_error_reason(http_status: int, data: dict[str, Any] | None) -> str:
+    description = str(data.get("description") if isinstance(data, dict) else "").lower()
+    if http_status == 403 or "blocked" in description or "forbidden" in description:
+        return "skipped_blocked"
+    if http_status == 400 and ("chat not found" in description or "user not found" in description or "invalid" in description):
+        return "skipped_unreachable"
+    if http_status == 429:
+        return "failed_rate_limited"
+    code = data.get("error_code") if isinstance(data, dict) else http_status
+    return f"failed_telegram_{code}"
+
 class OmnichannelBroadcastService:
     """Resolve YClients clients to one best platform target and send once."""
 
-    def __init__(self, *, users_repository: UsersRepository, attribution_repository: PlatformAttributionRepository, history_repository: OmnichannelBroadcastRepository, adapters: dict[str, BroadcastDeliveryAdapter]) -> None:
+    def __init__(self, *, users_repository: UsersRepository, attribution_repository: PlatformAttributionRepository, history_repository: OmnichannelBroadcastRepository, adapters: dict[str, BroadcastDeliveryAdapter], telegram_users_repository: TelegramUsersRepository | None = None) -> None:
         self.users = users_repository
+        self.telegram_users = telegram_users_repository
         self.attribution = attribution_repository
         self.history = history_repository
         self.adapters = adapters
@@ -170,7 +299,7 @@ class OmnichannelBroadcastService:
         telegram_candidates = sum(1 for client in clients if self._candidate(client, PLATFORM_TELEGRAM) is not None)
         max_candidates = sum(1 for client in clients if self._candidate(client, PLATFORM_MAX) is not None)
         both = sum(1 for client in clients if self._has_exact_yclients_link(client, PLATFORM_TELEGRAM) and self._has_exact_yclients_link(client, PLATFORM_MAX))
-        media_supported = not attachment or not attachment.type or bool(attachment.telegram_payload or self.adapters.get(PLATFORM_TELEGRAM, TelegramUnavailableBroadcastAdapter()).can_send(DeliveryTarget(None, PLATFORM_TELEGRAM, None)))
+        media_supported = not attachment or not attachment.type or bool(_telegram_media_reference(attachment))
         return AudienceEstimate(
             total_yclients_clients=len(clients), telegram_candidates=telegram_candidates, max_candidates=max_candidates,
             both_platforms=both, telegram_selected=sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM),
@@ -239,36 +368,51 @@ class OmnichannelBroadcastService:
     def _has_exact_yclients_link(self, client: YClientsNormalizedClient, platform: str) -> bool:
         if not client.id:
             return False
-        return any(self._is_deliverable(user, platform) for user in self.users.list_by_yclients_client_id(client.id, platform=platform))
+        return any(self._is_deliverable(user, platform) for user in self._list_by_yclients_client_id(client.id, platform=platform))
 
     def _candidate(self, client: YClientsNormalizedClient, platform: str) -> User | None:
         if client.id:
-            users = self.users.list_by_yclients_client_id(client.id, platform=platform)
+            users = self._list_by_yclients_client_id(client.id, platform=platform)
             deliverable = [u for u in users if self._is_deliverable(u, platform)]
             if deliverable:
                 return deliverable[0]
         keys: set[str] = set()
         for phone in client.phones:
             keys.update(build_phone_match_keys(phone))
-        users = self.users.list_by_phone_keys(keys, platform=platform)
+        users = self._list_by_phone_keys(keys, platform=platform)
         deliverable = [u for u in users if self._is_deliverable(u, platform)]
         if deliverable:
             return deliverable[0]
         for record in self.attribution.list_by_booking_phone_keys(keys, platform=platform):
-            user = self.users.find_by_platform_user_id(record.platform_user_id, platform=platform)
+            user = self._find_by_platform_user_id(record.platform_user_id, platform=platform)
             if user and self._is_deliverable(user, platform):
                 return user
         if client.id:
             for record in self.attribution.list_by_yclients_client_id(client.id):
                 if record.platform != platform:
                     continue
-                user = self.users.find_by_platform_user_id(record.platform_user_id, platform=platform)
+                user = self._find_by_platform_user_id(record.platform_user_id, platform=platform)
                 if user and self._is_deliverable(user, platform):
                     return user
         return None
 
-    def _is_deliverable(self, user: User, platform: str) -> bool:
-        if not user.notifications_enabled:
+    def _list_by_yclients_client_id(self, yclients_client_id: str, *, platform: str):
+        if platform == PLATFORM_TELEGRAM and self.telegram_users is not None:
+            return self.telegram_users.list_by_yclients_client_id(yclients_client_id, platform=platform)
+        return self.users.list_by_yclients_client_id(yclients_client_id, platform=platform)
+
+    def _list_by_phone_keys(self, keys: set[str], *, platform: str):
+        if platform == PLATFORM_TELEGRAM and self.telegram_users is not None:
+            return self.telegram_users.list_by_phone_keys(keys, platform=platform)
+        return self.users.list_by_phone_keys(keys, platform=platform)
+
+    def _find_by_platform_user_id(self, platform_user_id: str, *, platform: str):
+        if platform == PLATFORM_TELEGRAM and self.telegram_users is not None:
+            return self.telegram_users.find_by_platform_user_id(platform_user_id, platform=platform)
+        return self.users.find_by_platform_user_id(platform_user_id, platform=platform)
+
+    def _is_deliverable(self, user: User | TelegramUserRecord, platform: str) -> bool:
+        if not user.notifications_enabled or bool(getattr(user, "blocked", False)) or bool(getattr(user, "stopped", False)):
             return False
         if platform == PLATFORM_MAX:
             return bool(user.platform_user_id and (user.max_user_id or user.chat_id))

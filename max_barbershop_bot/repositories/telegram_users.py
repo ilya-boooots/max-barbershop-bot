@@ -1,0 +1,216 @@
+"""Read-only access to the existing Telegram bot SQLite users table."""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+from contextlib import closing
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from max_barbershop_bot.repositories.users import PLATFORM_TELEGRAM
+from max_barbershop_bot.services.phone_normalization import build_phone_match_keys
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TelegramUserRecord:
+    """Normalized Telegram user shape used by omnichannel broadcasts."""
+
+    id: int | None
+    platform: str
+    platform_user_id: str
+    max_user_id: str | None = None
+    chat_id: str | None = None
+    display_name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    username: str | None = None
+    phone: str | None = None
+    birthdate: str | None = None
+    role: str = "user"
+    yclients_client_id: str | None = None
+    notifications_enabled: bool = True
+    notification_settings: dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    blocked: bool = False
+    stopped: bool = False
+
+
+class TelegramUsersRepository:
+    """Robust reader for Telegram reference DB without importing Telegram runtime."""
+
+    def __init__(self, database_path: str) -> None:
+        self._database_path = database_path
+        self._columns_cache: set[str] | None = None
+
+    @property
+    def database_path(self) -> str:
+        return self._database_path
+
+    def is_available(self) -> bool:
+        return bool(self._database_path and Path(self._database_path).exists())
+
+    def get_columns(self) -> set[str]:
+        if self._columns_cache is not None:
+            return self._columns_cache
+        if not self.is_available():
+            self._columns_cache = set()
+            return self._columns_cache
+        try:
+            with closing(self._connect()) as connection:
+                rows = connection.execute("PRAGMA table_info(users)").fetchall()
+        except sqlite3.Error as exc:
+            logger.warning(
+                "MAX Telegram broadcast adapter diagnostic: telegram_db_configured=%s error_code=%s",
+                bool(self._database_path),
+                type(exc).__name__,
+            )
+            self._columns_cache = set()
+            return self._columns_cache
+        self._columns_cache = {str(row[1]) for row in rows}
+        logger.info(
+            "MAX Telegram broadcast adapter diagnostic: telegram_db_configured=%s telegram_users_count=%s columns_count=%s",
+            True,
+            self.count_users(),
+            len(self._columns_cache),
+        )
+        return self._columns_cache
+
+    def count_users(self) -> int:
+        if not self.is_available():
+            return 0
+        try:
+            with closing(self._connect()) as connection:
+                row = connection.execute("SELECT COUNT(1) AS c FROM users").fetchone()
+                return int(row["c"] or 0) if row else 0
+        except sqlite3.Error:
+            return 0
+
+    def list_by_yclients_client_id(self, yclients_client_id: str, *, platform: str | None = PLATFORM_TELEGRAM) -> list[TelegramUserRecord]:
+        if platform not in {None, PLATFORM_TELEGRAM} or not str(yclients_client_id or "").strip():
+            return []
+        columns = self.get_columns()
+        if "yclients_client_id" not in columns:
+            return []
+        return self._query("WHERE yclients_client_id = ?", (str(yclients_client_id).strip(),))
+
+    def list_by_phone_keys(self, phone_keys: set[str], *, platform: str | None = PLATFORM_TELEGRAM) -> list[TelegramUserRecord]:
+        if platform not in {None, PLATFORM_TELEGRAM} or not phone_keys:
+            return []
+        candidates = self.list_users_for_broadcast_audience(platform=PLATFORM_TELEGRAM)
+        return [user for user in candidates if build_phone_match_keys(user.phone) & phone_keys]
+
+    def find_by_platform_user_id(self, platform_user_id: str, *, platform: str = PLATFORM_TELEGRAM) -> TelegramUserRecord | None:
+        if platform != PLATFORM_TELEGRAM or not str(platform_user_id or "").strip():
+            return None
+        columns = self.get_columns()
+        id_column = _first_existing(columns, ("user_id", "tg_id", "telegram_user_id", "chat_id"))
+        if not id_column:
+            return None
+        rows = self._query(f"WHERE {id_column} = ?", (str(platform_user_id).strip(),), limit=1)
+        return rows[0] if rows else None
+
+    def list_users_for_broadcast_audience(self, *, platform: str | None = PLATFORM_TELEGRAM) -> list[TelegramUserRecord]:
+        if platform not in {None, PLATFORM_TELEGRAM}:
+            return []
+        return self._query("", ())
+
+    def _query(self, where_sql: str, params: tuple[Any, ...], *, limit: int | None = None) -> list[TelegramUserRecord]:
+        columns = self.get_columns()
+        if not columns:
+            return []
+        limit_sql = f" LIMIT {max(1, int(limit))}" if limit else ""
+        try:
+            with closing(self._connect()) as connection:
+                rows = connection.execute(f"SELECT * FROM users {where_sql} ORDER BY {_order_by(columns)}{limit_sql}", params).fetchall()
+        except sqlite3.Error as exc:
+            logger.warning(
+                "MAX Telegram broadcast adapter diagnostic: telegram_db_configured=%s error_code=%s",
+                bool(self._database_path),
+                type(exc).__name__,
+            )
+            return []
+        result = [_row_to_record(row, columns) for row in rows]
+        return [item for item in result if item is not None]
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(f"file:{self._database_path}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+
+def _row_to_record(row: sqlite3.Row, columns: set[str]) -> TelegramUserRecord | None:
+    user_id = _value(row, columns, "user_id", "tg_id", "telegram_user_id", "chat_id")
+    if user_id is None or not str(user_id).strip():
+        return None
+    notifications = _bool_value(_value(row, columns, "notifications_enabled", "broadcasts_enabled", "marketing_enabled"), default=True)
+    blocked = _bool_value(_value(row, columns, "blocked", "is_blocked", "bot_blocked"), default=False)
+    stopped = _bool_value(_value(row, columns, "stopped", "is_stopped", "bot_stopped"), default=False)
+    name = _text(_value(row, columns, "display_name", "name", "full_name"))
+    return TelegramUserRecord(
+        id=_int_or_none(user_id),
+        platform=PLATFORM_TELEGRAM,
+        platform_user_id=str(user_id).strip(),
+        chat_id=str(user_id).strip(),
+        display_name=name,
+        username=_text(_value(row, columns, "username")),
+        phone=_text(_value(row, columns, "phone_e164", "phone_ru_7", "phone", "phone_digits", "phone_raw")),
+        birthdate=_text(_value(row, columns, "birth_date", "birthdate")),
+        role=_text(_value(row, columns, "role")) or "user",
+        yclients_client_id=_text(_value(row, columns, "yclients_client_id")),
+        notifications_enabled=notifications and not blocked and not stopped,
+        notification_settings={},
+        created_at=_text(_value(row, columns, "created_at")),
+        updated_at=_text(_value(row, columns, "updated_at", "last_seen_at", "last_activity_ts_utc")),
+        blocked=blocked,
+        stopped=stopped,
+    )
+
+
+def _value(row: sqlite3.Row, columns: set[str], *names: str) -> Any:
+    for name in names:
+        if name in columns:
+            return row[name]
+    return None
+
+
+def _text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _bool_value(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "да"}
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_existing(columns: set[str], candidates: tuple[str, ...]) -> str | None:
+    for name in candidates:
+        if name in columns:
+            return name
+    return None
+
+
+def _order_by(columns: set[str]) -> str:
+    for name in ("updated_at", "last_seen_at", "last_activity_ts_utc", "created_at", "user_id"):
+        if name in columns:
+            return f"{name} DESC"
+    return "rowid DESC"
