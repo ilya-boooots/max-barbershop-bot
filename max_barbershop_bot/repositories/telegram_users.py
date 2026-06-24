@@ -16,6 +16,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class TelegramDbDiagnostics:
+    token_configured: bool = False
+    db_path_configured: bool = False
+    db_exists: bool = False
+    db_readable: bool = False
+    users_table_found: bool = False
+    users_count: int = 0
+    users_with_chat_id_count: int = 0
+    users_with_phone_count: int = 0
+    users_with_yclients_client_id_count: int = 0
+    columns: tuple[str, ...] = ()
+    unavailable_reason: str | None = None
+
+@dataclass(frozen=True)
 class TelegramUserRecord:
     """Normalized Telegram user shape used by omnichannel broadcasts."""
 
@@ -54,6 +68,37 @@ class TelegramUsersRepository:
     def is_available(self) -> bool:
         return bool(self._database_path and Path(self._database_path).exists())
 
+    def inspect_database(self, *, token_configured: bool = False) -> TelegramDbDiagnostics:
+        db_path_configured = bool(str(self._database_path or '').strip())
+        path = Path(self._database_path) if db_path_configured else None
+        db_exists = bool(path and path.exists())
+        db_readable = bool(path and path.is_file() and path.stat().st_size >= 0) if db_exists else False
+        columns = self.get_columns() if db_readable else set()
+        users_table_found = bool(columns)
+        all_users = self.list_users_for_broadcast_audience() if users_table_found else []
+        reason = None
+        if not token_configured or not db_path_configured:
+            reason = 'telegram_env_missing'
+        elif not db_exists:
+            reason = 'telegram_db_not_found'
+        elif not db_readable:
+            reason = 'telegram_db_unreadable'
+        elif not users_table_found:
+            reason = 'telegram_users_table_missing'
+        return TelegramDbDiagnostics(
+            token_configured=token_configured,
+            db_path_configured=db_path_configured,
+            db_exists=db_exists,
+            db_readable=db_readable,
+            users_table_found=users_table_found,
+            users_count=len(all_users),
+            users_with_chat_id_count=sum(1 for u in all_users if u.chat_id or u.platform_user_id),
+            users_with_phone_count=sum(1 for u in all_users if u.phone),
+            users_with_yclients_client_id_count=sum(1 for u in all_users if u.yclients_client_id),
+            columns=tuple(sorted(columns)),
+            unavailable_reason=reason,
+        )
+
     def get_columns(self) -> set[str]:
         if self._columns_cache is not None:
             return self._columns_cache
@@ -65,7 +110,7 @@ class TelegramUsersRepository:
                 rows = connection.execute("PRAGMA table_info(users)").fetchall()
         except sqlite3.Error as exc:
             logger.warning(
-                "MAX Telegram broadcast adapter diagnostic: telegram_db_configured=%s error_code=%s",
+                "MAX Telegram broadcast diagnostic: telegram_db_configured=%s error_code=%s",
                 bool(self._database_path),
                 type(exc).__name__,
             )
@@ -73,7 +118,7 @@ class TelegramUsersRepository:
             return self._columns_cache
         self._columns_cache = {str(row[1]) for row in rows}
         logger.info(
-            "MAX Telegram broadcast adapter diagnostic: telegram_db_configured=%s telegram_users_count=%s columns_count=%s",
+            "MAX Telegram broadcast diagnostic: telegram_db_configured=%s telegram_users_count=%s columns_count=%s",
             True,
             self.count_users(),
             len(self._columns_cache),
@@ -129,7 +174,7 @@ class TelegramUsersRepository:
                 rows = connection.execute(f"SELECT * FROM users {where_sql} ORDER BY {_order_by(columns)}{limit_sql}", params).fetchall()
         except sqlite3.Error as exc:
             logger.warning(
-                "MAX Telegram broadcast adapter diagnostic: telegram_db_configured=%s error_code=%s",
+                "MAX Telegram broadcast diagnostic: telegram_db_configured=%s error_code=%s",
                 bool(self._database_path),
                 type(exc).__name__,
             )
@@ -144,8 +189,11 @@ class TelegramUsersRepository:
 
 
 def _row_to_record(row: sqlite3.Row, columns: set[str]) -> TelegramUserRecord | None:
-    user_id = _value(row, columns, "user_id", "tg_id", "telegram_user_id", "chat_id")
+    user_id = _value(row, columns, "user_id", "telegram_user_id", "tg_id", "chat_id")
+    chat_id = _value(row, columns, "chat_id", "telegram_chat_id", "user_id", "telegram_user_id", "tg_id")
     if user_id is None or not str(user_id).strip():
+        return None
+    if chat_id is None or not str(chat_id).strip():
         return None
     notifications = _bool_value(_value(row, columns, "notifications_enabled", "broadcasts_enabled", "marketing_enabled"), default=True)
     blocked = _bool_value(_value(row, columns, "blocked", "is_blocked", "bot_blocked"), default=False)
@@ -155,7 +203,7 @@ def _row_to_record(row: sqlite3.Row, columns: set[str]) -> TelegramUserRecord | 
         id=_int_or_none(user_id),
         platform=PLATFORM_TELEGRAM,
         platform_user_id=str(user_id).strip(),
-        chat_id=str(user_id).strip(),
+        chat_id=str(chat_id).strip(),
         display_name=name,
         username=_text(_value(row, columns, "username")),
         phone=_text(_value(row, columns, "phone_e164", "phone_ru_7", "phone", "phone_digits", "phone_raw")),

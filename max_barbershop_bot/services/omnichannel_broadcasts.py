@@ -77,6 +77,11 @@ class OmnichannelBroadcastReport:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     errors: list[str] = field(default_factory=list)
+    telegram_selected: int = 0
+    max_selected: int = 0
+    last_telegram_error_code: str | None = None
+    last_telegram_error_short: str | None = None
+    telegram_unavailable_reason: str | None = None
 
     @property
     def duration_ms(self) -> int:
@@ -100,6 +105,11 @@ class OmnichannelBroadcastReport:
             "skipped_media_unsupported": self.skipped_media_unsupported,
             "skipped_sender_unavailable": self.skipped_sender_unavailable,
             "duration_ms": self.duration_ms,
+            "telegram_selected": self.telegram_selected,
+            "max_selected": self.max_selected,
+            "last_telegram_error_code": self.last_telegram_error_code,
+            "last_telegram_error_short": self.last_telegram_error_short,
+            "telegram_unavailable_reason": self.telegram_unavailable_reason,
         }
 
 
@@ -155,6 +165,8 @@ class TelegramBotApiBroadcastAdapter:
         self.sent_count = 0
         self.failed_count = 0
         self.skipped_count = 0
+        self.last_error_code: str | None = None
+        self.last_error_short: str | None = None
 
     def can_send(self, target: DeliveryTarget) -> bool:
         return bool(self._bot_token and target.platform == PLATFORM_TELEGRAM and (target.chat_id or target.platform_user_id))
@@ -179,40 +191,64 @@ class TelegramBotApiBroadcastAdapter:
             payload["caption"] = text[:1024]
         return await self._request(method, payload)
 
-    async def _request(self, method: str, payload: dict[str, Any], *, retry_once: bool = True) -> tuple[bool, str | None]:
+
+    async def smoke_check(self, *, test_chat_id: str | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = {"token_configured": bool(self._bot_token), "get_me_ok": False, "test_send_ok": None, "test_send_skipped": False, "error": None}
+        if not self._bot_token:
+            result["error"] = "telegram_token_missing"
+            return result
+        ok, error = await self._request("getMe", {}, use_get=True)
+        result["get_me_ok"] = ok
+        if error:
+            result["error"] = error
+        if not test_chat_id:
+            result["test_send_skipped"] = True
+            return result
+        ok, error = await self._request("sendMessage", {"chat_id": str(test_chat_id), "text": "✅ Telegram adapter test from MAX bot"})
+        result["test_send_ok"] = ok
+        if error:
+            result["error"] = error
+        return result
+
+    async def _request(self, method: str, payload: dict[str, Any], *, retry_once: bool = True, use_get: bool = False) -> tuple[bool, str | None]:
         url = f"https://api.telegram.org/bot{self._bot_token}/{method}"
         try:
             async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                async with session.post(url, json=payload) as response:
+                request_ctx = session.get(url, params=payload) if use_get else session.post(url, json=payload)
+                async with request_ctx as response:
                     data = await _safe_json(response)
                     if response.status == 429:
                         retry_after = _retry_after(data)
                         logger.warning(
-                            "MAX Telegram broadcast adapter diagnostic: telegram_method=%s http_status=%s retry_after_present=%s",
+                            "MAX Telegram broadcast diagnostic: telegram_method=%s http_status=%s retry_after_present=%s",
                             method, response.status, retry_after is not None,
                         )
                         if retry_once and retry_after is not None and retry_after <= 5:
                             await asyncio.sleep(float(retry_after))
-                            return await self._request(method, payload, retry_once=False)
+                            return await self._request(method, payload, retry_once=False, use_get=use_get)
                     ok = bool(isinstance(data, dict) and data.get("ok"))
                     if ok:
                         self.sent_count += 1
-                        logger.info("MAX Telegram broadcast adapter diagnostic: telegram_method=%s http_status=%s sent_count=%s", method, response.status, self.sent_count)
+                        logger.info("MAX Telegram broadcast diagnostic: telegram_method=%s http_status=%s sent_count=%s", method, response.status, self.sent_count)
                         return True, None
                     reason = _telegram_error_reason(response.status, data)
+                    self.last_error_code = str(response.status)
+                    self.last_error_short = reason[:120]
                     if reason.startswith("skipped"):
                         self.skipped_count += 1
                     else:
                         self.failed_count += 1
                     logger.warning(
-                        "MAX Telegram broadcast adapter diagnostic: telegram_method=%s http_status=%s error_code=%s retry_after_present=%s",
+                        "MAX Telegram broadcast diagnostic: telegram_method=%s http_status=%s error_code=%s retry_after_present=%s",
                         method, response.status, reason, _retry_after(data) is not None,
                     )
                     return False, reason
         except Exception as exc:  # noqa: BLE001 - isolate one recipient.
             self.failed_count += 1
+            self.last_error_code = type(exc).__name__
+            self.last_error_short = type(exc).__name__[:120]
             logger.warning(
-                "MAX Telegram broadcast adapter diagnostic: telegram_method=%s error_code=%s",
+                "MAX Telegram broadcast diagnostic: telegram_method=%s error_code=%s",
                 method, type(exc).__name__,
             )
             return False, type(exc).__name__
@@ -287,18 +323,23 @@ def _telegram_error_reason(http_status: int, data: dict[str, Any] | None) -> str
 class OmnichannelBroadcastService:
     """Resolve YClients clients to one best platform target and send once."""
 
-    def __init__(self, *, users_repository: UsersRepository, attribution_repository: PlatformAttributionRepository, history_repository: OmnichannelBroadcastRepository, adapters: dict[str, BroadcastDeliveryAdapter], telegram_users_repository: TelegramUsersRepository | None = None) -> None:
+    def __init__(self, *, users_repository: UsersRepository, attribution_repository: PlatformAttributionRepository, history_repository: OmnichannelBroadcastRepository, adapters: dict[str, BroadcastDeliveryAdapter], telegram_users_repository: TelegramUsersRepository | None = None, telegram_unavailable_reason: str | None = None) -> None:
         self.users = users_repository
         self.telegram_users = telegram_users_repository
         self.attribution = attribution_repository
         self.history = history_repository
         self.adapters = adapters
+        self.telegram_unavailable_reason = telegram_unavailable_reason
 
     def estimate(self, clients: list[YClientsNormalizedClient], *, attachment: BroadcastAttachmentPayload | None = None) -> AudienceEstimate:
         targets = [self.resolve_delivery_target_for_yclients_client(client) for client in clients]
         telegram_candidates = sum(1 for client in clients if self._candidate(client, PLATFORM_TELEGRAM) is not None)
         max_candidates = sum(1 for client in clients if self._candidate(client, PLATFORM_MAX) is not None)
         both = sum(1 for client in clients if self._has_exact_yclients_link(client, PLATFORM_TELEGRAM) and self._has_exact_yclients_link(client, PLATFORM_MAX))
+        logger.info(
+            "MAX Telegram broadcast diagnostic: yclients_clients_count=%s telegram_candidates_count=%s max_candidates_count=%s both_platforms_count=%s telegram_selected_count=%s max_selected_count=%s",
+            len(clients), telegram_candidates, max_candidates, both, sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM), sum(1 for t in targets if t.platform == PLATFORM_MAX),
+        )
         media_supported = not attachment or not attachment.type or bool(_telegram_media_reference(attachment))
         return AudienceEstimate(
             total_yclients_clients=len(clients), telegram_candidates=telegram_candidates, max_candidates=max_candidates,
@@ -323,9 +364,12 @@ class OmnichannelBroadcastService:
         self.history.upsert_broadcast(broadcast_id=bid, origin_platform=origin_platform, text=text, attachment_type=attachment.type if attachment else None, attachment=attachment.max_payload if attachment else None, created_by_user_id=created_by_user_id, status="sending")
         self.history.mark_status(bid, "sending", started=True)
         report = OmnichannelBroadcastReport(broadcast_id=bid, total_yclients_clients=len(clients))
+        report.telegram_unavailable_reason = self.telegram_unavailable_reason
+        targets = [self.resolve_delivery_target_for_yclients_client(client) for client in clients]
+        report.telegram_selected = sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM)
+        report.max_selected = sum(1 for t in targets if t.platform == PLATFORM_MAX)
         logger.info("MAX omnichannel broadcast diagnostic: send_started broadcast_id=%s origin_platform=%s yclients_clients_count=%s attachment_type=%s", bid, origin_platform, len(clients), attachment.type if attachment else None)
-        for client in clients:
-            target = self.resolve_delivery_target_for_yclients_client(client)
+        for client, target in zip(clients, targets):
             if target.platform is None:
                 report.skipped_unreachable += 1
                 self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=None, platform_user_id=None, delivery_status="skipped_unreachable", reason="skipped_unreachable", origin_platform=origin_platform, priority_decision=target.priority_decision)
@@ -356,11 +400,16 @@ class OmnichannelBroadcastService:
                     report.skipped_sender_unavailable += 1; status = "skipped_sender_unavailable"; reason = error
                 else:
                     report.failed += 1; status = "failed"; reason = error or "failed"; report.errors.append(str(reason)[:120])
+                if target.platform == PLATFORM_TELEGRAM and error:
+                    report.last_telegram_error_code = str(error).split(":", 1)[0][:120]
+                    report.last_telegram_error_short = str(error)[:120]
             self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=target.platform, platform_user_id=target.platform_user_id, delivery_status=status, reason=reason, origin_platform=origin_platform, priority_decision=target.priority_decision, error_short=reason, sent=ok)
             if sleep_seconds > 0:
                 await asyncio.sleep(sleep_seconds)
         report.finished_at = time.time()
         self.history.mark_status(bid, "completed", report=report.as_dict(), finished=True)
+        telegram_failed = max(0, report.telegram_selected - report.telegram_sent - report.skipped_blocked - report.skipped_sender_unavailable - report.skipped_media_unsupported)
+        logger.info("MAX Telegram broadcast diagnostic: telegram_selected_count=%s max_selected_count=%s skipped_sender_unavailable_count=%s skipped_unreachable_count=%s skipped_blocked_count=%s telegram_sent_count=%s telegram_failed_count=%s last_telegram_error_code=%s last_telegram_error_short=%s", report.telegram_selected, report.max_selected, report.skipped_sender_unavailable, report.skipped_unreachable, report.skipped_blocked, report.telegram_sent, telegram_failed, report.last_telegram_error_code, report.last_telegram_error_short)
         logger.info("MAX omnichannel broadcast diagnostic: send_finished broadcast_id=%s sent_telegram_count=%s sent_max_count=%s failed_count=%s skipped_count=%s duration_ms=%s", bid, report.telegram_sent, report.max_sent, report.failed, report.not_delivered, report.duration_ms)
         return report
 
@@ -370,7 +419,7 @@ class OmnichannelBroadcastService:
             return False
         return any(self._is_deliverable(user, platform) for user in self._list_by_yclients_client_id(client.id, platform=platform))
 
-    def _candidate(self, client: YClientsNormalizedClient, platform: str) -> User | None:
+    def _candidate(self, client: YClientsNormalizedClient, platform: str) -> User | TelegramUserRecord | None:
         if client.id:
             users = self._list_by_yclients_client_id(client.id, platform=platform)
             deliverable = [u for u in users if self._is_deliverable(u, platform)]
