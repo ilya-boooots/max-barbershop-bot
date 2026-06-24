@@ -111,6 +111,8 @@ NOTIFICATION_HISTORY_DETAIL_PAYLOAD_PREFIX = "notification_history:detail:"
 BROADCAST_ONE_TIME_START_PAYLOAD = "broadcast:one_time:start"
 BROADCAST_PREVIEW_NEXT_PAYLOAD = "broadcast:preview:next"
 BROADCAST_PREVIEW_EDIT_PAYLOAD = "broadcast:preview:edit"
+BROADCAST_PREVIEW_REMOVE_ATTACHMENT_PAYLOAD = "broadcast:preview:remove_attachment"
+BROADCAST_PREVIEW_EDIT_ATTACHMENT_PAYLOAD = "broadcast:preview:edit_attachment"
 BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD = "broadcast:aud:all"
 BROADCAST_AUDIENCE_SELF_PAYLOAD = "broadcast:aud:self"
 BROADCAST_SEGMENTS_PAYLOAD = "broadcast:segments"
@@ -776,17 +778,23 @@ def broadcast_text_keyboard() -> MaxInlineKeyboard:
     )
 
 
-def broadcast_preview_keyboard() -> MaxInlineKeyboard:
+def broadcast_preview_keyboard(*, has_attachment: bool = False) -> MaxInlineKeyboard:
     """Build broadcast preview action buttons."""
 
-    return MaxInlineKeyboard.from_rows(
+    rows = [
+        [MaxButton(text="✅ Далее", payload=BROADCAST_PREVIEW_NEXT_PAYLOAD)],
+        [MaxButton(text="✏️ Изменить текст", payload=BROADCAST_PREVIEW_EDIT_PAYLOAD)],
+    ]
+    rows.append([MaxButton(text="🖼 Изменить вложение" if has_attachment else "➕ Добавить вложение", payload=BROADCAST_PREVIEW_EDIT_ATTACHMENT_PAYLOAD)])
+    if has_attachment:
+        rows.append([MaxButton(text="🗑 Убрать вложение", payload=BROADCAST_PREVIEW_REMOVE_ATTACHMENT_PAYLOAD)])
+    rows.extend(
         [
-            [MaxButton(text="✅ Далее", payload=BROADCAST_PREVIEW_NEXT_PAYLOAD)],
-            [MaxButton(text="✏️ Изменить текст", payload=BROADCAST_PREVIEW_EDIT_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
         ]
     )
+    return MaxInlineKeyboard.from_rows(rows)
 
 
 def broadcast_audience_keyboard() -> MaxInlineKeyboard:
