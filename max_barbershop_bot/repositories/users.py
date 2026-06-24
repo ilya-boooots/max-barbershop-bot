@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 PLATFORM_MAX = "max"
+PLATFORM_TELEGRAM = "telegram"
 DEFAULT_USER_ROLE = "user"
 DEFAULT_NOTIFICATIONS_ENABLED = True
 
@@ -367,18 +368,58 @@ class UsersRepository:
         return [user for row in rows if (user := _row_to_user(row)) is not None]
 
 
-    def list_users_for_broadcast_audience(self, *, platform: str = PLATFORM_MAX) -> list[User]:
+    def list_users_for_broadcast_audience(self, *, platform: str | None = PLATFORM_MAX) -> list[User]:
         """Return local users considered for broadcast audience diagnostics."""
 
         with closing(self._connect()) as connection:
+            if platform is None:
+                rows = connection.execute("SELECT * FROM users ORDER BY id ASC").fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM users
+                    WHERE platform = ?
+                    ORDER BY id ASC
+                    """,
+                    (_required_text(platform, "platform"),),
+                ).fetchall()
+        return [user for row in rows if (user := _row_to_user(row)) is not None]
+
+
+    def list_by_yclients_client_id(self, yclients_client_id: str, *, platform: str | None = None) -> list[User]:
+        """Return users linked to a YClients client id, newest first."""
+
+        where = ["yclients_client_id = ?"]
+        params: list[Any] = [_required_text(yclients_client_id, "yclients_client_id")]
+        if platform is not None:
+            where.append("platform = ?")
+            params.append(_required_text(platform, "platform"))
+        with closing(self._connect()) as connection:
             rows = connection.execute(
-                """
-                SELECT * FROM users
-                WHERE platform = ?
-                ORDER BY id ASC
-                """,
-                (_required_text(platform, "platform"),),
+                f"SELECT * FROM users WHERE {' AND '.join(where)} ORDER BY updated_at DESC, id DESC",
+                tuple(params),
             ).fetchall()
+        return [user for row in rows if (user := _row_to_user(row)) is not None]
+
+    def list_by_phone_keys(self, phone_keys: set[str], *, platform: str | None = None) -> list[User]:
+        """Return users whose stored phone matches one of normalized phone keys."""
+
+        if not phone_keys:
+            return []
+        users = self.list_users_for_broadcast_audience(platform=platform) if platform else self.list_all_users()
+        from max_barbershop_bot.services.phone_normalization import build_phone_match_keys
+
+        result: list[User] = []
+        for user in users:
+            if build_phone_match_keys(user.phone) & phone_keys:
+                result.append(user)
+        return sorted(result, key=lambda item: (item.updated_at or item.created_at or "", item.id), reverse=True)
+
+    def list_all_users(self) -> list[User]:
+        """Return all platform users for cross-platform diagnostics."""
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute("SELECT * FROM users ORDER BY id ASC").fetchall()
         return [user for row in rows if (user := _row_to_user(row)) is not None]
 
     def update_notification_settings(

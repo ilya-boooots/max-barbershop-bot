@@ -12,6 +12,7 @@ from .dto import (
     YClientsCancelBookingResult,
     YClientsClientCard,
     YClientsHealthCheckResult,
+    YClientsNormalizedClient,
     YClientsService,
     YClientsServiceCategory,
     YClientsSlot,
@@ -25,6 +26,7 @@ from .endpoints import (
     get_available_dates as endpoint_get_available_dates,
     get_available_slots as endpoint_get_available_slots,
     get_client_details as endpoint_get_client_details,
+    list_clients as endpoint_list_clients,
     get_company,
     get_future_bookings as endpoint_get_future_bookings,
     get_booking_details as endpoint_get_booking_details,
@@ -222,6 +224,50 @@ class YClientsServiceLayer:
             by_name=by_name,
         )
         return [_client_card_from_payload(item) for item in extract_data_rows(payload)]
+
+
+    async def fetch_all_yclients_clients(
+        self,
+        *,
+        company_id: str | int | None = None,
+        page_size: int = 200,
+        max_pages: int = 10000,
+    ) -> list[YClientsNormalizedClient]:
+        """Fetch and normalize the full YClients client base with page/count pagination."""
+
+        resolved_company_id = self.require_company_id(company_id)
+        normalized: list[YClientsNormalizedClient] = []
+        raw_clients_count = skipped_deleted_count = skipped_no_identity_count = 0
+        safe_page_size = max(1, min(int(page_size), 1000))
+        page = 1
+        while page <= max_pages:
+            payload = await endpoint_list_clients(
+                self._client,
+                company_id=resolved_company_id,
+                page=page,
+                count=safe_page_size,
+            )
+            rows = extract_data_rows(payload)
+            if not rows:
+                break
+            raw_clients_count += len(rows)
+            for item in rows:
+                client = _normalized_client_from_payload(item)
+                if client.is_deleted or client.is_archived:
+                    skipped_deleted_count += 1
+                    continue
+                if not client.id and not client.phones and not client.email:
+                    skipped_no_identity_count += 1
+                    continue
+                normalized.append(client)
+            if len(rows) < safe_page_size:
+                break
+            page += 1
+        logger.info(
+            "MAX omnichannel broadcast diagnostic: yclients_clients_fetched yclients_clients_count=%s raw_clients_count=%s normalized_clients_count=%s skipped_deleted_count=%s skipped_no_identity_count=%s",
+            len(normalized), raw_clients_count, len(normalized), skipped_deleted_count, skipped_no_identity_count,
+        )
+        return normalized
 
     async def get_client_card(
         self,
@@ -702,3 +748,37 @@ def _float_env(name: str, default: float) -> float:
         return float(value)
     except ValueError as exc:
         raise YClientsConfigError(f"{name} must be a number") from exc
+
+
+def _normalized_client_from_payload(item: dict[str, Any]) -> YClientsNormalizedClient:
+    phones: list[str] = []
+    for key in ("phone", "phones", "tel"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            phones.append(value.strip())
+        elif isinstance(value, list):
+            for part in value:
+                if isinstance(part, str) and part.strip():
+                    phones.append(part.strip())
+                elif isinstance(part, dict):
+                    phone = safe_str(part.get("phone") or part.get("number") or part.get("value"))
+                    if phone:
+                        phones.append(phone)
+        elif isinstance(value, dict):
+            phone = safe_str(value.get("phone") or value.get("number") or value.get("value"))
+            if phone:
+                phones.append(phone)
+    client_id = safe_str(item.get("id") or item.get("client_id"))
+    is_deleted = bool(truthy_bool(item.get("is_deleted")) or truthy_bool(item.get("deleted")))
+    is_archived = bool(truthy_bool(item.get("is_archive")) or truthy_bool(item.get("is_archived")) or truthy_bool(item.get("archive")))
+    return YClientsNormalizedClient(
+        id=client_id,
+        name=safe_str(item.get("name") or item.get("fullname") or item.get("title")) or None,
+        phones=tuple(dict.fromkeys(phones)),
+        email=safe_str(item.get("email")) or None,
+        is_deleted=is_deleted,
+        is_archived=is_archived,
+        last_visit=safe_str(item.get("last_visit_date") or item.get("last_visit") or item.get("last_record_date")) or None,
+        future_visit=safe_str(item.get("nearest_record") or item.get("future_record") or item.get("next_visit_date")) or None,
+        raw=item,
+    )

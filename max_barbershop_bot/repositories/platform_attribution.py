@@ -205,6 +205,28 @@ class PlatformAttributionRepository:
             return [_row_to_record(row) for row in rows if row is not None]
 
 
+
+    def list_by_booking_phone_keys(self, phone_keys: set[str], *, platform: str = PLATFORM_MAX) -> list[AttributionRecord]:
+        """Return attribution rows whose booking phone matches one of normalized keys."""
+
+        if not phone_keys:
+            return []
+        from max_barbershop_bot.services.phone_normalization import build_phone_match_keys
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM platform_attribution
+                WHERE platform = ?
+                  AND booking_phone IS NOT NULL
+                  AND TRIM(booking_phone) <> ''
+                ORDER BY id DESC
+                """,
+                (_required_text(platform, "platform"),),
+            ).fetchall()
+        records = [_row_to_record(row) for row in rows if row is not None]
+        return [record for record in records if record is not None and (build_phone_match_keys(record.booking_phone) & phone_keys)]
+
     def list_with_yclients_record_ids(self, *, platform: str = PLATFORM_MAX, limit: int = 500) -> list[AttributionRecord]:
         """List latest attribution rows that can be verified against YClients records."""
 
