@@ -750,24 +750,35 @@ def _float_env(name: str, default: float) -> float:
         raise YClientsConfigError(f"{name} must be a number") from exc
 
 
-def _normalized_client_from_payload(item: dict[str, Any]) -> YClientsNormalizedClient:
+
+def _collect_client_phones(item: dict[str, Any]) -> list[str]:
     phones: list[str] = []
-    for key in ("phone", "phones", "tel"):
-        value = item.get(key)
-        if isinstance(value, str) and value.strip():
-            phones.append(value.strip())
-        elif isinstance(value, list):
+    phone_keys = {"phone", "phones", "phone_number", "tel", "telephone", "mobile", "contact_phone", "phone_raw", "phone_digits", "phone_e164"}
+
+    def walk(value: Any, *, key: str | None = None) -> None:
+        key_low = (key or "").lower()
+        if isinstance(value, str):
+            text = value.strip()
+            if text and (key_low in phone_keys or "phone" in key_low or key_low in {"number", "value"}):
+                phones.append(text)
+            return
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                child_key_low = str(child_key).lower()
+                if child_key_low in {"client", "contact", "contacts"} or child_key_low in phone_keys or "phone" in child_key_low:
+                    walk(child_value, key=child_key_low)
+                elif key_low in {"phones", "contact", "contacts"}:
+                    walk(child_value, key=child_key_low)
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             for part in value:
-                if isinstance(part, str) and part.strip():
-                    phones.append(part.strip())
-                elif isinstance(part, dict):
-                    phone = safe_str(part.get("phone") or part.get("number") or part.get("value"))
-                    if phone:
-                        phones.append(phone)
-        elif isinstance(value, dict):
-            phone = safe_str(value.get("phone") or value.get("number") or value.get("value"))
-            if phone:
-                phones.append(phone)
+                walk(part, key=key_low)
+
+    walk(item, key=None)
+    return list(dict.fromkeys(phones))
+
+def _normalized_client_from_payload(item: dict[str, Any]) -> YClientsNormalizedClient:
+    phones = _collect_client_phones(item)
     client_id = safe_str(item.get("id") or item.get("client_id"))
     is_deleted = bool(truthy_bool(item.get("is_deleted")) or truthy_bool(item.get("deleted")))
     is_archived = bool(truthy_bool(item.get("is_archive")) or truthy_bool(item.get("is_archived")) or truthy_bool(item.get("archive")))

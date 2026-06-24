@@ -29,6 +29,12 @@ class TelegramRuntimeStatus:
     env_file_checked: tuple[str, ...]
     git_commit: str | None
     runtime_version: str | None
+    users_with_any_phone_count: int = 0
+    users_with_yclients_client_id_count: int = 0
+    tables: tuple[str, ...] = ()
+    identity_columns_by_table: dict[str, tuple[str, ...]] | None = None
+    masked_phone_samples: tuple[str, ...] = ()
+    normalized_phone_key_samples: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -49,6 +55,8 @@ def build_telegram_runtime_status(config: Config) -> TelegramRuntimeStatus:
     users_table_found = bool(diagnostics and diagnostics.users_table_found)
     users_count = int(diagnostics.users_count) if diagnostics else 0
     users_with_chat_id_count = int(diagnostics.users_with_chat_id_count) if diagnostics else 0
+    users_with_any_phone_count = int(diagnostics.users_with_phone_count) if diagnostics else 0
+    users_with_yclients_client_id_count = int(diagnostics.users_with_yclients_client_id_count) if diagnostics else 0
 
     reason = _unavailable_reason(
         token_configured=token_configured,
@@ -68,6 +76,12 @@ def build_telegram_runtime_status(config: Config) -> TelegramRuntimeStatus:
         users_table_found=users_table_found,
         users_count=users_count,
         users_with_chat_id_count=users_with_chat_id_count,
+        users_with_any_phone_count=users_with_any_phone_count,
+        users_with_yclients_client_id_count=users_with_yclients_client_id_count,
+        tables=diagnostics.tables if diagnostics else (),
+        identity_columns_by_table=diagnostics.identity_columns_by_table if diagnostics else None,
+        masked_phone_samples=diagnostics.masked_phone_samples if diagnostics else (),
+        normalized_phone_key_samples=diagnostics.normalized_phone_key_samples if diagnostics else (),
         adapter_kind=adapter_kind,
         unavailable_reason=reason,
         config_source=config.config_source,

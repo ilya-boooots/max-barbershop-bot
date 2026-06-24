@@ -18,7 +18,7 @@ from max_barbershop_bot.repositories.platform_attribution import PlatformAttribu
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, PLATFORM_TELEGRAM, User, UsersRepository
 from max_barbershop_bot.repositories.telegram_users import TelegramUsersRepository, TelegramUserRecord
 from max_barbershop_bot.services.broadcasts import BroadcastRecipient, _send_to_recipient
-from max_barbershop_bot.services.phone_normalization import build_phone_match_keys
+from max_barbershop_bot.services.phone_normalization import build_phone_match_keys, mask_phone
 
 logger = logging.getLogger(__name__)
 AUDIENCE_SOURCE_YCLIENTS_ALL = "yclients_all_clients"
@@ -55,6 +55,7 @@ class AudienceEstimate:
     duplicates_excluded: int
     media_cross_platform_supported: bool = True
     media_warning: str | None = None
+    telegram_matching_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     @property
     def total_deliveries(self) -> int:
@@ -344,12 +345,14 @@ class OmnichannelBroadcastService:
             len(clients), telegram_candidates, max_candidates, both, sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM), sum(1 for t in targets if t.platform == PLATFORM_MAX),
         )
         media_supported = not attachment or not attachment.type or bool(_telegram_media_reference(attachment))
+        matching_diagnostics = self.telegram_matching_diagnostics(clients)
         return AudienceEstimate(
             total_yclients_clients=len(clients), telegram_candidates=telegram_candidates, max_candidates=max_candidates,
             both_platforms=both, telegram_selected=sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM),
             max_selected=sum(1 for t in targets if t.platform == PLATFORM_MAX), unreachable=sum(1 for t in targets if t.platform is None),
             duplicates_excluded=both, media_cross_platform_supported=media_supported,
             media_warning=("⚠️ Telegram-отправитель или медиа для Telegram недоступны: такие получатели будут отмечены как недоставленные." if attachment and attachment.type and not media_supported else None),
+            telegram_matching_diagnostics=matching_diagnostics,
         )
 
     def resolve_delivery_target_for_yclients_client(self, client: YClientsNormalizedClient) -> DeliveryTarget:
@@ -369,6 +372,7 @@ class OmnichannelBroadcastService:
         report = OmnichannelBroadcastReport(broadcast_id=bid, total_yclients_clients=len(clients))
         report.telegram_unavailable_reason = self.telegram_unavailable_reason
         report.telegram_diagnostics = dict(self.telegram_diagnostics)
+        report.telegram_diagnostics.update(self.telegram_matching_diagnostics(clients))
         targets = [self.resolve_delivery_target_for_yclients_client(client) for client in clients]
         report.telegram_selected = sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM)
         report.max_selected = sum(1 for t in targets if t.platform == PLATFORM_MAX)
@@ -418,24 +422,78 @@ class OmnichannelBroadcastService:
         return report
 
 
+    def telegram_matching_diagnostics(self, clients: list[YClientsNormalizedClient]) -> dict[str, Any]:
+        telegram_users = self.telegram_users.list_users_for_broadcast_audience(platform=PLATFORM_TELEGRAM) if self.telegram_users else []
+        tg_phone_keys = {key for user in telegram_users for key in getattr(user, "phone_keys", frozenset())}
+        tg_ids = {str(user.yclients_client_id).strip() for user in telegram_users if user.yclients_client_id}
+        yc_phone_keys: set[str] = set()
+        yc_ids: set[str] = set()
+        for client in clients:
+            if client.id:
+                yc_ids.add(str(client.id).strip())
+            for phone in client.phones:
+                yc_phone_keys.update(build_phone_match_keys(phone))
+        matched_by_id = 0
+        matched_by_phone = 0
+        for client in clients:
+            if client.id and self._candidate_by_client_id(client, PLATFORM_TELEGRAM) is not None:
+                matched_by_id += 1
+            elif self._candidate_by_phone(client, PLATFORM_TELEGRAM) is not None:
+                matched_by_phone += 1
+        reason = None
+        if telegram_users and not tg_phone_keys and not tg_ids:
+            reason = "Telegram users found, but they have no phone/yclients_client_id for matching"
+        elif telegram_users and not ((tg_phone_keys & yc_phone_keys) or (tg_ids & yc_ids)):
+            reason = "Telegram users matched: 0"
+        matched_keys = sorted(tg_phone_keys & yc_phone_keys)[:5]
+        return {
+            "telegram_users_count": len(telegram_users),
+            "telegram_users_with_chat_id_count": sum(1 for u in telegram_users if u.chat_id or u.platform_user_id),
+            "telegram_users_with_any_phone_count": sum(1 for u in telegram_users if getattr(u, "phone_keys", frozenset())),
+            "telegram_users_with_yclients_client_id_count": len(tg_ids),
+            "yclients_clients_count": len(clients),
+            "yclients_clients_with_any_phone_count": sum(1 for c in clients if any(build_phone_match_keys(p) for p in c.phones)),
+            "yclients_clients_with_id_count": len(yc_ids),
+            "phone_key_intersection_count": len(tg_phone_keys & yc_phone_keys),
+            "client_id_intersection_count": len(tg_ids & yc_ids),
+            "telegram_matched_by_client_id_count": matched_by_id,
+            "telegram_matched_by_phone_count": matched_by_phone,
+            "telegram_unmatched_reason": reason,
+            "yclients_phone_key_samples_masked": [mask_phone(k) for k in sorted(yc_phone_keys)[:5]],
+            "telegram_phone_key_samples_masked": [mask_phone(k) for k in sorted(tg_phone_keys)[:5]],
+            "matched_phone_key_samples_masked": [mask_phone(k) for k in matched_keys],
+        }
+
+    def _candidate_by_client_id(self, client: YClientsNormalizedClient, platform: str) -> User | TelegramUserRecord | None:
+        if not client.id:
+            return None
+        users = self._list_by_yclients_client_id(client.id, platform=platform)
+        deliverable = [u for u in users if self._is_deliverable(u, platform)]
+        return deliverable[0] if deliverable else None
+
+    def _candidate_by_phone(self, client: YClientsNormalizedClient, platform: str) -> User | TelegramUserRecord | None:
+        keys: set[str] = set()
+        for phone in client.phones:
+            keys.update(build_phone_match_keys(phone))
+        users = self._list_by_phone_keys(keys, platform=platform)
+        deliverable = [u for u in users if self._is_deliverable(u, platform)]
+        return deliverable[0] if deliverable else None
+
     def _has_exact_yclients_link(self, client: YClientsNormalizedClient, platform: str) -> bool:
         if not client.id:
             return False
         return any(self._is_deliverable(user, platform) for user in self._list_by_yclients_client_id(client.id, platform=platform))
 
     def _candidate(self, client: YClientsNormalizedClient, platform: str) -> User | TelegramUserRecord | None:
-        if client.id:
-            users = self._list_by_yclients_client_id(client.id, platform=platform)
-            deliverable = [u for u in users if self._is_deliverable(u, platform)]
-            if deliverable:
-                return deliverable[0]
+        by_id = self._candidate_by_client_id(client, platform)
+        if by_id:
+            return by_id
+        by_phone = self._candidate_by_phone(client, platform)
+        if by_phone:
+            return by_phone
         keys: set[str] = set()
         for phone in client.phones:
             keys.update(build_phone_match_keys(phone))
-        users = self._list_by_phone_keys(keys, platform=platform)
-        deliverable = [u for u in users if self._is_deliverable(u, platform)]
-        if deliverable:
-            return deliverable[0]
         for record in self.attribution.list_by_booking_phone_keys(keys, platform=platform):
             user = self._find_by_platform_user_id(record.platform_user_id, platform=platform)
             if user and self._is_deliverable(user, platform):
@@ -470,5 +528,5 @@ class OmnichannelBroadcastService:
         if platform == PLATFORM_MAX:
             return bool(user.platform_user_id and (user.max_user_id or user.chat_id))
         if platform == PLATFORM_TELEGRAM:
-            return bool(user.platform_user_id)
+            return bool(user.chat_id or user.platform_user_id)
         return False

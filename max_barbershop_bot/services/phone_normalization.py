@@ -3,33 +3,49 @@
 from __future__ import annotations
 
 
-def normalize_phone_for_match(value: str | None) -> str | None:
-    """Return a stable phone match key; Russian 8/7/+7 variants collapse to 79..."""
-
+def _digits(value: str | None) -> str | None:
     if value is None:
         return None
-    raw = str(value).strip()
-    if not raw:
-        return None
-    digits = "".join(ch for ch in raw if ch.isdigit())
+    digits = "".join(ch for ch in str(value).strip() if ch.isdigit())
+    return digits or None
+
+
+def normalize_phone_for_match(value: str | None) -> str | None:
+    """Return primary RU phone key where +7/8/10-digit forms collapse to 79..."""
+
+    digits = _digits(value)
     if not digits:
         return None
     if len(digits) == 11 and digits.startswith("8"):
-        digits = "7" + digits[1:]
-    if len(digits) == 10 and digits.startswith("9"):
-        digits = "7" + digits
+        return "7" + digits[-10:]
+    if len(digits) == 11 and digits.startswith("7"):
+        return digits
+    if len(digits) == 10:
+        return "7" + digits
     return digits
 
 
 def build_phone_match_keys(value: str | None) -> set[str]:
-    key = normalize_phone_for_match(value)
-    if not key:
+    """Build comparable phone keys: primary digits, ru7 and last10 when safe."""
+
+    digits = _digits(value)
+    if not digits:
         return set()
-    keys = {key}
-    if len(key) == 11 and key.startswith("7"):
-        keys.add("8" + key[1:])
-        keys.add(key[1:])
-    return keys
+    primary = normalize_phone_for_match(value)
+    keys = {digits}
+    if primary:
+        keys.add(primary)
+        if len(primary) == 11 and primary.startswith("7"):
+            keys.add(primary[-10:])
+    if len(digits) == 11 and digits.startswith("8"):
+        keys.add("7" + digits[-10:])
+        keys.add(digits[-10:])
+    elif len(digits) == 11 and digits.startswith("7"):
+        keys.add(digits[-10:])
+    elif len(digits) == 10:
+        keys.add("7" + digits)
+        keys.add(digits)
+    return {key for key in keys if key and (len(key) != 10 or len(key) == 10)}
 
 
 def mask_phone(value: str | None) -> str:
