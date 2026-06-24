@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from max_barbershop_bot.repositories.users import PLATFORM_TELEGRAM
-from max_barbershop_bot.services.phone_normalization import build_phone_match_keys
+from max_barbershop_bot.services.phone_normalization import build_phone_match_keys, mask_phone
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,10 @@ class TelegramDbDiagnostics:
     users_with_phone_count: int = 0
     users_with_yclients_client_id_count: int = 0
     columns: tuple[str, ...] = ()
+    tables: tuple[str, ...] = ()
+    identity_columns_by_table: dict[str, tuple[str, ...]] | None = None
+    masked_phone_samples: tuple[str, ...] = ()
+    normalized_phone_key_samples: tuple[str, ...] = ()
     unavailable_reason: str | None = None
 
 @dataclass(frozen=True)
@@ -52,6 +56,7 @@ class TelegramUserRecord:
     updated_at: str | None = None
     blocked: bool = False
     stopped: bool = False
+    phone_keys: frozenset[str] = frozenset()
 
 
 class TelegramUsersRepository:
@@ -99,9 +104,13 @@ class TelegramUsersRepository:
             users_table_found=users_table_found,
             users_count=len(all_users),
             users_with_chat_id_count=sum(1 for u in all_users if u.chat_id or u.platform_user_id),
-            users_with_phone_count=sum(1 for u in all_users if u.phone),
+            users_with_phone_count=sum(1 for u in all_users if u.phone_keys),
             users_with_yclients_client_id_count=sum(1 for u in all_users if u.yclients_client_id),
             columns=tuple(sorted(columns)),
+            tables=tuple(self.list_tables()),
+            identity_columns_by_table=self.inspect_identity_columns(),
+            masked_phone_samples=tuple(dict.fromkeys(mask_phone(u.phone) for u in all_users if u.phone))[:5],
+            normalized_phone_key_samples=tuple(mask_phone(key) for key in sorted({key for u in all_users for key in u.phone_keys})[:5]),
             unavailable_reason=reason,
         )
 
@@ -144,16 +153,14 @@ class TelegramUsersRepository:
     def list_by_yclients_client_id(self, yclients_client_id: str, *, platform: str | None = PLATFORM_TELEGRAM) -> list[TelegramUserRecord]:
         if platform not in {None, PLATFORM_TELEGRAM} or not str(yclients_client_id or "").strip():
             return []
-        columns = self.get_columns()
-        if "yclients_client_id" not in columns:
-            return []
-        return self._query("WHERE yclients_client_id = ?", (str(yclients_client_id).strip(),))
+        wanted = str(yclients_client_id).strip()
+        return [user for user in self.list_users_for_broadcast_audience(platform=PLATFORM_TELEGRAM) if user.yclients_client_id == wanted]
 
     def list_by_phone_keys(self, phone_keys: set[str], *, platform: str | None = PLATFORM_TELEGRAM) -> list[TelegramUserRecord]:
         if platform not in {None, PLATFORM_TELEGRAM} or not phone_keys:
             return []
         candidates = self.list_users_for_broadcast_audience(platform=PLATFORM_TELEGRAM)
-        return [user for user in candidates if build_phone_match_keys(user.phone) & phone_keys]
+        return [user for user in candidates if set(user.phone_keys or build_phone_match_keys(user.phone)) & phone_keys]
 
     def find_by_platform_user_id(self, platform_user_id: str, *, platform: str = PLATFORM_TELEGRAM) -> TelegramUserRecord | None:
         if platform != PLATFORM_TELEGRAM or not str(platform_user_id or "").strip():
@@ -162,13 +169,43 @@ class TelegramUsersRepository:
         id_column = _first_existing(columns, ("user_id", "tg_id", "telegram_user_id", "chat_id"))
         if not id_column:
             return None
-        rows = self._query(f"WHERE {id_column} = ?", (str(platform_user_id).strip(),), limit=1)
+        wanted = str(platform_user_id).strip()
+        for user in self.list_users_for_broadcast_audience(platform=PLATFORM_TELEGRAM):
+            if user.platform_user_id == wanted or user.chat_id == wanted:
+                return user
+        rows = self._query(f"WHERE {id_column} = ?", (wanted,), limit=1)
         return rows[0] if rows else None
 
     def list_users_for_broadcast_audience(self, *, platform: str | None = PLATFORM_TELEGRAM) -> list[TelegramUserRecord]:
         if platform not in {None, PLATFORM_TELEGRAM}:
             return []
         return self._query("", ())
+
+    def list_tables(self) -> list[str]:
+        if not self.is_available():
+            return []
+        try:
+            with closing(self._connect()) as connection:
+                rows = connection.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+        except sqlite3.Error:
+            return []
+        return [str(row["name"]) for row in rows if str(row["name"]).strip()]
+
+    def inspect_identity_columns(self) -> dict[str, tuple[str, ...]]:
+        result: dict[str, tuple[str, ...]] = {}
+        if not self.is_available():
+            return result
+        for table in self.list_tables():
+            try:
+                with closing(self._connect()) as connection:
+                    rows = connection.execute(f"PRAGMA table_info({ _quote_identifier(table) })").fetchall()
+            except sqlite3.Error:
+                continue
+            cols = [str(row[1]) for row in rows]
+            identity = [c for c in cols if _is_identity_column(c)]
+            if identity or any(word in table.lower() for word in ("user", "client", "phone", "yclients")):
+                result[table] = tuple(identity or cols)
+        return result
 
     def _query(self, where_sql: str, params: tuple[Any, ...], *, limit: int | None = None) -> list[TelegramUserRecord]:
         columns = self.get_columns()
@@ -178,6 +215,7 @@ class TelegramUsersRepository:
         try:
             with closing(self._connect()) as connection:
                 rows = connection.execute(f"SELECT * FROM users {where_sql} ORDER BY {_order_by(columns)}{limit_sql}", params).fetchall()
+                extra = _load_related_identity_rows(connection)
         except sqlite3.Error as exc:
             logger.warning(
                 "MAX Telegram broadcast diagnostic: telegram_db_configured=%s error_code=%s",
@@ -185,7 +223,7 @@ class TelegramUsersRepository:
                 type(exc).__name__,
             )
             return []
-        result = [_row_to_record(row, columns) for row in rows]
+        result = [_row_to_record(row, columns, extra) for row in rows]
         return [item for item in result if item is not None]
 
     def _connect(self) -> sqlite3.Connection:
@@ -194,13 +232,14 @@ class TelegramUsersRepository:
         return connection
 
 
-def _row_to_record(row: sqlite3.Row, columns: set[str]) -> TelegramUserRecord | None:
+def _row_to_record(row: sqlite3.Row, columns: set[str], extra: dict[str, dict[str, list[sqlite3.Row]]] | None = None) -> TelegramUserRecord | None:
     user_id = _value(row, columns, "user_id", "telegram_user_id", "tg_id", "chat_id")
     chat_id = _value(row, columns, "chat_id", "telegram_chat_id", "user_id", "telegram_user_id", "tg_id")
     if user_id is None or not str(user_id).strip():
         return None
     if chat_id is None or not str(chat_id).strip():
         return None
+    related = _related_rows(row, columns, extra or {}, user_id, chat_id)
     notifications = _bool_value(_value(row, columns, "notifications_enabled", "broadcasts_enabled", "marketing_enabled"), default=True)
     blocked = _bool_value(_value(row, columns, "blocked", "is_blocked", "bot_blocked"), default=False)
     stopped = _bool_value(_value(row, columns, "stopped", "is_stopped", "bot_stopped"), default=False)
@@ -212,16 +251,17 @@ def _row_to_record(row: sqlite3.Row, columns: set[str]) -> TelegramUserRecord | 
         chat_id=str(chat_id).strip(),
         display_name=name,
         username=_text(_value(row, columns, "username")),
-        phone=_text(_value(row, columns, "phone_e164", "phone_ru_7", "phone", "phone_digits", "phone_raw")),
+        phone=_first_text(_identity_values(row, columns, related, _PHONE_FIELDS)),
         birthdate=_text(_value(row, columns, "birth_date", "birthdate")),
         role=_text(_value(row, columns, "role")) or "user",
-        yclients_client_id=_text(_value(row, columns, "yclients_client_id")),
+        yclients_client_id=_first_text(_identity_values(row, columns, related, _CLIENT_ID_FIELDS)),
         notifications_enabled=notifications and not blocked and not stopped,
         notification_settings={},
         created_at=_text(_value(row, columns, "created_at")),
         updated_at=_text(_value(row, columns, "updated_at", "last_seen_at", "last_activity_ts_utc")),
         blocked=blocked,
         stopped=stopped,
+        phone_keys=frozenset(_phone_keys_from_values(_identity_values(row, columns, related, _PHONE_FIELDS))),
     )
 
 
@@ -268,3 +308,87 @@ def _order_by(columns: set[str]) -> str:
         if name in columns:
             return f"{name} DESC"
     return "rowid DESC"
+
+_PHONE_FIELDS = ("phone", "phone_raw", "phone_digits", "phone_e164", "phone_ru_7", "phone_ru_8", "contact_phone", "normalized_phone", "mobile", "tel", "telephone")
+_CLIENT_ID_FIELDS = ("yclients_client_id", "client_id", "yclients_id", "yclients_user_id")
+_LINK_FIELDS = ("user_id", "telegram_user_id", "tg_id", "chat_id", "telegram_chat_id")
+
+
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _is_identity_column(name: str) -> bool:
+    low = name.lower()
+    return low in set(_PHONE_FIELDS + _CLIENT_ID_FIELDS + _LINK_FIELDS) or "phone" in low or "yclients" in low or low.endswith("user_id") or low.endswith("chat_id")
+
+
+def _load_related_identity_rows(connection: sqlite3.Connection) -> dict[str, dict[str, list[sqlite3.Row]]]:
+    indexes: dict[str, dict[str, list[sqlite3.Row]]] = {"user_id": {}, "chat_id": {}}
+    try:
+        table_rows = connection.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+    except sqlite3.Error:
+        return indexes
+    for table_row in table_rows:
+        table = str(table_row["name"])
+        if table == "users":
+            continue
+        try:
+            info = connection.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()
+        except sqlite3.Error:
+            continue
+        cols = {str(row[1]) for row in info}
+        if not any(_is_identity_column(col) for col in cols):
+            continue
+        try:
+            rows = connection.execute(f"SELECT * FROM {_quote_identifier(table)}").fetchall()
+        except sqlite3.Error:
+            continue
+        for row in rows:
+            for field in _LINK_FIELDS:
+                if field not in cols:
+                    continue
+                value = _text(row[field])
+                if not value:
+                    continue
+                bucket = "chat_id" if "chat" in field else "user_id"
+                indexes[bucket].setdefault(value, []).append(row)
+    return indexes
+
+
+def _related_rows(row: sqlite3.Row, columns: set[str], extra: dict[str, dict[str, list[sqlite3.Row]]], user_id: Any, chat_id: Any) -> list[sqlite3.Row]:
+    result: list[sqlite3.Row] = []
+    for key in {_text(user_id), _text(chat_id)}:
+        if not key:
+            continue
+        result.extend(extra.get("user_id", {}).get(key, []))
+        result.extend(extra.get("chat_id", {}).get(key, []))
+    return result
+
+
+def _identity_values(row: sqlite3.Row, columns: set[str], related: list[sqlite3.Row], fields: tuple[str, ...]) -> list[Any]:
+    values: list[Any] = []
+    for field in fields:
+        if field in columns:
+            values.append(row[field])
+    for related_row in related:
+        related_cols = set(related_row.keys())
+        for field in fields:
+            if field in related_cols:
+                values.append(related_row[field])
+    return values
+
+
+def _first_text(values: list[Any]) -> str | None:
+    for value in values:
+        text = _text(value)
+        if text:
+            return text
+    return None
+
+
+def _phone_keys_from_values(values: list[Any]) -> set[str]:
+    keys: set[str] = set()
+    for value in values:
+        keys.update(build_phone_match_keys(_text(value)))
+    return keys

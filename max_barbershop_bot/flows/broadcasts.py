@@ -653,7 +653,7 @@ def _format_omnichannel_preview_estimate(estimate) -> str:
         f"Будет отправлено в MAX: {estimate.max_selected}\n"
         f"Недоступны: {estimate.unreachable}\n"
         f"Дубликаты исключены: {estimate.duplicates_excluded}"
-        f"\n\n{_format_telegram_admin_diagnostics(telegram_diagnostics)}"
+        f"\n\n{_format_telegram_admin_diagnostics(telegram_diagnostics, estimate)}"
         f"{warning}"
     )
 
@@ -730,11 +730,14 @@ def _telegram_report_reason(report) -> str | None:
     return None
 
 
-def _format_telegram_admin_diagnostics(diagnostics: dict[str, object] | None) -> str:
+def _format_telegram_admin_diagnostics(diagnostics: dict[str, object] | None, estimate=None) -> str:
     diagnostics = diagnostics or {}
     adapter = str(diagnostics.get("adapter_kind") or diagnostics.get("adapter") or "unavailable")
     reason = diagnostics.get("unavailable_reason") or diagnostics.get("reason")
+    if estimate is not None and getattr(estimate, "telegram_matching_diagnostics", None):
+        diagnostics = {**diagnostics, **estimate.telegram_matching_diagnostics}
     reason_line = f"\nПричина: {reason}" if adapter != "real" and reason else ""
+    matching = _format_telegram_matching_diagnostics(diagnostics)
     return (
         "🔌 Telegram connection\n"
         f"Token: {'configured' if diagnostics.get('token_configured') else 'not configured'}\n"
@@ -749,8 +752,34 @@ def _format_telegram_admin_diagnostics(diagnostics: dict[str, object] | None) ->
         f"project path: {diagnostics.get('project_path') or 'unknown'}\n"
         f"cwd: {diagnostics.get('project_cwd') or 'unknown'}"
         f"{reason_line}"
+        f"{matching}"
     )
 
+
+
+def _format_telegram_matching_diagnostics(diagnostics: dict[str, object]) -> str:
+    if "yclients_clients_count" not in diagnostics and "phone_key_intersection_count" not in diagnostics:
+        return ""
+    reason = diagnostics.get("telegram_unmatched_reason")
+    reason_line = f"\ntelegram_unmatched_reason: {reason}" if reason else ""
+    return (
+        "\n\n📊 Telegram matching diagnostics:\n"
+        f"telegram_users_count: {int(diagnostics.get('telegram_users_count') or diagnostics.get('users_count') or 0)}\n"
+        f"telegram_users_with_chat_id_count: {int(diagnostics.get('telegram_users_with_chat_id_count') or diagnostics.get('users_with_chat_id_count') or 0)}\n"
+        f"telegram_users_with_any_phone_count: {int(diagnostics.get('telegram_users_with_any_phone_count') or diagnostics.get('users_with_any_phone_count') or 0)}\n"
+        f"telegram_users_with_yclients_client_id_count: {int(diagnostics.get('telegram_users_with_yclients_client_id_count') or diagnostics.get('users_with_yclients_client_id_count') or 0)}\n"
+        f"yclients_clients_count: {int(diagnostics.get('yclients_clients_count') or 0)}\n"
+        f"yclients_clients_with_any_phone_count: {int(diagnostics.get('yclients_clients_with_any_phone_count') or 0)}\n"
+        f"yclients_clients_with_id_count: {int(diagnostics.get('yclients_clients_with_id_count') or 0)}\n"
+        f"phone_key_intersection_count: {int(diagnostics.get('phone_key_intersection_count') or 0)}\n"
+        f"client_id_intersection_count: {int(diagnostics.get('client_id_intersection_count') or 0)}\n"
+        f"telegram_matched_by_client_id_count: {int(diagnostics.get('telegram_matched_by_client_id_count') or 0)}\n"
+        f"telegram_matched_by_phone_count: {int(diagnostics.get('telegram_matched_by_phone_count') or 0)}\n"
+        f"YClients keys samples: {', '.join(diagnostics.get('yclients_phone_key_samples_masked') or []) or 'n/a'}\n"
+        f"Telegram keys samples: {', '.join(diagnostics.get('telegram_phone_key_samples_masked') or []) or 'n/a'}\n"
+        f"Matched keys samples: {', '.join(diagnostics.get('matched_phone_key_samples_masked') or []) or 'n/a'}"
+        f"{reason_line}"
+    )
 
 def _save_broadcast_text(context: RouterContext, text: str) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY, text)
