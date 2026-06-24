@@ -42,6 +42,8 @@ class Config:
     cancellation_recovery_enabled: bool = DEFAULT_CANCELLATION_RECOVERY_ENABLED
     cancellation_recovery_poll_interval_seconds: int = DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS
     developer_diagnostics_enabled: bool = DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED
+    telegram_bot_token: str | None = None
+    telegram_db_path: str | None = None
 
 
 def load_config() -> Config:
@@ -88,6 +90,8 @@ def load_config() -> Config:
             "DEVELOPER_DIAGNOSTICS_ENABLED",
             DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED,
         ),
+        telegram_bot_token=_optional_env("TELEGRAM_BOT_TOKEN"),
+        telegram_db_path=_optional_env("TELEGRAM_DB_PATH"),
     )
 
 

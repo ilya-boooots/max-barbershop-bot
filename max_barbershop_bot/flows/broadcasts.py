@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from os import getenv
+from pathlib import Path
 from uuid import uuid4
 
 from max_barbershop_bot.core import state
@@ -12,7 +13,21 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.permissions import can_view_broadcasts
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
-from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
+from max_barbershop_bot.repositories.users import PLATFORM_MAX, PLATFORM_TELEGRAM, UsersRepository
+from max_barbershop_bot.repositories.telegram_users import TelegramUsersRepository
+from max_barbershop_bot.repositories.omnichannel_broadcasts import OmnichannelBroadcastRepository
+from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
+from max_barbershop_bot.services.omnichannel_broadcasts import (
+    AUDIENCE_SOURCE_YCLIENTS_ALL,
+    BroadcastAttachmentPayload,
+    MaxBroadcastDeliveryAdapter,
+    OmnichannelBroadcastService,
+    TelegramBotApiBroadcastAdapter,
+    TelegramUnavailableBroadcastAdapter,
+)
+from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials, load_active_yclients_settings
+from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.services.broadcasts import (
     ALL_USERS_AUDIENCE,
     SELF_AUDIENCE,
@@ -64,6 +79,7 @@ _BROADCAST_AUDIENCE_KEY = "broadcast_audience"
 _BROADCAST_AUDIENCE_LABEL_KEY = "broadcast_audience_label"
 _BROADCAST_RECIPIENT_COUNT_KEY = "broadcast_recipient_count"
 _BROADCAST_RECIPIENTS_KEY = "broadcast_recipients"
+_BROADCAST_ESTIMATE_KEY = "broadcast_omnichannel_estimate"
 _BROADCAST_IN_PROGRESS_KEY = "broadcast_in_progress"
 _BROADCAST_SEND_TOKEN_KEY = "broadcast_send_token"
 _BROADCAST_SKIPPED_DISABLED_KEY = "broadcast_skipped_disabled"
@@ -161,7 +177,7 @@ async def handle_text_input(context: RouterContext) -> None:
 
 
 async def handle_preview_next(context: RouterContext) -> None:
-    """Move from preview to audience selection."""
+    """Move from preview to final YClients audience confirmation."""
 
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
@@ -174,8 +190,7 @@ async def handle_preview_next(context: RouterContext) -> None:
         await _open_text_step(context)
         return
     await _answer_callback_if_needed(context)
-    _push_current_screen(context, state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
-    await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
+    await _select_audience(context, ALL_USERS_AUDIENCE)
 
 
 async def handle_preview_edit(context: RouterContext) -> None:
@@ -240,28 +255,33 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
         await _open_text_step(context)
         return
 
-    recipients, skipped_disabled, skipped_missing = _resolve_audience_recipients(context, audience)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience.key)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience.label)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENT_COUNT_KEY, len(recipients))
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENTS_KEY, recipients)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_DISABLED_KEY, skipped_disabled)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_MISSING_KEY, skipped_missing)
+    if audience.key == SELF_AUDIENCE.key:
+        recipients, skipped_disabled, skipped_missing = _resolve_audience_recipients(context, audience)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience.key)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience.label)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENT_COUNT_KEY, len(recipients))
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENTS_KEY, recipients)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_DISABLED_KEY, skipped_disabled)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_MISSING_KEY, skipped_missing)
+        await _answer_callback_if_needed(context)
+        _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
+        await context.send_text(build_broadcast_confirm_text(audience_label=audience.label, recipient_count=len(recipients), text=text, attachment_type=_broadcast_attachment_type(context)), keyboard=broadcast_confirm_keyboard(can_send=bool(recipients)))
+        return
 
+    try:
+        clients = await _fetch_yclients_clients(context)
+    except Exception as exc:
+        logger.warning("MAX omnichannel broadcast diagnostic: audience_estimate_failed error_type=%s", type(exc).__name__, exc_info=True)
+        await context.send_text("⚠️ Не удалось получить базу клиентов YClients. Проверьте настройки и попробуйте позже.", keyboard=broadcast_preview_keyboard(has_attachment=_broadcast_attachment(context) is not None))
+        return
+    service = _omnichannel_service(context)
+    estimate = service.estimate(clients, attachment=_normalized_attachment(context))
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, AUDIENCE_SOURCE_YCLIENTS_ALL)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, "база YClients")
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY, estimate)
     await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
-    if not recipients:
-        await context.send_text(BROADCAST_NO_RECIPIENTS_TEXT, keyboard=broadcast_confirm_keyboard(can_send=False))
-        return
-    await context.send_text(
-        build_broadcast_confirm_text(
-            audience_label=audience.label,
-            recipient_count=len(recipients),
-            text=text,
-            attachment_type=_broadcast_attachment_type(context),
-        ),
-        keyboard=broadcast_confirm_keyboard(can_send=True),
-    )
+    await context.send_text(_format_omnichannel_confirm(estimate), keyboard=broadcast_confirm_keyboard(can_send=estimate.total_deliveries > 0))
 
 
 async def open_segment_broadcast_text(
@@ -321,7 +341,9 @@ async def handle_confirm_send(context: RouterContext) -> None:
     if not text:
         await _open_text_step(context)
         return
-    if not recipients:
+    audience = _broadcast_audience(context)
+    is_omnichannel = audience.key == AUDIENCE_SOURCE_YCLIENTS_ALL
+    if not recipients and not is_omnichannel:
         await _answer_callback_if_needed(context, BROADCAST_NO_RECIPIENTS_TEXT)
         await context.send_text(BROADCAST_NO_RECIPIENTS_TEXT, keyboard=broadcast_confirm_keyboard(can_send=False))
         return
@@ -353,6 +375,21 @@ async def handle_confirm_send(context: RouterContext) -> None:
             release_action_lock(_BROADCAST_SEND_LOCK_KEY)
             return
         audience = _broadcast_audience(context)
+        if audience.key == AUDIENCE_SOURCE_YCLIENTS_ALL:
+            clients = await _fetch_yclients_clients(context)
+            report = await _omnichannel_service(context).send(
+                clients=clients,
+                text=text,
+                origin_platform=PLATFORM_MAX,
+                created_by_user_id=context.event.platform_user_id,
+                attachment=_normalized_attachment(context),
+                sleep_seconds=0.1,
+            )
+            _clear_broadcast_state(context)
+            state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_REPORT_SCREEN)
+            await context.send_text(_format_omnichannel_report(report), keyboard=broadcast_report_keyboard())
+            release_action_lock(_BROADCAST_SEND_LOCK_KEY)
+            return
         report = await send_one_time_broadcast(
             sender=context.sender,
             users_repository=_users_repository(),
@@ -391,6 +428,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
     )
     _clear_broadcast_state(context)
     state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_REPORT_SCREEN)
+    release_action_lock(_BROADCAST_SEND_LOCK_KEY)
     await context.send_text(format_broadcast_report(report), keyboard=broadcast_report_keyboard())
 
 
@@ -443,12 +481,131 @@ async def _show_preview(context: RouterContext, *, push_current: bool = True) ->
         _push_current_screen(context, state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
+    preview_text = build_broadcast_preview(_broadcast_text(context) or "", _broadcast_attachment_type(context))
+    try:
+        clients = await _fetch_yclients_clients(context)
+        estimate = _omnichannel_service(context).estimate(clients, attachment=_normalized_attachment(context))
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY, estimate)
+        preview_text = f"{preview_text}\n\n{_format_omnichannel_preview_estimate(estimate)}"
+    except Exception as exc:
+        logger.warning("MAX omnichannel broadcast diagnostic: preview_estimate_failed error_type=%s", type(exc).__name__)
+        preview_text = f"{preview_text}\n\n⚠️ Оценка аудитории YClients сейчас недоступна. Перед отправкой бот попробует пересчитать аудиторию."
     await context.send_text(
-        build_broadcast_preview(_broadcast_text(context) or "", _broadcast_attachment_type(context)),
+        preview_text,
         keyboard=broadcast_preview_keyboard(has_attachment=_broadcast_attachment(context) is not None),
         attachments=[_broadcast_attachment(context)] if _broadcast_attachment(context) else None,
     )
 
+
+
+async def _fetch_yclients_clients(context: RouterContext):
+    settings = load_active_yclients_settings(YClientsSettingsRepository(_database_path()), operation="omnichannel_broadcast_clients")
+    if not has_required_yclients_credentials(settings):
+        raise RuntimeError("YClients settings are incomplete")
+    async with build_yclients_client_from_active_settings(settings) as client:
+        service = YClientsServiceLayer(client, company_id=str(settings.company_id))
+        return await service.fetch_all_yclients_clients(company_id=str(settings.company_id))
+
+
+def _omnichannel_service(context: RouterContext) -> OmnichannelBroadcastService:
+    telegram_adapter, telegram_repo = _telegram_delivery_dependencies()
+    return OmnichannelBroadcastService(
+        users_repository=_users_repository(),
+        telegram_users_repository=telegram_repo,
+        attribution_repository=PlatformAttributionRepository(_database_path()),
+        history_repository=OmnichannelBroadcastRepository(_database_path()),
+        adapters={
+            PLATFORM_MAX: MaxBroadcastDeliveryAdapter(context.sender),
+            PLATFORM_TELEGRAM: telegram_adapter,
+        },
+    )
+
+
+def _telegram_delivery_dependencies():
+    token = (getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    db_path = (getenv("TELEGRAM_DB_PATH") or "").strip()
+    token_configured = bool(token)
+    db_configured = bool(db_path)
+    if not token_configured or not db_configured:
+        logger.info(
+            "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s",
+            token_configured,
+            db_configured,
+        )
+        return TelegramUnavailableBroadcastAdapter(), None
+    repo = TelegramUsersRepository(db_path)
+    if not Path(db_path).exists():
+        logger.warning(
+            "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s error_code=%s",
+            True,
+            True,
+            "telegram_db_not_found",
+        )
+        return TelegramUnavailableBroadcastAdapter(), None
+    columns = repo.get_columns()
+    logger.info(
+        "MAX Telegram broadcast adapter diagnostic: telegram_token_configured=%s telegram_db_configured=%s telegram_users_count=%s columns_count=%s",
+        True,
+        True,
+        repo.count_users(),
+        len(columns),
+    )
+    return TelegramBotApiBroadcastAdapter(bot_token=token), repo
+
+
+def _normalized_attachment(context: RouterContext) -> BroadcastAttachmentPayload | None:
+    attachment_type = _broadcast_attachment_type(context)
+    if not attachment_type:
+        return None
+    return BroadcastAttachmentPayload(type=attachment_type, original_platform=PLATFORM_MAX, max_payload=_broadcast_attachment(context), telegram_payload=None)
+
+
+
+def _format_omnichannel_preview_estimate(estimate) -> str:
+    warning = f"\n{estimate.media_warning}" if estimate.media_warning else ""
+    return (
+        "Аудитория: база YClients\n"
+        f"Клиентов в YClients: {estimate.total_yclients_clients}\n"
+        f"Доступны в Telegram: {estimate.telegram_candidates}\n"
+        f"Доступны в MAX: {estimate.max_candidates}\n"
+        f"Есть в обоих: {estimate.both_platforms}\n"
+        f"Будет отправлено в Telegram: {estimate.telegram_selected}\n"
+        f"Будет отправлено в MAX: {estimate.max_selected}\n"
+        f"Недоступны: {estimate.unreachable}\n"
+        f"Дубликаты исключены: {estimate.duplicates_excluded}"
+        f"{warning}"
+    )
+
+def _format_omnichannel_confirm(estimate) -> str:
+    warning = f"\n\n{estimate.media_warning}" if estimate.media_warning else ""
+    return (
+        "⚠️ Подтвердите рассылку\n\n"
+        "Аудитория: база YClients\n"
+        f"Клиентов в YClients: {estimate.total_yclients_clients}\n"
+        f"Доступны в Telegram: {estimate.telegram_candidates}\n"
+        f"Доступны в MAX: {estimate.max_candidates}\n"
+        f"Есть в обоих: {estimate.both_platforms}\n"
+        f"Будет отправлено в Telegram: {estimate.telegram_selected}\n"
+        f"Будет отправлено в MAX: {estimate.max_selected}\n"
+        f"Недоступны: {estimate.unreachable}\n"
+        f"Дубликаты исключены: {estimate.duplicates_excluded}\n"
+        f"Всего доставок: {estimate.total_deliveries}"
+        f"{warning}"
+    )
+
+
+def _format_omnichannel_report(report) -> str:
+    return (
+        "✅ Рассылка завершена\n\n"
+        f"Клиентов в YClients: {report.total_yclients_clients}\n"
+        f"Отправлено в Telegram: {report.telegram_sent}\n"
+        f"Отправлено в MAX: {report.max_sent}\n"
+        f"Не доставлено: {report.not_delivered}\n"
+        f"Ошибок: {report.failed}\n"
+        f"Дубликатов исключено: {report.skipped_duplicate}\n"
+        f"Telegram недоступен: {report.skipped_sender_unavailable}\n"
+        f"Медиа не поддержано: {report.skipped_media_unsupported}"
+    )
 
 def _save_broadcast_text(context: RouterContext, text: str) -> None:
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_TEXT_KEY, text)
