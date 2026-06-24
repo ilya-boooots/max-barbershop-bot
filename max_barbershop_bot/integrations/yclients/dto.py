@@ -69,6 +69,19 @@ class YClientsCancelBookingResult:
 
 
 @dataclass(frozen=True)
+class YClientsNormalizedClient:
+    id: str
+    name: str | None = None
+    phones: tuple[str, ...] = ()
+    email: str | None = None
+    is_deleted: bool = False
+    is_archived: bool = False
+    last_visit: str | None = None
+    future_visit: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class YClientsClientCard:
     id: str
     name: str | None = None

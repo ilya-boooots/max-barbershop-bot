@@ -176,6 +176,39 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             UNIQUE(platform, platform_user_id, yclients_record_id)
         );
 
+        CREATE TABLE IF NOT EXISTS omnichannel_broadcasts (
+            broadcast_id TEXT PRIMARY KEY,
+            origin_platform TEXT NOT NULL,
+            text TEXT NOT NULL,
+            attachment_type TEXT,
+            attachment_json TEXT,
+            audience_source TEXT NOT NULL DEFAULT 'yclients_all_clients',
+            created_by_platform TEXT,
+            created_by_user_id TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at TEXT,
+            finished_at TEXT,
+            report_json TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS omnichannel_broadcast_delivery (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broadcast_id TEXT NOT NULL,
+            yclients_client_id TEXT,
+            selected_platform TEXT,
+            platform_user_id TEXT,
+            delivery_status TEXT NOT NULL,
+            reason TEXT,
+            origin_platform TEXT,
+            priority_decision TEXT,
+            error_short TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            sent_at TEXT,
+            metadata_json TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS notification_delivery (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -336,6 +369,12 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             ON support_settings(is_active, id);
         CREATE INDEX IF NOT EXISTS idx_platform_attribution_yclients_record_id
             ON platform_attribution(yclients_record_id);
+        CREATE INDEX IF NOT EXISTS idx_users_yclients_client_id
+            ON users(platform, yclients_client_id);
+        CREATE INDEX IF NOT EXISTS idx_omnichannel_delivery_broadcast
+            ON omnichannel_broadcast_delivery(broadcast_id);
+        CREATE INDEX IF NOT EXISTS idx_omnichannel_delivery_yclients
+            ON omnichannel_broadcast_delivery(broadcast_id, yclients_client_id);
         CREATE INDEX IF NOT EXISTS idx_state_storage_state_key
             ON state_storage(state_key);
         CREATE INDEX IF NOT EXISTS idx_birthday_funnel_events_user_year
