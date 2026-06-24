@@ -12,6 +12,7 @@ jobs:
     env:
       APP_DIR: /opt/bots/max-barbershop-bot
       SERVICE_NAME: max-barbershop-bot.service
+      TELEGRAM_SERVICE_NAME: telegram-bot@max-barbershop-bot.service
       SERVER_PORT: ${{ secrets.SERVER_PORT || '22' }}
 
     steps:
@@ -38,11 +39,14 @@ jobs:
           BROADCAST_SEND_DELAY_SECONDS: ${{ secrets.BROADCAST_SEND_DELAY_SECONDS }}
           BROADCAST_BATCH_SIZE: ${{ secrets.BROADCAST_BATCH_SIZE }}
           BROADCAST_BATCH_PAUSE_SECONDS: ${{ secrets.BROADCAST_BATCH_PAUSE_SECONDS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_DB_PATH: ${{ secrets.TELEGRAM_DB_PATH }}
           REPO_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
         run: |
           ssh -p "${SERVER_PORT}" -i ~/.ssh/deploy_key "${SERVER_USER}@${SERVER_HOST}" \
             APP_DIR="${APP_DIR}" \
             SERVICE_NAME="${SERVICE_NAME}" \
+            TELEGRAM_SERVICE_NAME="${TELEGRAM_SERVICE_NAME}" \
             REPO_URL="${REPO_URL}" \
             MAX_BOT_TOKEN="${MAX_BOT_TOKEN}" \
             DEV_MAX_USER_ID="${DEV_MAX_USER_ID}" \
@@ -53,6 +57,8 @@ jobs:
             BROADCAST_SEND_DELAY_SECONDS="${BROADCAST_SEND_DELAY_SECONDS:-0.1}" \
             BROADCAST_BATCH_SIZE="${BROADCAST_BATCH_SIZE:-20}" \
             BROADCAST_BATCH_PAUSE_SECONDS="${BROADCAST_BATCH_PAUSE_SECONDS:-1.0}" \
+            TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
+            TELEGRAM_DB_PATH="${TELEGRAM_DB_PATH}" \
             'bash -s' <<'REMOTE'
           set -euo pipefail
 
@@ -77,23 +83,69 @@ jobs:
           fi
 
           umask 077
-          cat > "${APP_DIR}/.env" <<ENVEOF
-          MAX_BOT_TOKEN=${MAX_BOT_TOKEN}
-          DEV_MAX_USER_ID=${DEV_MAX_USER_ID}
-          DATABASE_PATH=${DATABASE_PATH}
-          SUPPORT_USERNAME=${SUPPORT_USERNAME}
-          REMINDERS_ENABLED=${REMINDERS_ENABLED}
-          REMINDERS_POLL_INTERVAL_SECONDS=${REMINDERS_POLL_INTERVAL_SECONDS}
-          BROADCAST_SEND_DELAY_SECONDS=${BROADCAST_SEND_DELAY_SECONDS}
-          BROADCAST_BATCH_SIZE=${BROADCAST_BATCH_SIZE}
-          BROADCAST_BATCH_PAUSE_SECONDS=${BROADCAST_BATCH_PAUSE_SECONDS}
-          ENVEOF
+          touch "${APP_DIR}/.env"
+          chmod 600 "${APP_DIR}/.env"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          env_path = Path(os.environ["APP_DIR"]) / ".env"
+          updates = {
+              "MAX_BOT_TOKEN": os.environ["MAX_BOT_TOKEN"],
+              "DEV_MAX_USER_ID": os.environ["DEV_MAX_USER_ID"],
+              "DATABASE_PATH": os.environ["DATABASE_PATH"],
+              "SUPPORT_USERNAME": os.environ["SUPPORT_USERNAME"],
+              "REMINDERS_ENABLED": os.environ["REMINDERS_ENABLED"],
+              "REMINDERS_POLL_INTERVAL_SECONDS": os.environ["REMINDERS_POLL_INTERVAL_SECONDS"],
+              "BROADCAST_SEND_DELAY_SECONDS": os.environ["BROADCAST_SEND_DELAY_SECONDS"],
+              "BROADCAST_BATCH_SIZE": os.environ["BROADCAST_BATCH_SIZE"],
+              "BROADCAST_BATCH_PAUSE_SECONDS": os.environ["BROADCAST_BATCH_PAUSE_SECONDS"],
+              "TELEGRAM_BOT_TOKEN": os.environ["TELEGRAM_BOT_TOKEN"],
+              "TELEGRAM_DB_PATH": os.environ["TELEGRAM_DB_PATH"],
+          }
+
+          lines = env_path.read_text().splitlines() if env_path.exists() else []
+          written = set()
+          next_lines = []
+
+          for line in lines:
+              key, sep, _ = line.partition("=")
+              if sep and key in updates:
+                  if key not in written:
+                      next_lines.append(f"{key}={updates[key]}")
+                      written.add(key)
+                  continue
+              next_lines.append(line)
+
+          for key, value in updates.items():
+              if key not in written:
+                  next_lines.append(f"{key}={value}")
+
+          env_path.write_text("\n".join(next_lines) + "\n")
+          PY
           chmod 600 "${APP_DIR}/.env"
 
           sudo install -m 0644 "${APP_DIR}/scripts/systemd/${SERVICE_NAME}" "/etc/systemd/system/${SERVICE_NAME}"
           sudo systemctl daemon-reload
           sudo systemctl enable "${SERVICE_NAME}"
           sudo systemctl restart "${SERVICE_NAME}"
+          sudo systemctl restart "${TELEGRAM_SERVICE_NAME}"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          env_path = Path(os.environ["APP_DIR"]) / ".env"
+          values = {}
+          for line in env_path.read_text().splitlines():
+              key, sep, value = line.partition("=")
+              if sep:
+                  values[key] = value
+
+          telegram_db_path = values.get("TELEGRAM_DB_PATH", "")
+          print(f"TELEGRAM_BOT_TOKEN={'configured' if values.get('TELEGRAM_BOT_TOKEN') else 'missing'}")
+          print(f"TELEGRAM_DB_PATH={'configured' if telegram_db_path else 'missing'}")
+          print(f"TELEGRAM_DB_PATH_EXISTS={'yes' if telegram_db_path and Path(telegram_db_path).exists() else 'no'}")
+          PY
           sudo systemctl status "${SERVICE_NAME}" --no-pager
           sudo journalctl -u "${SERVICE_NAME}" -n 100 --no-pager
           REMOTE
