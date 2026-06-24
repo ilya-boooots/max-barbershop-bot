@@ -323,6 +323,69 @@ def _telegram_error_reason(http_status: int, data: dict[str, Any] | None) -> str
     code = data.get("error_code") if isinstance(data, dict) else http_status
     return f"failed_telegram_{code}"
 
+@dataclass(frozen=True)
+class _DeliverabilityResult:
+    deliverable: bool
+    no_chat_id: bool = False
+    notifications_disabled: bool = False
+    blocked: bool = False
+    stopped: bool = False
+
+
+@dataclass(frozen=True)
+class _IdentityIndexes:
+    by_client_id: dict[str, list[Any]]
+    by_phone_key: dict[str, list[Any]]
+
+
+def _normalized_client_id_key(value: Any) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _client_id_keys(value: Any) -> set[str]:
+    key = _normalized_client_id_key(value)
+    return {key} if key else set()
+
+
+def _phone_keys(values: tuple[str, ...] | list[str] | set[str] | None) -> set[str]:
+    keys: set[str] = set()
+    for value in values or ():
+        keys.update(build_phone_match_keys(value))
+    return keys
+
+
+def _truthy_notification_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if not text:
+        return True
+    if text in {"0", "false", "no", "off", "нет"}:
+        return False
+    if text in {"1", "true", "yes", "on", "да"}:
+        return True
+    return True
+
+
+def _build_identity_indexes(users: list[Any]) -> _IdentityIndexes:
+    by_client_id: dict[str, list[Any]] = {}
+    by_phone_key: dict[str, list[Any]] = {}
+    for user in users:
+        for key in _client_id_keys(getattr(user, "yclients_client_id", None)):
+            by_client_id.setdefault(key, []).append(user)
+        user_phone_keys = set(getattr(user, "phone_keys", frozenset()) or ())
+        if not user_phone_keys:
+            user_phone_keys = build_phone_match_keys(getattr(user, "phone", None))
+        for key in user_phone_keys:
+            by_phone_key.setdefault(key, []).append(user)
+    return _IdentityIndexes(by_client_id=by_client_id, by_phone_key=by_phone_key)
+
+
 class OmnichannelBroadcastService:
     """Resolve YClients clients to one best platform target and send once."""
 
@@ -336,16 +399,15 @@ class OmnichannelBroadcastService:
         self.telegram_diagnostics = telegram_diagnostics or {}
 
     def estimate(self, clients: list[YClientsNormalizedClient], *, attachment: BroadcastAttachmentPayload | None = None) -> AudienceEstimate:
-        targets = [self.resolve_delivery_target_for_yclients_client(client) for client in clients]
-        telegram_candidates = sum(1 for client in clients if self._candidate(client, PLATFORM_TELEGRAM) is not None)
+        targets, matching_diagnostics = self._resolve_targets_with_diagnostics(clients)
+        telegram_candidates = int(matching_diagnostics.get("telegram_matches_before_deliverable_count") or 0)
         max_candidates = sum(1 for client in clients if self._candidate(client, PLATFORM_MAX) is not None)
-        both = sum(1 for client in clients if self._has_exact_yclients_link(client, PLATFORM_TELEGRAM) and self._has_exact_yclients_link(client, PLATFORM_MAX))
+        both = sum(1 for t in targets if t.priority_decision == "telegram_priority_max_duplicate_skipped")
         logger.info(
             "MAX Telegram broadcast diagnostic: yclients_clients_count=%s telegram_candidates_count=%s max_candidates_count=%s both_platforms_count=%s telegram_selected_count=%s max_selected_count=%s",
             len(clients), telegram_candidates, max_candidates, both, sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM), sum(1 for t in targets if t.platform == PLATFORM_MAX),
         )
         media_supported = not attachment or not attachment.type or bool(_telegram_media_reference(attachment))
-        matching_diagnostics = self.telegram_matching_diagnostics(clients)
         return AudienceEstimate(
             total_yclients_clients=len(clients), telegram_candidates=telegram_candidates, max_candidates=max_candidates,
             both_platforms=both, telegram_selected=sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM),
@@ -356,14 +418,8 @@ class OmnichannelBroadcastService:
         )
 
     def resolve_delivery_target_for_yclients_client(self, client: YClientsNormalizedClient) -> DeliveryTarget:
-        telegram = self._candidate(client, PLATFORM_TELEGRAM)
-        max_user = self._candidate(client, PLATFORM_MAX)
-        if telegram and self._is_deliverable(telegram, PLATFORM_TELEGRAM):
-            return DeliveryTarget(client.id, PLATFORM_TELEGRAM, telegram.platform_user_id, telegram.max_user_id, telegram.chat_id, "telegram_priority", "telegram_selected")
-        if max_user and self._is_deliverable(max_user, PLATFORM_MAX):
-            reason = "max_selected_after_telegram_absent" if not telegram else "max_selected_telegram_not_deliverable"
-            return DeliveryTarget(client.id, PLATFORM_MAX, max_user.platform_user_id, max_user.max_user_id, max_user.chat_id, reason, reason)
-        return DeliveryTarget(client.id, None, None, priority_decision="unreachable", reason="skipped_unreachable")
+        targets, _ = self._resolve_targets_with_diagnostics([client])
+        return targets[0]
 
     async def send(self, *, clients: list[YClientsNormalizedClient], text: str, origin_platform: str, created_by_user_id: str | None, attachment: BroadcastAttachmentPayload | None = None, broadcast_id: str | None = None, sleep_seconds: float = 0.1) -> OmnichannelBroadcastReport:
         bid = broadcast_id or uuid.uuid4().hex
@@ -372,8 +428,8 @@ class OmnichannelBroadcastService:
         report = OmnichannelBroadcastReport(broadcast_id=bid, total_yclients_clients=len(clients))
         report.telegram_unavailable_reason = self.telegram_unavailable_reason
         report.telegram_diagnostics = dict(self.telegram_diagnostics)
-        report.telegram_diagnostics.update(self.telegram_matching_diagnostics(clients))
-        targets = [self.resolve_delivery_target_for_yclients_client(client) for client in clients]
+        targets, matching_diagnostics = self._resolve_targets_with_diagnostics(clients)
+        report.telegram_diagnostics.update(matching_diagnostics)
         report.telegram_selected = sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM)
         report.max_selected = sum(1 for t in targets if t.platform == PLATFORM_MAX)
         logger.info("MAX omnichannel broadcast diagnostic: send_started broadcast_id=%s origin_platform=%s yclients_clients_count=%s attachment_type=%s", bid, origin_platform, len(clients), attachment.type if attachment else None)
@@ -382,7 +438,7 @@ class OmnichannelBroadcastService:
                 report.skipped_unreachable += 1
                 self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=None, platform_user_id=None, delivery_status="skipped_unreachable", reason="skipped_unreachable", origin_platform=origin_platform, priority_decision=target.priority_decision)
                 continue
-            if target.priority_decision == "telegram_priority" and self._has_exact_yclients_link(client, PLATFORM_MAX):
+            if target.priority_decision == "telegram_priority_max_duplicate_skipped":
                 report.skipped_duplicate += 1
             adapter = self.adapters.get(target.platform)
             if adapter is None or not adapter.can_send(target):
@@ -422,47 +478,134 @@ class OmnichannelBroadcastService:
         return report
 
 
-    def telegram_matching_diagnostics(self, clients: list[YClientsNormalizedClient]) -> dict[str, Any]:
+    def _resolve_targets_with_diagnostics(self, clients: list[YClientsNormalizedClient]) -> tuple[list[DeliveryTarget], dict[str, Any]]:
         telegram_users = self.telegram_users.list_users_for_broadcast_audience(platform=PLATFORM_TELEGRAM) if self.telegram_users else []
-        tg_phone_keys = {key for user in telegram_users for key in getattr(user, "phone_keys", frozenset())}
-        tg_ids = {str(user.yclients_client_id).strip() for user in telegram_users if user.yclients_client_id}
+        max_users = self.users.list_users_for_broadcast_audience(platform=PLATFORM_MAX)
+        telegram_index = _build_identity_indexes(list(telegram_users))
+        max_index = _build_identity_indexes(list(max_users))
         yc_phone_keys: set[str] = set()
         yc_ids: set[str] = set()
-        for client in clients:
-            if client.id:
-                yc_ids.add(str(client.id).strip())
-            for phone in client.phones:
-                yc_phone_keys.update(build_phone_match_keys(phone))
+        targets: list[DeliveryTarget] = []
         matched_by_id = 0
         matched_by_phone = 0
+        matches_before_deliverable = 0
+        rejected_not_deliverable = 0
+        rejected_no_chat_id = 0
+        rejected_notifications_disabled = 0
+        rejected_blocked = 0
+        rejected_stopped = 0
+        duplicate_priority = 0
+
         for client in clients:
-            if client.id and self._candidate_by_client_id(client, PLATFORM_TELEGRAM) is not None:
-                matched_by_id += 1
-            elif self._candidate_by_phone(client, PLATFORM_TELEGRAM) is not None:
-                matched_by_phone += 1
+            cid_keys = _client_id_keys(client.id)
+            phone_keys = _phone_keys(client.phones)
+            yc_ids.update(cid_keys)
+            yc_phone_keys.update(phone_keys)
+
+            telegram: TelegramUserRecord | User | None = None
+            matched_kind: str | None = None
+            for key in cid_keys:
+                for user in telegram_index.by_client_id.get(key, []):
+                    telegram = user
+                    matched_kind = "client_id"
+                    break
+                if telegram:
+                    break
+            if telegram is None:
+                for key in phone_keys:
+                    for user in telegram_index.by_phone_key.get(key, []):
+                        telegram = user
+                        matched_kind = "phone"
+                        break
+                    if telegram:
+                        break
+
+            telegram_matched_but_not_deliverable = False
+            if telegram is not None:
+                matches_before_deliverable += 1
+                deliverability = self._deliverability(telegram, PLATFORM_TELEGRAM)
+                if deliverability.deliverable:
+                    if matched_kind == "client_id":
+                        matched_by_id += 1
+                    else:
+                        matched_by_phone += 1
+                    max_duplicate = self._candidate_from_indexes(cid_keys, phone_keys, max_index, PLATFORM_MAX) is not None or self._candidate(client, PLATFORM_MAX) is not None
+                    if max_duplicate:
+                        duplicate_priority += 1
+                    targets.append(DeliveryTarget(client.id, PLATFORM_TELEGRAM, telegram.platform_user_id, telegram.max_user_id, telegram.chat_id, "telegram_priority_max_duplicate_skipped" if max_duplicate else "telegram_priority", "telegram_selected"))
+                    continue
+                telegram_matched_but_not_deliverable = True
+                rejected_not_deliverable += 1
+                rejected_no_chat_id += int(deliverability.no_chat_id)
+                rejected_notifications_disabled += int(deliverability.notifications_disabled)
+                rejected_blocked += int(deliverability.blocked)
+                rejected_stopped += int(deliverability.stopped)
+
+            max_user = self._candidate_from_indexes(cid_keys, phone_keys, max_index, PLATFORM_MAX) or self._candidate(client, PLATFORM_MAX)
+            if max_user and self._is_deliverable(max_user, PLATFORM_MAX):
+                reason = "max_selected_telegram_not_deliverable" if telegram_matched_but_not_deliverable else "max_selected_after_telegram_absent"
+                targets.append(DeliveryTarget(client.id, PLATFORM_MAX, max_user.platform_user_id, max_user.max_user_id, max_user.chat_id, reason, reason))
+            else:
+                targets.append(DeliveryTarget(client.id, None, None, priority_decision="unreachable", reason="skipped_unreachable"))
+
+        tg_phone_keys = set(telegram_index.by_phone_key)
+        tg_ids = set(telegram_index.by_client_id)
+        phone_intersection = tg_phone_keys & yc_phone_keys
+        id_intersection = tg_ids & yc_ids
+        selected_telegram = sum(1 for target in targets if target.platform == PLATFORM_TELEGRAM)
         reason = None
         if telegram_users and not tg_phone_keys and not tg_ids:
             reason = "Telegram users found, but they have no phone/yclients_client_id for matching"
-        elif telegram_users and not ((tg_phone_keys & yc_phone_keys) or (tg_ids & yc_ids)):
+        elif telegram_users and not (phone_intersection or id_intersection):
             reason = "Telegram users matched: 0"
-        matched_keys = sorted(tg_phone_keys & yc_phone_keys)[:5]
-        return {
+        invariant_failed = bool((phone_intersection or id_intersection) and sum(1 for u in telegram_users if u.chat_id or u.platform_user_id) > 0 and selected_telegram == 0 and matches_before_deliverable > rejected_not_deliverable)
+        if invariant_failed:
+            logger.error(
+                "telegram_matching_resolver_invariant_failed phone_key_intersection_count=%s client_id_intersection_count=%s telegram_matches_before_deliverable_count=%s telegram_matches_rejected_not_deliverable_count=%s selected_telegram_count=%s",
+                len(phone_intersection), len(id_intersection), matches_before_deliverable, rejected_not_deliverable, selected_telegram,
+            )
+        matched_keys = sorted(phone_intersection)[:5]
+        return targets, {
             "telegram_users_count": len(telegram_users),
             "telegram_users_with_chat_id_count": sum(1 for u in telegram_users if u.chat_id or u.platform_user_id),
-            "telegram_users_with_any_phone_count": sum(1 for u in telegram_users if getattr(u, "phone_keys", frozenset())),
+            "telegram_users_with_any_phone_count": sum(1 for u in telegram_users if getattr(u, "phone_keys", frozenset()) or build_phone_match_keys(getattr(u, "phone", None))),
             "telegram_users_with_yclients_client_id_count": len(tg_ids),
             "yclients_clients_count": len(clients),
-            "yclients_clients_with_any_phone_count": sum(1 for c in clients if any(build_phone_match_keys(p) for p in c.phones)),
+            "yclients_clients_with_any_phone_count": sum(1 for c in clients if _phone_keys(c.phones)),
             "yclients_clients_with_id_count": len(yc_ids),
-            "phone_key_intersection_count": len(tg_phone_keys & yc_phone_keys),
-            "client_id_intersection_count": len(tg_ids & yc_ids),
+            "phone_key_intersection_count": len(phone_intersection),
+            "client_id_intersection_count": len(id_intersection),
             "telegram_matched_by_client_id_count": matched_by_id,
             "telegram_matched_by_phone_count": matched_by_phone,
+            "telegram_matches_before_deliverable_count": matches_before_deliverable,
+            "telegram_matches_rejected_not_deliverable_count": rejected_not_deliverable,
+            "rejected_no_chat_id_count": rejected_no_chat_id,
+            "rejected_notifications_disabled_count": rejected_notifications_disabled,
+            "rejected_blocked_count": rejected_blocked,
+            "rejected_stopped_count": rejected_stopped,
+            "telegram_priority_duplicate_skipped_count": duplicate_priority,
+            "telegram_matching_resolver_invariant_failed": invariant_failed,
             "telegram_unmatched_reason": reason,
             "yclients_phone_key_samples_masked": [mask_phone(k) for k in sorted(yc_phone_keys)[:5]],
             "telegram_phone_key_samples_masked": [mask_phone(k) for k in sorted(tg_phone_keys)[:5]],
             "matched_phone_key_samples_masked": [mask_phone(k) for k in matched_keys],
         }
+
+
+    def telegram_matching_diagnostics(self, clients: list[YClientsNormalizedClient]) -> dict[str, Any]:
+        _, diagnostics = self._resolve_targets_with_diagnostics(clients)
+        return diagnostics
+
+    def _candidate_from_indexes(self, client_id_keys: set[str], phone_keys: set[str], index: _IdentityIndexes, platform: str) -> User | TelegramUserRecord | None:
+        for key in client_id_keys:
+            for user in index.by_client_id.get(key, []):
+                if self._is_deliverable(user, platform):
+                    return user
+        for key in phone_keys:
+            for user in index.by_phone_key.get(key, []):
+                if self._is_deliverable(user, platform):
+                    return user
+        return None
 
     def _candidate_by_client_id(self, client: YClientsNormalizedClient, platform: str) -> User | TelegramUserRecord | None:
         if not client.id:
@@ -522,11 +665,18 @@ class OmnichannelBroadcastService:
             return self.telegram_users.find_by_platform_user_id(platform_user_id, platform=platform)
         return self.users.find_by_platform_user_id(platform_user_id, platform=platform)
 
+    def _deliverability(self, user: User | TelegramUserRecord, platform: str) -> _DeliverabilityResult:
+        notifications_enabled = _truthy_notification_value(getattr(user, "notifications_enabled", True))
+        blocked = bool(getattr(user, "blocked", False))
+        stopped = bool(getattr(user, "stopped", False))
+        has_route = bool(user.platform_user_id and (user.max_user_id or user.chat_id)) if platform == PLATFORM_MAX else bool(user.chat_id or user.platform_user_id) if platform == PLATFORM_TELEGRAM else False
+        return _DeliverabilityResult(
+            deliverable=bool(notifications_enabled and not blocked and not stopped and has_route),
+            no_chat_id=not has_route,
+            notifications_disabled=not notifications_enabled,
+            blocked=blocked,
+            stopped=stopped,
+        )
+
     def _is_deliverable(self, user: User | TelegramUserRecord, platform: str) -> bool:
-        if not user.notifications_enabled or bool(getattr(user, "blocked", False)) or bool(getattr(user, "stopped", False)):
-            return False
-        if platform == PLATFORM_MAX:
-            return bool(user.platform_user_id and (user.max_user_id or user.chat_id))
-        if platform == PLATFORM_TELEGRAM:
-            return bool(user.chat_id or user.platform_user_id)
-        return False
+        return self._deliverability(user, platform).deliverable
