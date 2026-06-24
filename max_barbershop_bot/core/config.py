@@ -47,12 +47,13 @@ class Config:
     telegram_db_path: str | None = None
     telegram_test_chat_id: str | None = None
     config_source: str = "env"
+    env_file_checked: tuple[str, ...] = ()
 
 
 def load_config() -> Config:
     """Load and validate configuration from environment variables."""
 
-    dotenv_values = _load_dotenv_values()
+    dotenv_values, env_file_checked = _load_dotenv_values()
     config_source = "config" if dotenv_values else "env"
 
     max_bot_token = _env_value("MAX_BOT_TOKEN", dotenv_values, default="").strip()
@@ -104,6 +105,7 @@ def load_config() -> Config:
         telegram_db_path=_optional_env("TELEGRAM_DB_PATH", dotenv_values),
         telegram_test_chat_id=_optional_env("TELEGRAM_TEST_CHAT_ID", dotenv_values),
         config_source=config_source,
+        env_file_checked=tuple(env_file_checked),
     )
 
 
@@ -158,15 +160,17 @@ def _env_value(name: str, dotenv_values: dict[str, str], *, default: str) -> str
     return value if value is not None else default
 
 
-def _load_dotenv_values() -> dict[str, str]:
-    path = Path.cwd() / ".env"
-    if not path.is_file():
-        return {}
+def _load_dotenv_values() -> tuple[dict[str, str], list[str]]:
+    paths = _dotenv_candidate_paths()
+    checked = [str(path) for path in paths]
+    path = next((candidate for candidate in paths if candidate.is_file()), None)
+    if path is None:
+        return {}, checked
     values: dict[str, str] = {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return values
+        return values, checked
     for line in lines:
         raw = line.strip()
         if not raw or raw.startswith("#") or "=" not in raw:
@@ -177,4 +181,23 @@ def _load_dotenv_values() -> dict[str, str]:
             continue
         value = value.strip().strip("\"'")
         values[key] = value
-    return values
+    return values, checked
+
+
+def _dotenv_candidate_paths() -> list[Path]:
+    """Return .env fallback paths in production-safe priority order."""
+
+    project_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        Path("/opt/bots/max-barbershop-bot/.env"),
+        project_root / ".env",
+        Path.cwd() / ".env",
+    ]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            unique.append(candidate)
+            seen.add(key)
+    return unique
