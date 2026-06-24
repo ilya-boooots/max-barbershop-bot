@@ -20,6 +20,7 @@ from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.services.birthday_funnel import run_birthday_loop
 from max_barbershop_bot.services.cancellation_recovery import run_cancellation_recovery_loop
 from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
+from max_barbershop_bot.repositories.telegram_users import TelegramUsersRepository
 from max_barbershop_bot.services.reminder_lifecycle import shutdown_reminder_lifecycle, start_reminder_lifecycle
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,7 @@ async def run() -> None:
         raise
 
     client = MaxApiClient(config)
+    _log_telegram_config_diagnostic(config)
     logger.info(
         "🚀 MAX Barbershop Bot запускается: env=%s, dev_max_user_id_set=%s",
         config.app_env,
@@ -266,6 +268,27 @@ async def run() -> None:
     finally:
         await client.close()
         logger.info("🛑 MAX Barbershop Bot остановлен")
+
+
+def _log_telegram_config_diagnostic(config: Config) -> None:
+    token_configured = bool((config.telegram_bot_token or "").strip())
+    db_path = (config.telegram_db_path or "").strip()
+    db_path_configured = bool(db_path)
+    db_exists = False
+    adapter = "unavailable"
+    if db_path_configured:
+        diagnostics = TelegramUsersRepository(db_path).inspect_database(token_configured=token_configured)
+        db_exists = diagnostics.db_exists
+        if token_configured and diagnostics.unavailable_reason is None:
+            adapter = "real"
+    logger.info(
+        "MAX Telegram config diagnostic: telegram_token_configured=%s telegram_db_path_configured=%s telegram_db_exists=%s telegram_adapter=%s config_source=%s",
+        token_configured,
+        db_path_configured,
+        db_exists,
+        adapter,
+        config.config_source,
+    )
 
 
 def main() -> int:

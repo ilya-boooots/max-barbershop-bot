@@ -82,6 +82,7 @@ class OmnichannelBroadcastReport:
     last_telegram_error_code: str | None = None
     last_telegram_error_short: str | None = None
     telegram_unavailable_reason: str | None = None
+    telegram_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     @property
     def duration_ms(self) -> int:
@@ -110,6 +111,7 @@ class OmnichannelBroadcastReport:
             "last_telegram_error_code": self.last_telegram_error_code,
             "last_telegram_error_short": self.last_telegram_error_short,
             "telegram_unavailable_reason": self.telegram_unavailable_reason,
+            "telegram_diagnostics": dict(self.telegram_diagnostics),
         }
 
 
@@ -323,13 +325,14 @@ def _telegram_error_reason(http_status: int, data: dict[str, Any] | None) -> str
 class OmnichannelBroadcastService:
     """Resolve YClients clients to one best platform target and send once."""
 
-    def __init__(self, *, users_repository: UsersRepository, attribution_repository: PlatformAttributionRepository, history_repository: OmnichannelBroadcastRepository, adapters: dict[str, BroadcastDeliveryAdapter], telegram_users_repository: TelegramUsersRepository | None = None, telegram_unavailable_reason: str | None = None) -> None:
+    def __init__(self, *, users_repository: UsersRepository, attribution_repository: PlatformAttributionRepository, history_repository: OmnichannelBroadcastRepository, adapters: dict[str, BroadcastDeliveryAdapter], telegram_users_repository: TelegramUsersRepository | None = None, telegram_unavailable_reason: str | None = None, telegram_diagnostics: dict[str, Any] | None = None) -> None:
         self.users = users_repository
         self.telegram_users = telegram_users_repository
         self.attribution = attribution_repository
         self.history = history_repository
         self.adapters = adapters
         self.telegram_unavailable_reason = telegram_unavailable_reason
+        self.telegram_diagnostics = telegram_diagnostics or {}
 
     def estimate(self, clients: list[YClientsNormalizedClient], *, attachment: BroadcastAttachmentPayload | None = None) -> AudienceEstimate:
         targets = [self.resolve_delivery_target_for_yclients_client(client) for client in clients]
@@ -365,6 +368,7 @@ class OmnichannelBroadcastService:
         self.history.mark_status(bid, "sending", started=True)
         report = OmnichannelBroadcastReport(broadcast_id=bid, total_yclients_clients=len(clients))
         report.telegram_unavailable_reason = self.telegram_unavailable_reason
+        report.telegram_diagnostics = dict(self.telegram_diagnostics)
         targets = [self.resolve_delivery_target_for_yclients_client(client) for client in clients]
         report.telegram_selected = sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM)
         report.max_selected = sum(1 for t in targets if t.platform == PLATFORM_MAX)

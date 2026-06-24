@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 DEFAULT_LOG_LEVEL = "INFO"
@@ -45,12 +46,16 @@ class Config:
     telegram_bot_token: str | None = None
     telegram_db_path: str | None = None
     telegram_test_chat_id: str | None = None
+    config_source: str = "env"
 
 
 def load_config() -> Config:
     """Load and validate configuration from environment variables."""
 
-    max_bot_token = os.getenv("MAX_BOT_TOKEN", "").strip()
+    dotenv_values = _load_dotenv_values()
+    config_source = "config" if dotenv_values else "env"
+
+    max_bot_token = _env_value("MAX_BOT_TOKEN", dotenv_values, default="").strip()
     if not max_bot_token:
         raise ConfigError(
             "MAX_BOT_TOKEN не задан. Укажите токен MAX-бота в переменной окружения "
@@ -59,48 +64,55 @@ def load_config() -> Config:
 
     return Config(
         max_bot_token=max_bot_token,
-        log_level=os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL).strip() or DEFAULT_LOG_LEVEL,
-        app_env=os.getenv("APP_ENV", DEFAULT_APP_ENV).strip() or DEFAULT_APP_ENV,
-        dev_legacy_user_id=os.getenv("DEV_TG_ID", DEFAULT_DEV_LEGACY_ID).strip()
+        log_level=_env_value("LOG_LEVEL", dotenv_values, default=DEFAULT_LOG_LEVEL).strip() or DEFAULT_LOG_LEVEL,
+        app_env=_env_value("APP_ENV", dotenv_values, default=DEFAULT_APP_ENV).strip() or DEFAULT_APP_ENV,
+        dev_legacy_user_id=_env_value("DEV_TG_ID", dotenv_values, default=DEFAULT_DEV_LEGACY_ID).strip()
         or DEFAULT_DEV_LEGACY_ID,
-        dev_max_user_id=_optional_env("DEV_MAX_USER_ID"),
-        database_path=os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip()
+        dev_max_user_id=_optional_env("DEV_MAX_USER_ID", dotenv_values),
+        database_path=_env_value("DATABASE_PATH", dotenv_values, default=DEFAULT_DATABASE_PATH).strip()
         or DEFAULT_DATABASE_PATH,
         support_username=normalize_support_username(
-            os.getenv("SUPPORT_USERNAME", DEFAULT_SUPPORT_USERNAME)
+            _env_value("SUPPORT_USERNAME", dotenv_values, default=DEFAULT_SUPPORT_USERNAME)
         ),
-        reminders_enabled=_bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED),
+        reminders_enabled=_bool_env("REMINDERS_ENABLED", DEFAULT_REMINDERS_ENABLED, dotenv_values),
         reminders_poll_interval_seconds=_int_env(
             "REMINDERS_POLL_INTERVAL_SECONDS",
             DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS,
+            dotenv_values,
             minimum=30,
         ),
-        birthday_funnel_enabled=_bool_env("BIRTHDAY_FUNNEL_ENABLED", DEFAULT_BIRTHDAY_FUNNEL_ENABLED),
+        birthday_funnel_enabled=_bool_env("BIRTHDAY_FUNNEL_ENABLED", DEFAULT_BIRTHDAY_FUNNEL_ENABLED, dotenv_values),
         birthday_funnel_poll_interval_seconds=_int_env(
             "BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS",
             DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS,
+            dotenv_values,
             minimum=300,
         ),
-        cancellation_recovery_enabled=_bool_env("CANCELLATION_RECOVERY_ENABLED", DEFAULT_CANCELLATION_RECOVERY_ENABLED),
+        cancellation_recovery_enabled=_bool_env("CANCELLATION_RECOVERY_ENABLED", DEFAULT_CANCELLATION_RECOVERY_ENABLED, dotenv_values),
         cancellation_recovery_poll_interval_seconds=_int_env(
             "CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS",
             DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS,
+            dotenv_values,
             minimum=30,
         ),
         developer_diagnostics_enabled=_bool_env(
             "DEVELOPER_DIAGNOSTICS_ENABLED",
             DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED,
+            dotenv_values,
         ),
-        telegram_bot_token=_optional_env("TELEGRAM_BOT_TOKEN"),
-        telegram_db_path=_optional_env("TELEGRAM_DB_PATH"),
-        telegram_test_chat_id=_optional_env("TELEGRAM_TEST_CHAT_ID"),
+        telegram_bot_token=_optional_env("TELEGRAM_BOT_TOKEN", dotenv_values),
+        telegram_db_path=_optional_env("TELEGRAM_DB_PATH", dotenv_values),
+        telegram_test_chat_id=_optional_env("TELEGRAM_TEST_CHAT_ID", dotenv_values),
+        config_source=config_source,
     )
 
 
-def _optional_env(name: str) -> str | None:
+def _optional_env(name: str, dotenv_values: dict[str, str] | None = None) -> str | None:
     """Return a stripped optional environment variable value."""
 
-    value = os.getenv(name)
+    value = os.environ.get(name)
+    if value is None and dotenv_values is not None:
+        value = dotenv_values.get(name)
     if value is None:
         return None
     value = value.strip()
@@ -117,15 +129,19 @@ def normalize_support_username(raw: str | None) -> str:
     return f"@{value}"
 
 
-def _bool_env(name: str, default: bool) -> bool:
-    value = os.getenv(name)
+def _bool_env(name: str, default: bool, dotenv_values: dict[str, str] | None = None) -> bool:
+    value = os.environ.get(name)
+    if value is None and dotenv_values is not None:
+        value = dotenv_values.get(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on", "да"}
 
 
-def _int_env(name: str, default: int, *, minimum: int = 1) -> int:
-    value = os.getenv(name)
+def _int_env(name: str, default: int, dotenv_values: dict[str, str] | None = None, *, minimum: int = 1) -> int:
+    value = os.environ.get(name)
+    if value is None and dotenv_values is not None:
+        value = dotenv_values.get(name)
     if value is None:
         return default
     try:
@@ -133,3 +149,32 @@ def _int_env(name: str, default: int, *, minimum: int = 1) -> int:
     except ValueError:
         return default
     return max(minimum, parsed)
+
+
+def _env_value(name: str, dotenv_values: dict[str, str], *, default: str) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        value = dotenv_values.get(name)
+    return value if value is not None else default
+
+
+def _load_dotenv_values() -> dict[str, str]:
+    path = Path.cwd() / ".env"
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for line in lines:
+        raw = line.strip()
+        if not raw or raw.startswith("#") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key or key.startswith("#"):
+            continue
+        value = value.strip().strip("\"'")
+        values[key] = value
+    return values
