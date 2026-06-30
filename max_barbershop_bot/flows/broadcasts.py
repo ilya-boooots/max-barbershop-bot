@@ -825,14 +825,10 @@ def _resolve_audience_recipients(
     else:
         candidates = repo.list_users_for_broadcast_audience(platform=PLATFORM_MAX)
 
-    skipped_disabled = 0
     skipped_missing = 0
     sendable = []
     for user in candidates:
         if user is None:
-            continue
-        if not user.notifications_enabled:
-            skipped_disabled += 1
             continue
         if not (user.max_user_id or user.chat_id):
             skipped_missing += 1
@@ -845,10 +841,10 @@ def _resolve_audience_recipients(
         audience.key,
         len(candidates),
         len(recipients),
-        skipped_disabled,
+        0,
         0,
     )
-    return recipients, skipped_disabled, skipped_missing
+    return recipients, 0, skipped_missing
 
 
 def _state_int(context: RouterContext, key: str) -> int:

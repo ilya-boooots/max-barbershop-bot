@@ -68,8 +68,8 @@ def tg_user(**kwargs):
     )
 
 
-def max_user(phone=None, yclients_client_id=None):
-    return User(1, PLATFORM_MAX, "max1", "max1", "chatm", None, None, None, None, phone, None, "user", yclients_client_id, True)
+def max_user(phone=None, yclients_client_id=None, notifications_enabled=True):
+    return User(1, PLATFORM_MAX, "max1", "max1", "chatm", None, None, None, None, phone, None, "user", yclients_client_id, notifications_enabled)
 
 
 def service(tg_users, max_users=()):
@@ -162,6 +162,38 @@ def test_required_case_blocked_falls_back_to_max_and_counts_rejection():
     assert estimate.telegram_selected == 0
     assert estimate.max_selected == 1
     assert estimate.telegram_matching_diagnostics["rejected_blocked_count"] == 1
+
+
+def test_manual_broadcast_selects_telegram_when_notifications_disabled():
+    svc = service([tg_user(chat_id="111", phone="+79198332692", notifications_enabled=False)])
+    estimate = svc.estimate([YClientsNormalizedClient(id="1", phones=("89198332692",))])
+    assert estimate.telegram_selected == 1
+    assert estimate.telegram_matching_diagnostics["telegram_matches_rejected_not_deliverable_count"] == 0
+    assert estimate.telegram_matching_diagnostics["rejected_notifications_disabled_count"] == 0
+
+
+def test_manual_broadcast_skips_blocked_even_when_notifications_disabled():
+    svc = service([tg_user(chat_id="111", phone="+79198332692", notifications_enabled=False, blocked=True)])
+    estimate = svc.estimate([YClientsNormalizedClient(id="1", phones=("89198332692",))])
+    assert estimate.telegram_selected == 0
+    assert estimate.telegram_matching_diagnostics["rejected_blocked_count"] == 1
+
+
+def test_reminder_deliverability_still_respects_notifications_disabled():
+    svc = service([tg_user(chat_id="111", phone="+79198332692", notifications_enabled=False)])
+    user = tg_user(chat_id="111", phone="+79198332692", notifications_enabled=False)
+    assert svc._deliverability_for_reminder(user, PLATFORM_TELEGRAM).deliverable is False
+
+
+def test_manual_broadcast_telegram_priority_ignores_notifications_disabled():
+    svc = service(
+        [tg_user(chat_id="111", phone="+79198332692", notifications_enabled=False)],
+        [max_user(phone="89198332692", notifications_enabled=True)],
+    )
+    estimate = svc.estimate([YClientsNormalizedClient(id="1", phones=("89198332692",))])
+    assert estimate.telegram_selected == 1
+    assert estimate.max_selected == 0
+    assert estimate.duplicates_excluded == 1
 
 
 def test_required_case_intersection_selects_unless_rejected():
