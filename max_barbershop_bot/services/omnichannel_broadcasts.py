@@ -523,7 +523,7 @@ class OmnichannelBroadcastService:
             telegram_matched_but_not_deliverable = False
             if telegram is not None:
                 matches_before_deliverable += 1
-                deliverability = self._deliverability(telegram, PLATFORM_TELEGRAM)
+                deliverability = self._deliverability_for_manual_broadcast(telegram, PLATFORM_TELEGRAM)
                 if deliverability.deliverable:
                     if matched_kind == "client_id":
                         matched_by_id += 1
@@ -542,7 +542,7 @@ class OmnichannelBroadcastService:
                 rejected_stopped += int(deliverability.stopped)
 
             max_user = self._candidate_from_indexes(cid_keys, phone_keys, max_index, PLATFORM_MAX) or self._candidate(client, PLATFORM_MAX)
-            if max_user and self._is_deliverable(max_user, PLATFORM_MAX):
+            if max_user and self._is_deliverable_for_manual_broadcast(max_user, PLATFORM_MAX):
                 reason = "max_selected_telegram_not_deliverable" if telegram_matched_but_not_deliverable else "max_selected_after_telegram_absent"
                 targets.append(DeliveryTarget(client.id, PLATFORM_MAX, max_user.platform_user_id, max_user.max_user_id, max_user.chat_id, reason, reason))
             else:
@@ -599,11 +599,11 @@ class OmnichannelBroadcastService:
     def _candidate_from_indexes(self, client_id_keys: set[str], phone_keys: set[str], index: _IdentityIndexes, platform: str) -> User | TelegramUserRecord | None:
         for key in client_id_keys:
             for user in index.by_client_id.get(key, []):
-                if self._is_deliverable(user, platform):
+                if self._is_deliverable_for_manual_broadcast(user, platform):
                     return user
         for key in phone_keys:
             for user in index.by_phone_key.get(key, []):
-                if self._is_deliverable(user, platform):
+                if self._is_deliverable_for_manual_broadcast(user, platform):
                     return user
         return None
 
@@ -611,7 +611,7 @@ class OmnichannelBroadcastService:
         if not client.id:
             return None
         users = self._list_by_yclients_client_id(client.id, platform=platform)
-        deliverable = [u for u in users if self._is_deliverable(u, platform)]
+        deliverable = [u for u in users if self._is_deliverable_for_manual_broadcast(u, platform)]
         return deliverable[0] if deliverable else None
 
     def _candidate_by_phone(self, client: YClientsNormalizedClient, platform: str) -> User | TelegramUserRecord | None:
@@ -619,13 +619,13 @@ class OmnichannelBroadcastService:
         for phone in client.phones:
             keys.update(build_phone_match_keys(phone))
         users = self._list_by_phone_keys(keys, platform=platform)
-        deliverable = [u for u in users if self._is_deliverable(u, platform)]
+        deliverable = [u for u in users if self._is_deliverable_for_manual_broadcast(u, platform)]
         return deliverable[0] if deliverable else None
 
     def _has_exact_yclients_link(self, client: YClientsNormalizedClient, platform: str) -> bool:
         if not client.id:
             return False
-        return any(self._is_deliverable(user, platform) for user in self._list_by_yclients_client_id(client.id, platform=platform))
+        return any(self._is_deliverable_for_manual_broadcast(user, platform) for user in self._list_by_yclients_client_id(client.id, platform=platform))
 
     def _candidate(self, client: YClientsNormalizedClient, platform: str) -> User | TelegramUserRecord | None:
         by_id = self._candidate_by_client_id(client, platform)
@@ -639,14 +639,14 @@ class OmnichannelBroadcastService:
             keys.update(build_phone_match_keys(phone))
         for record in self.attribution.list_by_booking_phone_keys(keys, platform=platform):
             user = self._find_by_platform_user_id(record.platform_user_id, platform=platform)
-            if user and self._is_deliverable(user, platform):
+            if user and self._is_deliverable_for_manual_broadcast(user, platform):
                 return user
         if client.id:
             for record in self.attribution.list_by_yclients_client_id(client.id):
                 if record.platform != platform:
                     continue
                 user = self._find_by_platform_user_id(record.platform_user_id, platform=platform)
-                if user and self._is_deliverable(user, platform):
+                if user and self._is_deliverable_for_manual_broadcast(user, platform):
                     return user
         return None
 
@@ -665,7 +665,7 @@ class OmnichannelBroadcastService:
             return self.telegram_users.find_by_platform_user_id(platform_user_id, platform=platform)
         return self.users.find_by_platform_user_id(platform_user_id, platform=platform)
 
-    def _deliverability(self, user: User | TelegramUserRecord, platform: str) -> _DeliverabilityResult:
+    def _deliverability_for_reminder(self, user: User | TelegramUserRecord, platform: str) -> _DeliverabilityResult:
         notifications_enabled = _truthy_notification_value(getattr(user, "notifications_enabled", True))
         blocked = bool(getattr(user, "blocked", False))
         stopped = bool(getattr(user, "stopped", False))
@@ -678,5 +678,17 @@ class OmnichannelBroadcastService:
             stopped=stopped,
         )
 
-    def _is_deliverable(self, user: User | TelegramUserRecord, platform: str) -> bool:
-        return self._deliverability(user, platform).deliverable
+    def _deliverability_for_manual_broadcast(self, user: User | TelegramUserRecord, platform: str) -> _DeliverabilityResult:
+        blocked = bool(getattr(user, "blocked", False))
+        stopped = bool(getattr(user, "stopped", False))
+        has_route = bool(user.platform_user_id and (user.max_user_id or user.chat_id)) if platform == PLATFORM_MAX else bool(user.chat_id or user.platform_user_id) if platform == PLATFORM_TELEGRAM else False
+        return _DeliverabilityResult(
+            deliverable=bool(not blocked and not stopped and has_route),
+            no_chat_id=not has_route,
+            notifications_disabled=False,
+            blocked=blocked,
+            stopped=stopped,
+        )
+
+    def _is_deliverable_for_manual_broadcast(self, user: User | TelegramUserRecord, platform: str) -> bool:
+        return self._deliverability_for_manual_broadcast(user, platform).deliverable

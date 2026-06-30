@@ -166,10 +166,7 @@ def get_all_registered_recipients(users_repository: UsersRepository) -> list[Bro
     """Return local MAX users who can receive a broadcast."""
 
     return build_recipients_from_users(
-        users_repository.list_broadcast_recipients(
-            platform=PLATFORM_MAX,
-            notifications_enabled=True,
-        )
+        users_repository.list_users_for_broadcast_audience(platform=PLATFORM_MAX)
     )
 
 
