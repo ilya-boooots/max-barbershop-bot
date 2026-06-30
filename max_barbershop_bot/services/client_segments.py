@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -78,11 +79,23 @@ class ClientSegmentsLoadError(RuntimeError):
     """YClients segment data could not be loaded safely."""
 
 
+@dataclass(frozen=True)
+class ClientSegmentsOverview:
+    """YClients-based counts for the broadcast segments menu."""
+
+    all_count: int
+    active_7_count: int
+    active_30_count: int
+    active_90_count: int
+    branch_timezone: str = DEFAULT_BRANCH_TIMEZONE
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
 SEGMENT_TITLES = {
     ClientSegmentType.ALL_CLIENTS: "👥 Все клиенты",
-    ClientSegmentType.ACTIVE_7: "🔥 Активные за 7 дней",
-    ClientSegmentType.ACTIVE_30: "🔥 Активные за 30 дней",
-    ClientSegmentType.ACTIVE_90: "🔥 Активные за 90 дней",
+    ClientSegmentType.ACTIVE_7: "🔥 Активные 7 дней",
+    ClientSegmentType.ACTIVE_30: "📆 Активные 30 дней",
+    ClientSegmentType.ACTIVE_90: "🗓 Активные 90 дней",
     ClientSegmentType.LOST: "😔 Потерянные клиенты",
     ClientSegmentType.NO_FUTURE_BOOKINGS: "📅 Без будущей записи",
 }
@@ -103,8 +116,53 @@ class ClientSegmentService:
     def __init__(self, settings_repository: YClientsSettingsRepository) -> None:
         self._settings_repository = settings_repository
 
+    async def get_core_segments_overview(self) -> ClientSegmentsOverview:
+        """Return all/active 7/30/90 counts from YClients with one clients fetch and one 90-day records fetch."""
+
+        settings = self._require_settings()
+        started = time.perf_counter()
+        tz = _zoneinfo(settings.branch_timezone)
+        now_local = datetime.now(tz)
+        date_from = (now_local - timedelta(days=90)).date().isoformat()
+        date_to = now_local.date().isoformat()
+        try:
+            client_rows = await self._fetch_clients(settings)
+            records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
+        except YClientsError as exc:
+            logger.warning("client_segment_yclients_error segment_type=overview error_class=%s", type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_yclients_error") from exc
+
+        client_members = _dedupe_client_rows(client_rows)
+        active_members = _active_keys_by_window(records, now_local, allowed_keys=set(client_members))
+        diagnostics = {
+            "yclients_clients_count": len(client_rows),
+            "yclients_records_count": len(records),
+            "all_count": len(client_members),
+            "active_7_count": len(active_members[7]),
+            "active_30_count": len(active_members[30]),
+            "active_90_count": len(active_members[90]),
+            "deduped_count": len(client_members),
+            "skipped_deleted_count": _count_deleted_clients(client_rows) + sum(1 for row in records if bool(row.get("deleted"))),
+            "skipped_cancelled_count": sum(1 for row in records if not _record_is_completed(row)),
+            "branch_timezone": settings.branch_timezone,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        }
+        logger.info(
+            "MAX client segments diagnostic: segment=overview yclients_clients_count=%s yclients_records_count=%s all_count=%s active_7_count=%s active_30_count=%s active_90_count=%s deduped_count=%s skipped_deleted_count=%s skipped_cancelled_count=%s branch_timezone=%s duration_ms=%s",
+            diagnostics["yclients_clients_count"], diagnostics["yclients_records_count"], diagnostics["all_count"], diagnostics["active_7_count"], diagnostics["active_30_count"], diagnostics["active_90_count"], diagnostics["deduped_count"], diagnostics["skipped_deleted_count"], diagnostics["skipped_cancelled_count"], diagnostics["branch_timezone"], diagnostics["duration_ms"],
+        )
+        return ClientSegmentsOverview(
+            all_count=len(client_members),
+            active_7_count=len(active_members[7]),
+            active_30_count=len(active_members[30]),
+            active_90_count=len(active_members[90]),
+            branch_timezone=settings.branch_timezone,
+            diagnostics=diagnostics,
+        )
+
     async def get_all_clients(self) -> ClientSegmentResult:
         settings = self._require_settings()
+        started = time.perf_counter()
         try:
             client_rows = await self._fetch_clients(settings)
         except YClientsError as exc:
@@ -113,12 +171,14 @@ class ClientSegmentService:
 
         members: dict[str, _MemberAccumulator] = {}
         for client_row in client_rows:
+            if _client_is_deleted_or_archived(client_row):
+                continue
             identity = _client_identity(client_row)
             key = _business_client_key(identity)
             if key:
                 members[key] = _MemberAccumulator.from_identity(identity)
 
-        result = self._build_result(ClientSegmentType.ALL_CLIENTS, members.values(), settings.branch_timezone, {"clients_count": len(client_rows)})
+        result = self._build_result(ClientSegmentType.ALL_CLIENTS, members.values(), settings.branch_timezone, {"clients_count": len(client_rows), "duration_ms": int((time.perf_counter() - started) * 1000)})
         logger.info("client_segment_loaded segment_type=%s segment_count=%s clients_count=%s", ClientSegmentType.ALL_CLIENTS.value, result.count, len(client_rows))
         return result
 
@@ -131,25 +191,28 @@ class ClientSegmentService:
         now_local = datetime.now(tz)
         date_from = (now_local - timedelta(days=days)).date().isoformat()
         date_to = now_local.date().isoformat()
+        started = time.perf_counter()
         try:
+            client_rows = await self._fetch_clients(settings)
             records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
         except YClientsError as exc:
             logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", segment_type.value, type(exc).__name__)
             raise ClientSegmentsLoadError("segment_yclients_error") from exc
 
         now_utc = now_local.astimezone(timezone.utc)
+        valid_client_keys = set(_dedupe_client_rows(client_rows))
         members: dict[str, _MemberAccumulator] = {}
         for record in records:
             if not _is_valid_past_visit(record, now_utc):
                 continue
             identity = _record_client_identity(record)
             key = _business_client_key(identity)
-            if not key:
+            if not key or key not in valid_client_keys:
                 continue
             accumulator = members.setdefault(key, _MemberAccumulator.from_identity(identity))
             accumulator.add_visit(_record_datetime_utc(record))
 
-        result = self._build_result(segment_type, members.values(), settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "records_count": len(records)})
+        result = self._build_result(segment_type, members.values(), settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "clients_count": len(client_rows), "records_count": len(records), "duration_ms": int((time.perf_counter() - started) * 1000)})
         logger.info("client_segment_loaded segment_type=%s segment_count=%s records_count=%s", segment_type.value, result.count, len(records))
         return result
 
@@ -320,9 +383,7 @@ class _MemberAccumulator:
 def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_LIST_LIMIT) -> str:
     """Build user-facing segment summary with masked phones."""
 
-    lines = [result.title, "", f"Клиентов: {result.count}"]
-    if result.description:
-        lines.extend(["", result.description])
+    lines = [f"🎯 Сегмент: {_plain_segment_title(result.title)}", f"Клиентов: {result.count}", "Источник: YClients"]
     if not result.members:
         lines.extend(["", "В этом сегменте пока нет клиентов 🙏"])
         return "\n".join(lines)
@@ -470,3 +531,55 @@ def _format_local_date(value: str, tz_name: str) -> str:
         return _parse_datetime(value).astimezone(_zoneinfo(tz_name)).strftime("%d.%m.%Y")
     except Exception:
         return value
+
+
+def _plain_segment_title(title: str) -> str:
+    return title.replace("👥 ", "").replace("🔥 ", "").replace("📆 ", "").replace("🗓 ", "").strip()
+
+def format_segments_overview(overview: ClientSegmentsOverview) -> str:
+    return (
+        "🎯 Сегменты клиентов\n\n"
+        f"👥 Все клиенты: {overview.all_count}\n"
+        f"🔥 Активные 7 дней: {overview.active_7_count}\n"
+        f"📆 Активные 30 дней: {overview.active_30_count}\n"
+        f"🗓 Активные 90 дней: {overview.active_90_count}"
+    )
+
+def _dedupe_client_rows(rows: list[dict[str, Any]]) -> dict[str, _MemberAccumulator]:
+    members: dict[str, _MemberAccumulator] = {}
+    for row in rows:
+        if _client_is_deleted_or_archived(row):
+            continue
+        identity = _client_identity(row)
+        key = _business_client_key(identity)
+        if key:
+            members[key] = _MemberAccumulator.from_identity(identity)
+    return members
+
+def _active_keys_by_window(records: list[dict[str, Any]], now_local: datetime, *, allowed_keys: set[str] | None = None) -> dict[int, set[str]]:
+    now_utc = now_local.astimezone(timezone.utc)
+    windows = {7: set(), 30: set(), 90: set()}
+    for record in records:
+        if not _is_valid_past_visit(record, now_utc):
+            continue
+        event_dt = _record_datetime_utc(record)
+        if event_dt is None:
+            continue
+        age_days = (now_utc - event_dt).total_seconds() / 86400
+        identity = _record_client_identity(record)
+        key = _business_client_key(identity)
+        if not key or (allowed_keys is not None and key not in allowed_keys):
+            continue
+        for days in windows:
+            if age_days <= days:
+                windows[days].add(key)
+    return windows
+
+def _client_is_deleted_or_archived(row: dict[str, Any]) -> bool:
+    return bool(row.get("deleted") or row.get("is_deleted") or row.get("is_archive") or row.get("is_archived") or row.get("archive"))
+
+def _count_deleted_clients(rows: list[dict[str, Any]]) -> int:
+    return sum(1 for row in rows if _client_is_deleted_or_archived(row))
+
+def _record_is_completed(record: dict[str, Any]) -> bool:
+    return (not bool(record.get("deleted"))) and record.get("attendance") == 1
