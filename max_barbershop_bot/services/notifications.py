@@ -197,10 +197,11 @@ async def send_business_notification(
     keyboard: MaxInlineKeyboard | None = None,
     attachments: list[Mapping[str, Any]] | None = None,
     metadata: Mapping[str, Any] | None = None,
+    respect_global_settings: bool = True,
 ) -> NotificationHistoryRecord | None:
     """Send one business notification once and persist both history and delivery."""
 
-    if not AppSettingsRepository(database_path).notifications_enabled():
+    if respect_global_settings and not AppSettingsRepository(database_path).notifications_enabled():
         return mark_notification_history_skipped(
             database_path,
             platform=platform,

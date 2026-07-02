@@ -25,3 +25,12 @@
     * в логах должна быть строка с префиксом `MAX reminders diagnostic:`;
     * допустимые поля: `reminder_type`, `loop_enabled`, `loop_interval_seconds`, `branch_timezone`, `now_branch_time`, `due_window_start`, `due_window_end`, `yclients_records_checked`, `due_candidates_count`, `skipped_cancelled_count`, `skipped_deleted_count`, `skipped_past_count`, `skipped_duplicate_count`, `skipped_no_platform_mapping_count`, `skipped_notifications_disabled_count`, `skipped_blocked_count`, `sent_count`, `failed_count`, `duration_ms`;
     * в диагностике не должно быть токенов, полных телефонов, raw payload YClients или raw DB rows.
+
+## Safe test buttons: 48h and 2h
+
+1. Откройте в MAX: `Настройки → 🔔 Уведомления → 🧪 Тест уведомлений`.
+2. Нажмите `✅ Тест подтверждения за 48 часов`.
+3. Ожидается: текущему MAX-пользователю/чату сразу приходит тестовое сообщение с Telegram-текстом 48h confirmation и кнопками `✅ Да, запись в силе` / `❌ Нет, отменить или перенести`; в `notification_history` и `notification_delivery` создаются dev/test строки.
+4. Нажмите `⏰ Тест напоминания за 2 часа`.
+5. Ожидается: текущему MAX-пользователю/чату сразу приходит тестовое сообщение с Telegram-текстом 2h reminder и кнопками `📅 Мои записи` / `🏠 Главное меню`; в `notification_history` и `notification_delivery` создаются dev/test строки.
+6. Тестовые записи имеют `yclients_record_id` с префиксом `dev-test-` и не создают/не меняют реальные записи YClients.

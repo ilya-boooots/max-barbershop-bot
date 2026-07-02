@@ -5,6 +5,7 @@ from max_barbershop_bot.db.sqlite import init_database
 from max_barbershop_bot.repositories.users import PLATFORM_MAX
 from max_barbershop_bot.services.notifications import (
     BOOKING_REMINDER_48H,
+    BOOKING_REMINDER_2H,
     get_notification_history,
     mark_notification_history_skipped,
     reserve_notification_history,
@@ -131,3 +132,86 @@ def test_48h_text_and_buttons_match_telegram_reference_meaning() -> None:
     assert keyboard is not None
     assert keyboard.rows[0][0].text == "✅ Да, запись в силе"
     assert keyboard.rows[1][0].text == "❌ Нет, отменить или перенести"
+
+
+import sqlite3
+
+import max_barbershop_bot.flows.settings as settings_flow
+from max_barbershop_bot.core.events import NormalizedEvent
+from max_barbershop_bot.core.router import RouterContext
+from max_barbershop_bot.max_api.sender import MaxSendResult
+from max_barbershop_bot.ui.buttons import SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD, SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD
+
+
+class FakeSender:
+    def __init__(self) -> None:
+        self.sent = []
+
+    async def send_to_user(self, user_id, text, *, keyboard=None, attachments=None, format=None, metadata=None):
+        self.sent.append(("user", str(user_id), text, keyboard))
+        return MaxSendResult(ok=True, status_code=200, message_id="msg-user", recipient_type="user", recipient_id=str(user_id))
+
+    async def send_to_chat(self, chat_id, text, *, keyboard=None, attachments=None, format=None, metadata=None):
+        self.sent.append(("chat", str(chat_id), text, keyboard))
+        return MaxSendResult(ok=True, status_code=200, message_id="msg-chat", recipient_type="chat", recipient_id=str(chat_id))
+
+
+def _test_context(sender: FakeSender) -> RouterContext:
+    return RouterContext(
+        event=NormalizedEvent(
+            update_type="message_callback",
+            platform_user_id="100",
+            max_user_id="100",
+            chat_id="200",
+            text=None,
+            callback_payload=SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD,
+            callback_id="cb",
+        ),
+        sender=sender,
+    )
+
+
+async def _run_settings_test(tmp_path, monkeypatch, payload: str):
+    db = tmp_path / "db.sqlite3"
+    init_database(str(db))
+    monkeypatch.setattr(settings_flow, "_database_path", lambda: str(db))
+    sender = FakeSender()
+    text = await settings_flow._send_notification_test_and_build_result_text(_test_context(sender), payload)
+    return db, sender, text
+
+
+def _count_rows(db, table: str, notification_type: str) -> int:
+    with sqlite3.connect(db) as connection:
+        if table == "notification_history":
+            row = connection.execute("SELECT COUNT(*) FROM notification_history WHERE notification_type = ?", (notification_type,)).fetchone()
+        else:
+            row = connection.execute("SELECT COUNT(*) FROM notification_delivery WHERE message_type = ?", (notification_type,)).fetchone()
+    return int(row[0])
+
+
+def test_settings_test_48h_sends_real_dev_message_and_logs_history(tmp_path, monkeypatch) -> None:
+    import asyncio
+
+    db, sender, text = asyncio.run(_run_settings_test(tmp_path, monkeypatch, SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD))
+
+    assert "✅ Тестовое уведомление отправлено." in text
+    assert "reminder_type=confirm_2d" in text
+    assert sender.sent and sender.sent[0][0] == "chat"
+    assert "Подтвердите, пожалуйста, запись 👇" in sender.sent[0][2]
+    assert sender.sent[0][3].rows[0][0].text == "✅ Да, запись в силе"
+    assert _count_rows(db, "notification_history", BOOKING_REMINDER_48H) == 1
+    assert _count_rows(db, "notification_delivery", BOOKING_REMINDER_48H) == 1
+
+
+def test_settings_test_2h_sends_real_dev_message_and_logs_history(tmp_path, monkeypatch) -> None:
+    import asyncio
+
+    db, sender, text = asyncio.run(_run_settings_test(tmp_path, monkeypatch, SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD))
+
+    assert "✅ Тестовое уведомление отправлено." in text
+    assert "reminder_type=reminder_2h" in text
+    assert sender.sent and sender.sent[0][0] == "chat"
+    assert "вы записаны на услугу «МУЖСКАЯ СТРИЖКА»" in sender.sent[0][2]
+    assert sender.sent[0][3].rows[0][0].text == "📅 Мои записи"
+    assert _count_rows(db, "notification_history", BOOKING_REMINDER_2H) == 1
+    assert _count_rows(db, "notification_delivery", BOOKING_REMINDER_2H) == 1

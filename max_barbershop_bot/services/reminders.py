@@ -161,6 +161,7 @@ async def send_booking_notification(
     keyboard: MaxInlineKeyboard | None = None,
     text_override: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    respect_global_settings: bool = True,
 ) -> NotificationHistoryRecord | None:
     """Send and record one booking notification without raising transport errors."""
 
@@ -201,6 +202,7 @@ async def send_booking_notification(
             keyboard=keyboard,
             attachments=attachments,
             metadata={"label": _NOTIFICATION_TYPE_LABELS.get(context.notification_type)},
+            respect_global_settings=respect_global_settings,
         )
     except Exception:
         logger.warning(
@@ -229,6 +231,7 @@ async def send_immediate_confirmation(
     keyboard: MaxInlineKeyboard | None = None,
     text_override: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    respect_global_settings: bool = True,
 ) -> NotificationHistoryRecord | None:
     """Send the booking success confirmation through the notification service."""
 
@@ -252,6 +255,7 @@ async def send_immediate_confirmation(
         keyboard=keyboard,
         text_override=text_override,
         attachments=attachments,
+        respect_global_settings=respect_global_settings,
     )
 
 
@@ -411,7 +415,7 @@ async def send_due_reminders(
             database_path=database_path,
             context=reminder.context,
             timezone_name=branch_timezone_name,
-            keyboard=_keyboard_for_reminder(reminder.context),
+            keyboard=booking_reminder_keyboard(reminder.context),
         )
         sent_or_recorded += 1
     return sent_or_recorded
@@ -478,7 +482,7 @@ async def run_reminder_loop(
     logger.info("booking_reminder_loop_stopped")
 
 
-def _keyboard_for_reminder(context: BookingNotificationContext) -> MaxInlineKeyboard | None:
+def booking_reminder_keyboard(context: BookingNotificationContext) -> MaxInlineKeyboard | None:
     if context.notification_type == BOOKING_REMINDER_48H:
         return MaxInlineKeyboard.from_rows([
             [MaxButton(text="✅ Да, запись в силе", payload=f"brc:y:{context.yclients_record_id}")],
@@ -670,3 +674,7 @@ def _log_reminder_diagnostic(**fields: Any) -> None:
     }
     safe_fields = {key: value for key, value in fields.items() if key in allowed}
     logger.info("MAX reminders diagnostic: %s", safe_fields)
+
+
+# Backward-compatible alias for existing lightweight tests.
+_keyboard_for_reminder = booking_reminder_keyboard
