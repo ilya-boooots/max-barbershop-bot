@@ -22,7 +22,7 @@ PLATFORM_MAX = "max"
 RecipientKind = Literal["user", "chat"]
 
 BOOKING_CONFIRMATION_IMMEDIATE = "booking_confirmation_immediate"
-BOOKING_REMINDER_48H = "booking_reminder_48h"
+BOOKING_REMINDER_48H = "booking_confirmation_2d"
 BOOKING_REMINDER_6H = "booking_reminder_6h"
 BOOKING_REMINDER_2H = "booking_reminder_2h"
 BOOKING_NOTIFICATION_TYPES = {
