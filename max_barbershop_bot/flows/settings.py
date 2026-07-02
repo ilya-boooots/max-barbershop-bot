@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import UTC, datetime, timedelta
+import logging
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from os import getenv
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH, DEFAULT_REMINDERS_ENABLED, DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS
@@ -44,7 +47,12 @@ from max_barbershop_bot.services.reminder_lifecycle import (
     stop_reminder_lifecycle,
 )
 from max_barbershop_bot.services.notifications import BOOKING_CONFIRMATION_IMMEDIATE, BOOKING_REMINDER_2H, BOOKING_REMINDER_48H
-from max_barbershop_bot.services.reminders import BookingNotificationContext, render_booking_notification_text
+from max_barbershop_bot.services.reminders import (
+    BookingNotificationContext,
+    booking_reminder_keyboard,
+    render_booking_notification_text,
+    send_booking_notification,
+)
 from max_barbershop_bot.services.settings_audit import log_settings_action
 from max_barbershop_bot.ui.buttons import (
     ADMIN_SETTINGS_PAYLOAD,
@@ -120,6 +128,7 @@ LOG_LINES_LIMIT = 200
 LOG_CHUNK_LIMIT = 3000
 STATE_LOG_PAGES_KEY = "devdiag_log_pages"
 STATE_LOG_PAGE_INDEX_KEY = "devdiag_log_page_index"
+logger = logging.getLogger(__name__)
 
 
 def register_settings_routes(router: Router) -> None:
@@ -482,7 +491,7 @@ async def handle_settings_notifications_run_test(context: RouterContext) -> None
         return
     await _answer_callback_if_needed(context)
     payload = context.event.callback_payload or ""
-    text = _build_notification_test_result_text(payload)
+    text = await _send_notification_test_and_build_result_text(context, payload)
     _audit(context, actor_role, action="notifications_safe_test_run", section="notifications", metadata={"payload": payload})
     await context.send_text(text, keyboard=settings_notification_tests_keyboard())
 
@@ -584,7 +593,7 @@ def _format_smoke_loop_status(enabled: bool, lifecycle) -> str:
 
 
 
-def _build_notification_test_result_text(payload: str) -> str:
+async def _send_notification_test_and_build_result_text(context: RouterContext, payload: str) -> str:
     notification_type_by_payload = {
         SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD: BOOKING_CONFIRMATION_IMMEDIATE,
         SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD: BOOKING_REMINDER_48H,
@@ -598,34 +607,86 @@ def _build_notification_test_result_text(payload: str) -> str:
     notification_type = notification_type_by_payload.get(payload)
     if notification_type is None:
         return "🧪 Тест уведомлений\n\n❌ Неизвестный тест. Откройте раздел заново."
-    now = datetime.now(UTC)
-    booking_datetime = now + timedelta(days=3 if notification_type == BOOKING_REMINDER_48H else 1, hours=2)
-    context = BookingNotificationContext(
-        platform_user_id="dev-safe-test",
-        max_user_id="dev-safe-test",
-        yclients_record_id=f"dev-safe-{notification_type}",
-        yclients_client_id="dev-safe-client",
+
+    now_utc = datetime.now(UTC)
+    branch_timezone = "Europe/Moscow"
+    booking_datetime = _dev_test_booking_datetime(notification_type, now_utc, branch_timezone)
+    record_suffix = "confirm-48h" if notification_type == BOOKING_REMINDER_48H else "2h" if notification_type == BOOKING_REMINDER_2H else "immediate"
+    dev_record_id = f"dev-test-{record_suffix}-{context.event.platform_user_id}-{int(now_utc.timestamp() * 1000)}-{uuid4().hex[:8]}"
+    reminder_type = "confirm_2d" if notification_type == BOOKING_REMINDER_48H else "reminder_2h" if notification_type == BOOKING_REMINDER_2H else "immediate"
+    logger.info(
+        "dev_test_booking_reminder_clicked actor_platform_user_id=%s yclients_record_id=%s reminder_type=%s",
+        context.event.platform_user_id,
+        dev_record_id,
+        reminder_type,
+    )
+
+    booking_context = BookingNotificationContext(
+        platform_user_id=str(context.event.platform_user_id or "dev-safe-test"),
+        max_user_id=context.event.max_user_id or context.event.platform_user_id,
+        chat_id=context.event.chat_id,
+        yclients_record_id=dev_record_id,
+        yclients_client_id="dev-test-client",
         notification_type=notification_type,
         booking_datetime=booking_datetime,
-        service_name="Тестовая стрижка",
-        master_name="Тестовый мастер",
-        client_name="Тестовый клиент",
-        branch_address="Тестовый адрес",
-        scheduled_for=now,
+        service_name="МУЖСКАЯ СТРИЖКА" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовая стрижка",
+        master_name="Рената Пономарёва" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовый мастер",
+        client_name="Илья" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовый клиент",
+        branch_address=await _dev_test_branch_address(),
+        scheduled_for=now_utc,
     )
-    preview = render_booking_notification_text(context, "Europe/Moscow")
+    result = await send_booking_notification(
+        context.sender,
+        database_path=_database_path(),
+        context=booking_context,
+        timezone_name=branch_timezone,
+        keyboard=booking_reminder_keyboard(booking_context),
+        respect_global_settings=False,
+    )
+    preview = render_booking_notification_text(booking_context, branch_timezone)
+    sent = bool(result and result.status == "sent" and result.sent_at)
+    status_line = "✅ Тестовое уведомление отправлено." if sent else "⚠️ Тестовое событие создано, но уведомление не отправилось. Проверьте логи."
+    logger.info(
+        "dev_test_booking_reminder_process_finished actor_platform_user_id=%s yclients_record_id=%s reminder_type=%s status_after=%s sent_at_utc=%s error_summary=%s",
+        context.event.platform_user_id,
+        dev_record_id,
+        reminder_type,
+        result.status if result else "failed",
+        result.sent_at if result else None,
+        result.delivery_error_message if result else "send_booking_notification_returned_none",
+    )
     return (
         "🧪 Тест уведомлений\n\n"
         f"Тип: {label_by_payload[payload]}\n"
-        "Статус: ✅ OK\n\n"
+        f"Статус: {status_line}\n"
+        f"yclients_record_id={dev_record_id}\n"
+        f"reminder_type={reminder_type}\n"
+        f"history_status={(result.status if result else 'failed')}\n\n"
         "Что проверено:\n"
-        "• ✅ шаблон уведомления собирается\n"
-        "• ✅ payload кнопки обработан\n"
-        "• ✅ история/YClients не изменялись\n"
-        "• ✅ сообщения клиентам не отправлялись\n\n"
+        "• ✅ шаблон уведомления собирается по Telegram reference\n"
+        "• ✅ сообщение реально отправляется текущему MAX-пользователю/чату\n"
+        "• ✅ запись помечена как dev/test и не трогает YClients/реальных клиентов\n"
+        "• ✅ результат пишется в notification_history/notification_delivery\n\n"
         "Предпросмотр текста:\n"
         f"{preview}"
     )[:3900]
+
+
+def _dev_test_booking_datetime(notification_type: str, now_utc: datetime, branch_timezone: str) -> datetime:
+    branch_tz = ZoneInfo(branch_timezone)
+    now_local = now_utc.astimezone(branch_tz)
+    visit_date = (now_local + timedelta(days=3 if notification_type == BOOKING_REMINDER_48H else 1)).date()
+    if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H}:
+        return datetime.combine(visit_date, time(hour=21, minute=0), tzinfo=branch_tz)
+    return now_local + timedelta(days=1, hours=2)
+
+
+async def _dev_test_branch_address() -> str:
+    try:
+        contacts = await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
+    except Exception:
+        return "Тестовый адрес"
+    return str(contacts.address or "Тестовый адрес").strip() or "Тестовый адрес"
 
 
 def _build_notification_button_test_text() -> str:
