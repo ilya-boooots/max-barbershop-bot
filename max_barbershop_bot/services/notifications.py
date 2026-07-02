@@ -22,7 +22,7 @@ PLATFORM_MAX = "max"
 RecipientKind = Literal["user", "chat"]
 
 BOOKING_CONFIRMATION_IMMEDIATE = "booking_confirmation_immediate"
-BOOKING_REMINDER_48H = "booking_reminder_48h"
+BOOKING_REMINDER_48H = "booking_confirmation_2d"
 BOOKING_REMINDER_6H = "booking_reminder_6h"
 BOOKING_REMINDER_2H = "booking_reminder_2h"
 BOOKING_NOTIFICATION_TYPES = {
@@ -197,10 +197,11 @@ async def send_business_notification(
     keyboard: MaxInlineKeyboard | None = None,
     attachments: list[Mapping[str, Any]] | None = None,
     metadata: Mapping[str, Any] | None = None,
+    respect_global_settings: bool = True,
 ) -> NotificationHistoryRecord | None:
     """Send one business notification once and persist both history and delivery."""
 
-    if not AppSettingsRepository(database_path).notifications_enabled():
+    if respect_global_settings and not AppSettingsRepository(database_path).notifications_enabled():
         return mark_notification_history_skipped(
             database_path,
             platform=platform,
