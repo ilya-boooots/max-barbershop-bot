@@ -124,7 +124,7 @@ class ClientSegmentService:
         tz = _zoneinfo(settings.branch_timezone)
         now_local = datetime.now(tz)
         date_from = (now_local - timedelta(days=90)).date().isoformat()
-        date_to = now_local.date().isoformat()
+        date_to = (now_local + timedelta(days=90)).date().isoformat()
         try:
             client_rows = await self._fetch_clients(settings)
             records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
@@ -133,23 +133,25 @@ class ClientSegmentService:
             raise ClientSegmentsLoadError("segment_yclients_error") from exc
 
         client_members = _dedupe_client_rows(client_rows)
-        active_members = _active_keys_by_window(records, now_local, allowed_keys=set(client_members))
+        active_members, active_diagnostics = _active_keys_by_window(records, now_local, allowed_keys=set(client_members))
         diagnostics = {
             "yclients_clients_count": len(client_rows),
+            "raw_records_count": len(records),
             "yclients_records_count": len(records),
             "all_count": len(client_members),
             "active_7_count": len(active_members[7]),
             "active_30_count": len(active_members[30]),
             "active_90_count": len(active_members[90]),
             "deduped_count": len(client_members),
-            "skipped_deleted_count": _count_deleted_clients(client_rows) + sum(1 for row in records if bool(row.get("deleted"))),
-            "skipped_cancelled_count": sum(1 for row in records if not _record_is_completed(row)),
             "branch_timezone": settings.branch_timezone,
+            "date_range_from": date_from,
+            "date_range_to": date_to,
             "duration_ms": int((time.perf_counter() - started) * 1000),
+            **active_diagnostics,
         }
         logger.info(
-            "MAX client segments diagnostic: segment=overview yclients_clients_count=%s yclients_records_count=%s all_count=%s active_7_count=%s active_30_count=%s active_90_count=%s deduped_count=%s skipped_deleted_count=%s skipped_cancelled_count=%s branch_timezone=%s duration_ms=%s",
-            diagnostics["yclients_clients_count"], diagnostics["yclients_records_count"], diagnostics["all_count"], diagnostics["active_7_count"], diagnostics["active_30_count"], diagnostics["active_90_count"], diagnostics["deduped_count"], diagnostics["skipped_deleted_count"], diagnostics["skipped_cancelled_count"], diagnostics["branch_timezone"], diagnostics["duration_ms"],
+            "MAX client segments diagnostic: segment=overview yclients_clients_count=%s raw_records_count=%s records_with_client_identity_count=%s records_with_datetime_count=%s records_with_created_at_count=%s skipped_cancelled_count=%s skipped_deleted_count=%s skipped_no_identity_count=%s skipped_no_date_count=%s active_7_count=%s active_30_count=%s active_90_count=%s branch_timezone=%s date_range_from=%s date_range_to=%s sample_record_statuses=%s sample_date_fields_present=%s duration_ms=%s",
+            diagnostics["yclients_clients_count"], diagnostics["raw_records_count"], diagnostics["records_with_client_identity_count"], diagnostics["records_with_datetime_count"], diagnostics["records_with_created_at_count"], diagnostics["skipped_cancelled_count"], diagnostics["skipped_deleted_count"], diagnostics["skipped_no_identity_count"], diagnostics["skipped_no_date_count"], diagnostics["active_7_count"], diagnostics["active_30_count"], diagnostics["active_90_count"], diagnostics["branch_timezone"], diagnostics["date_range_from"], diagnostics["date_range_to"], diagnostics["sample_record_statuses"], diagnostics["sample_date_fields_present"], diagnostics["duration_ms"],
         )
         return ClientSegmentsOverview(
             all_count=len(client_members),
@@ -189,8 +191,8 @@ class ClientSegmentService:
         settings = self._require_settings()
         tz = _zoneinfo(settings.branch_timezone)
         now_local = datetime.now(tz)
-        date_from = (now_local - timedelta(days=days)).date().isoformat()
-        date_to = now_local.date().isoformat()
+        date_from = (now_local - timedelta(days=90)).date().isoformat()
+        date_to = (now_local + timedelta(days=90)).date().isoformat()
         started = time.perf_counter()
         try:
             client_rows = await self._fetch_clients(settings)
@@ -199,20 +201,25 @@ class ClientSegmentService:
             logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", segment_type.value, type(exc).__name__)
             raise ClientSegmentsLoadError("segment_yclients_error") from exc
 
-        now_utc = now_local.astimezone(timezone.utc)
-        valid_client_keys = set(_dedupe_client_rows(client_rows))
+        client_members = _dedupe_client_rows(client_rows)
+        active_keys, active_diagnostics = _active_keys_by_window(records, now_local, allowed_keys=set(client_members))
         members: dict[str, _MemberAccumulator] = {}
         for record in records:
-            if not _is_valid_past_visit(record, now_utc):
+            if _record_is_deleted(record) or _record_is_cancelled(record):
                 continue
             identity = _record_client_identity(record)
             key = _business_client_key(identity)
-            if not key or key not in valid_client_keys:
+            if not key or key not in active_keys[days]:
                 continue
-            accumulator = members.setdefault(key, _MemberAccumulator.from_identity(identity))
-            accumulator.add_visit(_record_datetime_utc(record))
+            accumulator = members.setdefault(key, client_members.get(key) or _MemberAccumulator.from_identity(identity))
+            activity_dt = _activity_datetime_for_window(record, now_local, days)
+            if activity_dt and activity_dt > now_local.astimezone(timezone.utc):
+                accumulator.add_future_booking(activity_dt)
+            else:
+                accumulator.add_visit(activity_dt)
 
-        result = self._build_result(segment_type, members.values(), settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "clients_count": len(client_rows), "records_count": len(records), "duration_ms": int((time.perf_counter() - started) * 1000)})
+        diagnostics = {"date_from": date_from, "date_to": date_to, "date_range_from": date_from, "date_range_to": date_to, "clients_count": len(client_rows), "records_count": len(records), "raw_records_count": len(records), "duration_ms": int((time.perf_counter() - started) * 1000), **active_diagnostics}
+        result = self._build_result(segment_type, members.values(), settings.branch_timezone, diagnostics)
         logger.info("client_segment_loaded segment_type=%s segment_count=%s records_count=%s", segment_type.value, result.count, len(records))
         return result
 
@@ -425,28 +432,38 @@ def _build_client(settings: YClientsSettings) -> YClientsClient:
 
 
 def _is_valid_past_visit(record: dict[str, Any], now_utc: datetime) -> bool:
-    if bool(record.get("deleted")):
+    if _record_is_deleted(record) or _record_is_cancelled(record):
         return False
     event_dt = _record_datetime_utc(record)
     if event_dt and event_dt > now_utc:
         return False
-    attendance = record.get("attendance")
-    if attendance is None:
-        return True
-    return attendance == 1
+    return True
 
 
 def _is_active_future_booking(record: dict[str, Any], now_utc: datetime) -> bool:
-    if bool(record.get("deleted")):
+    if _record_is_deleted(record) or _record_is_cancelled(record):
         return False
     event_dt = _record_datetime_utc(record)
-    if not event_dt or event_dt <= now_utc:
-        return False
-    return record.get("attendance") in (None, 0, 2)
+    return bool(event_dt and event_dt > now_utc)
 
 
 def _record_datetime_utc(record: dict[str, Any]) -> datetime | None:
-    raw = record.get("datetime") or record.get("date")
+    return _record_date_field_utc(record, ("datetime", "date", "appointment_datetime", "record_datetime", "visit_datetime", "seance_date"))
+
+
+def _record_created_at_utc(record: dict[str, Any]) -> datetime | None:
+    return _record_date_field_utc(record, ("created_at", "create_date", "created", "date_create", "create_datetime"))
+
+
+def _record_date_field_utc(record: dict[str, Any], field_names: tuple[str, ...]) -> datetime | None:
+    for field_name in field_names:
+        parsed = _parse_raw_datetime(record.get(field_name))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_raw_datetime(raw: Any) -> datetime | None:
     if raw is None:
         return None
     try:
@@ -464,6 +481,40 @@ def _record_datetime_utc(record: dict[str, Any]) -> datetime | None:
     except Exception:
         return None
 
+
+def _activity_datetime_for_window(record: dict[str, Any], now_local: datetime, days: int) -> datetime | None:
+    now_utc = now_local.astimezone(timezone.utc)
+    threshold = now_utc - timedelta(days=days)
+    event_dt = _record_datetime_utc(record)
+    created_at = _record_created_at_utc(record)
+    if event_dt and threshold <= event_dt <= now_utc:
+        return event_dt
+    if created_at and threshold <= created_at <= now_utc:
+        return created_at
+    return None
+
+
+def _record_is_deleted(record: dict[str, Any]) -> bool:
+    return bool(record.get("deleted") or record.get("is_deleted"))
+
+
+def _record_is_cancelled(record: dict[str, Any]) -> bool:
+    if bool(record.get("cancelled") or record.get("canceled") or record.get("is_cancelled") or record.get("is_canceled")):
+        return True
+    status = _normalize_id(record.get("status") or record.get("record_status") or record.get("state")).lower()
+    if status in {"cancelled", "canceled", "cancel", "deleted", "delete"}:
+        return True
+    attendance = _normalize_id(record.get("attendance") if record.get("attendance") is not None else record.get("visit_attendance")).lower()
+    return attendance in {"-1", "cancelled", "canceled", "no_show", "noshow", "not_come"}
+
+
+def _record_status_sample(record: dict[str, Any]) -> str:
+    return _normalize_id(record.get("status") or record.get("record_status") or record.get("state") or record.get("attendance") or "unknown")[:32]
+
+
+def _date_fields_present(record: dict[str, Any]) -> str:
+    fields = [field for field in ("datetime", "date", "appointment_datetime", "record_datetime", "visit_datetime", "seance_date", "created_at", "create_date", "created", "date_create", "create_datetime") if record.get(field) is not None]
+    return "+".join(fields[:4]) or "none"
 
 def _parse_datetime(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -556,30 +607,54 @@ def _dedupe_client_rows(rows: list[dict[str, Any]]) -> dict[str, _MemberAccumula
             members[key] = _MemberAccumulator.from_identity(identity)
     return members
 
-def _active_keys_by_window(records: list[dict[str, Any]], now_local: datetime, *, allowed_keys: set[str] | None = None) -> dict[int, set[str]]:
-    now_utc = now_local.astimezone(timezone.utc)
-    windows = {7: set(), 30: set(), 90: set()}
+def _active_keys_by_window(records: list[dict[str, Any]], now_local: datetime, *, allowed_keys: set[str] | None = None) -> tuple[dict[int, set[str]], dict[str, Any]]:
+    windows: dict[int, set[str]] = {7: set(), 30: set(), 90: set()}
+    diagnostics: dict[str, Any] = {
+        "records_with_client_identity_count": 0,
+        "records_with_datetime_count": 0,
+        "records_with_created_at_count": 0,
+        "skipped_cancelled_count": 0,
+        "skipped_deleted_count": 0,
+        "skipped_no_identity_count": 0,
+        "skipped_no_date_count": 0,
+        "sample_record_statuses": [],
+        "sample_date_fields_present": [],
+    }
     for record in records:
-        if not _is_valid_past_visit(record, now_utc):
-            continue
-        event_dt = _record_datetime_utc(record)
-        if event_dt is None:
-            continue
-        age_days = (now_utc - event_dt).total_seconds() / 86400
+        status_sample = _record_status_sample(record)
+        if status_sample not in diagnostics["sample_record_statuses"] and len(diagnostics["sample_record_statuses"]) < 8:
+            diagnostics["sample_record_statuses"].append(status_sample)
+        date_fields = _date_fields_present(record)
+        if date_fields not in diagnostics["sample_date_fields_present"] and len(diagnostics["sample_date_fields_present"]) < 8:
+            diagnostics["sample_date_fields_present"].append(date_fields)
         identity = _record_client_identity(record)
         key = _business_client_key(identity)
-        if not key or (allowed_keys is not None and key not in allowed_keys):
+        if key:
+            diagnostics["records_with_client_identity_count"] += 1
+        if _record_datetime_utc(record) is not None:
+            diagnostics["records_with_datetime_count"] += 1
+        if _record_created_at_utc(record) is not None:
+            diagnostics["records_with_created_at_count"] += 1
+        if _record_is_deleted(record):
+            diagnostics["skipped_deleted_count"] += 1
             continue
+        if _record_is_cancelled(record):
+            diagnostics["skipped_cancelled_count"] += 1
+            continue
+        if not key or (allowed_keys is not None and key not in allowed_keys):
+            diagnostics["skipped_no_identity_count"] += 1
+            continue
+        matched = False
         for days in windows:
-            if age_days <= days:
+            if _activity_datetime_for_window(record, now_local, days) is not None:
                 windows[days].add(key)
-    return windows
+                matched = True
+        if not matched:
+            diagnostics["skipped_no_date_count"] += 1
+    return windows, diagnostics
 
 def _client_is_deleted_or_archived(row: dict[str, Any]) -> bool:
     return bool(row.get("deleted") or row.get("is_deleted") or row.get("is_archive") or row.get("is_archived") or row.get("archive"))
 
 def _count_deleted_clients(rows: list[dict[str, Any]]) -> int:
     return sum(1 for row in rows if _client_is_deleted_or_archived(row))
-
-def _record_is_completed(record: dict[str, Any]) -> bool:
-    return (not bool(record.get("deleted"))) and record.get("attendance") == 1
