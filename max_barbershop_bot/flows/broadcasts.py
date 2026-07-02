@@ -302,8 +302,8 @@ async def handle_audience_segment(context: RouterContext) -> None:
 
 
 async def handle_lost_clients_section(context: RouterContext) -> None:
-    await _answer_callback_if_needed(context)
-    await _select_audience(context, BroadcastAudience("lost_30", "😔 Потерянные клиенты"))
+    from max_barbershop_bot.flows.lost_clients import handle_lost_clients_open
+    await handle_lost_clients_open(context)
 
 
 async def handle_effectiveness_section(context: RouterContext) -> None:
@@ -625,6 +625,10 @@ async def _show_preview(context: RouterContext, *, push_current: bool = True) ->
 
 
 async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_key: str):
+    if audience_key.startswith("segment:"):
+        audience_key = audience_key.removeprefix("segment:")
+    if audience_key == "lost_clients":
+        audience_key = "lost_30"
     if audience_key in {AUDIENCE_SOURCE_YCLIENTS_ALL, ALL_USERS_AUDIENCE.key}:
         return await _fetch_yclients_clients(context)
     service = ClientSegmentService(YClientsSettingsRepository(_database_path()))

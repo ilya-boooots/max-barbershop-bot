@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from max_barbershop_bot.services import client_segments as segments
-from max_barbershop_bot.ui.buttons import broadcast_audience_keyboard, broadcast_menu_keyboard, client_segments_menu_keyboard
+from max_barbershop_bot.ui.buttons import LOST_CLIENTS_OPEN_PAYLOAD, broadcast_audience_keyboard, broadcast_menu_keyboard, client_segments_menu_keyboard
 
 
 def _button_texts(keyboard):
@@ -71,3 +71,10 @@ def test_confirmed_booking_counts_active_and_cancelled_does_not():
     assert "yc:101" in windows[30]
     assert "yc:102" not in windows[30]
     assert diagnostics["skipped_cancelled_count"] == 1
+
+
+def test_lost_clients_main_button_opens_section_not_text_prompt():
+    keyboard = broadcast_menu_keyboard()
+    lost_buttons = [button for row in keyboard.rows for button in row if button.text == "😔 Потерянные клиенты"]
+    assert lost_buttons
+    assert lost_buttons[0].payload == LOST_CLIENTS_OPEN_PAYLOAD

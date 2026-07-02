@@ -733,7 +733,7 @@ def broadcast_menu_keyboard() -> MaxInlineKeyboard:
         [
             [MaxButton(text="✉️ Разовая рассылка", payload=BROADCAST_ONE_TIME_START_PAYLOAD)],
             [MaxButton(text="🎯 Сегменты клиентов", payload=BROADCAST_SEGMENTS_PAYLOAD)],
-            [MaxButton(text="😔 Потерянные клиенты", payload=BROADCAST_LOST_CLIENTS_PAYLOAD)],
+            [MaxButton(text="😔 Потерянные клиенты", payload=LOST_CLIENTS_OPEN_PAYLOAD)],
             [MaxButton(text="📊 Эффективность", payload=BROADCAST_EFFECTIVENESS_PAYLOAD)],
             [MaxButton(text="📜 История уведомлений", payload=BROADCAST_HISTORY_PAYLOAD)],
             [MaxButton(text="🧪 Тест уведомлений", payload=BROADCAST_TESTS_PAYLOAD)],

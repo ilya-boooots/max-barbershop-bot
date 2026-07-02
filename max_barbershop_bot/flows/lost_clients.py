@@ -86,23 +86,12 @@ async def handle_lost_clients_broadcast(context: RouterContext) -> None:
         if result is None:
             return
 
-    recipients = lost_clients_to_broadcast_recipients(result.clients)
     await _answer_callback(context)
-    if not recipients:
-        await context.send_text(LOST_CLIENTS_ZERO_RECIPIENTS_TEXT, keyboard=lost_clients_result_keyboard(can_broadcast=False))
-        return
-
-    if result.total > len(recipients):
-        await context.send_text(
-            f"{LOST_CLIENTS_BROADCAST_LIMIT_TEXT}\n\nДоступно получателей: {len(recipients)} из {result.total}",
-            keyboard=lost_clients_result_keyboard(can_broadcast=True),
-        )
-
     await open_segment_broadcast_text(
         context,
-        audience_key="lost_clients",
-        audience_label="😔 Потерянные клиенты",
-        recipients=recipients,
+        audience_key="lost_30",
+        audience_label=f"😔 Потерянные клиенты · YClients: {result.total}",
+        recipients=[],
         return_screen=state.LOST_CLIENTS_SCREEN,
     )
 
@@ -112,8 +101,10 @@ async def handle_lost_clients_back(context: RouterContext) -> None:
 
     await _answer_callback(context)
     _clear_lost_clients_state(context)
-    state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENTS_MENU_SCREEN)
-    await context.send_text("🎯 Сегменты клиентов\n\nВыберите сегмент:", keyboard=client_segments_menu_keyboard())
+    state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_MENU_SCREEN)
+    from max_barbershop_bot.ui.buttons import broadcast_menu_keyboard
+    from max_barbershop_bot.ui.texts import BROADCAST_MENU_TEXT
+    await context.send_text(BROADCAST_MENU_TEXT, keyboard=broadcast_menu_keyboard())
 
 
 async def handle_lost_clients_home(context: RouterContext) -> None:
