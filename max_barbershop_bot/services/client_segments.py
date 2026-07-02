@@ -11,7 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
-from max_barbershop_bot.integrations.yclients.endpoints import list_bookings_by_date_range, list_clients
+from max_barbershop_bot.integrations.yclients.endpoints import get_service_categories, get_services, get_staff, list_bookings_by_date_range, list_clients
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettings, YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE
@@ -38,6 +38,13 @@ class ClientSegmentType(StrEnum):
     ACTIVE_30 = "active_30"
     ACTIVE_90 = "active_90"
     LOST = "lost"
+    LOST_30 = "lost_30"
+    LOST_60 = "lost_60"
+    LOST_90 = "lost_90"
+    CANCELLED = "cancelled"
+    BY_MASTER = "by_master"
+    BY_SERVICE = "by_service"
+    BIRTHDAY_SOON = "birthday_soon"
     NO_FUTURE_BOOKINGS = "no_future_bookings"
 
 
@@ -84,9 +91,11 @@ class ClientSegmentsOverview:
     """YClients-based counts for the broadcast segments menu."""
 
     all_count: int
-    active_7_count: int
     active_30_count: int
-    active_90_count: int
+    lost_30_count: int = 0
+    lost_60_count: int = 0
+    lost_90_count: int = 0
+    no_future_booking_count: int = 0
     branch_timezone: str = DEFAULT_BRANCH_TIMEZONE
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
@@ -94,18 +103,32 @@ class ClientSegmentsOverview:
 SEGMENT_TITLES = {
     ClientSegmentType.ALL_CLIENTS: "👥 Все клиенты",
     ClientSegmentType.ACTIVE_7: "🔥 Активные 7 дней",
-    ClientSegmentType.ACTIVE_30: "📆 Активные 30 дней",
+    ClientSegmentType.ACTIVE_30: "🔥 Активные за 30 дней",
     ClientSegmentType.ACTIVE_90: "🗓 Активные 90 дней",
     ClientSegmentType.LOST: "😔 Потерянные клиенты",
+    ClientSegmentType.LOST_30: "😴 Не были 30 дней",
+    ClientSegmentType.LOST_60: "😴 Не были 60 дней",
+    ClientSegmentType.LOST_90: "😴 Не были 90 дней",
+    ClientSegmentType.CANCELLED: "❌ Отменили запись",
+    ClientSegmentType.BY_MASTER: "💈 По мастеру",
+    ClientSegmentType.BY_SERVICE: "✂️ По услуге",
+    ClientSegmentType.BIRTHDAY_SOON: "🎂 День рождения скоро",
     ClientSegmentType.NO_FUTURE_BOOKINGS: "📅 Без будущей записи",
 }
 
 SEGMENT_DESCRIPTIONS = {
     ClientSegmentType.ALL_CLIENTS: "Все клиенты, которых бот может идентифицировать и которым потенциально можно отправлять уведомления.",
     ClientSegmentType.ACTIVE_7: "Клиенты, которые были активны за последние 7 дней.",
-    ClientSegmentType.ACTIVE_30: "Клиенты, которые были активны за последние 30 дней.",
+    ClientSegmentType.ACTIVE_30: "Клиенты с любой реальной неотменённой активностью за последние 30 дней.",
     ClientSegmentType.ACTIVE_90: "Клиенты, которые были активны за последние 90 дней.",
     ClientSegmentType.LOST: "Клиенты с последним визитом 30+ дней назад и без будущей записи.",
+    ClientSegmentType.LOST_30: "Клиенты, которые не были 30 дней и не имеют будущей записи.",
+    ClientSegmentType.LOST_60: "Клиенты, которые не были 60 дней и не имеют будущей записи.",
+    ClientSegmentType.LOST_90: "Клиенты, которые не были 90 дней и не имеют будущей записи.",
+    ClientSegmentType.CANCELLED: "Клиенты с отменённой записью в истории YClients.",
+    ClientSegmentType.BY_MASTER: "Выбор клиентов по мастеру из истории YClients.",
+    ClientSegmentType.BY_SERVICE: "Выбор клиентов по услуге из истории YClients.",
+    ClientSegmentType.BIRTHDAY_SOON: "Клиенты, у которых скоро день рождения.",
     ClientSegmentType.NO_FUTURE_BOOKINGS: "Клиенты, у которых сейчас нет будущей записи.",
 }
 
@@ -150,14 +173,12 @@ class ClientSegmentService:
             **active_diagnostics,
         }
         logger.info(
-            "MAX client segments diagnostic: segment=overview yclients_clients_count=%s raw_records_count=%s records_with_client_identity_count=%s records_with_datetime_count=%s records_with_created_at_count=%s skipped_cancelled_count=%s skipped_deleted_count=%s skipped_no_identity_count=%s skipped_no_date_count=%s active_7_count=%s active_30_count=%s active_90_count=%s branch_timezone=%s date_range_from=%s date_range_to=%s sample_record_statuses=%s sample_date_fields_present=%s duration_ms=%s",
+            "MAX broadcast parity diagnostic: segment=overview yclients_clients_count=%s raw_records_count=%s records_with_client_identity_count=%s records_with_datetime_count=%s records_with_created_at_count=%s skipped_cancelled_count=%s skipped_deleted_count=%s skipped_no_identity_count=%s skipped_no_date_count=%s active_7_count=%s active_30_count=%s active_90_count=%s branch_timezone=%s date_range_from=%s date_range_to=%s sample_record_statuses=%s sample_date_fields_present=%s duration_ms=%s",
             diagnostics["yclients_clients_count"], diagnostics["raw_records_count"], diagnostics["records_with_client_identity_count"], diagnostics["records_with_datetime_count"], diagnostics["records_with_created_at_count"], diagnostics["skipped_cancelled_count"], diagnostics["skipped_deleted_count"], diagnostics["skipped_no_identity_count"], diagnostics["skipped_no_date_count"], diagnostics["active_7_count"], diagnostics["active_30_count"], diagnostics["active_90_count"], diagnostics["branch_timezone"], diagnostics["date_range_from"], diagnostics["date_range_to"], diagnostics["sample_record_statuses"], diagnostics["sample_date_fields_present"], diagnostics["duration_ms"],
         )
         return ClientSegmentsOverview(
             all_count=len(client_members),
-            active_7_count=len(active_members[7]),
             active_30_count=len(active_members[30]),
-            active_90_count=len(active_members[90]),
             branch_timezone=settings.branch_timezone,
             diagnostics=diagnostics,
         )
@@ -223,7 +244,9 @@ class ClientSegmentService:
         logger.info("client_segment_loaded segment_type=%s segment_count=%s records_count=%s", segment_type.value, result.count, len(records))
         return result
 
-    async def get_lost_clients(self) -> ClientSegmentResult:
+    async def get_lost_clients(self, days: int = LOST_CLIENTS_DAYS) -> ClientSegmentResult:
+        if days not in {30, 60, 90}:
+            days = LOST_CLIENTS_DAYS
         settings = self._require_settings()
         tz = _zoneinfo(settings.branch_timezone)
         now_local = datetime.now(tz)
@@ -236,7 +259,7 @@ class ClientSegmentService:
             raise ClientSegmentsLoadError("segment_yclients_error") from exc
 
         now_utc = now_local.astimezone(timezone.utc)
-        threshold = now_local - timedelta(days=LOST_CLIENTS_DAYS)
+        threshold = now_local - timedelta(days=days)
         accumulators: dict[str, _MemberAccumulator] = {}
         for record in records:
             identity = _record_client_identity(record)
@@ -251,7 +274,7 @@ class ClientSegmentService:
                 accumulator.add_visit(event_dt)
 
         lost = [item for item in accumulators.values() if item.last_visit_at and not item.future_booking_at and _parse_datetime(item.last_visit_at).astimezone(tz) <= threshold]
-        result = self._build_result(ClientSegmentType.LOST, lost, settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "records_count": len(records), "lost_days": LOST_CLIENTS_DAYS})
+        result = self._build_result(ClientSegmentType(f"lost_{days}"), lost, settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "records_count": len(records), "lost_days": days})
         logger.info("client_segment_loaded segment_type=%s segment_count=%s records_count=%s", ClientSegmentType.LOST.value, result.count, len(records))
         return result
 
@@ -292,6 +315,131 @@ class ClientSegmentService:
         result = self._build_result(ClientSegmentType.NO_FUTURE_BOOKINGS, without_future, settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "clients_count": len(all_clients), "records_count": len(records), "excluded_future_booking_count": len(future_keys)})
         logger.info("client_segment_loaded segment_type=%s segment_count=%s clients_count=%s records_count=%s", ClientSegmentType.NO_FUTURE_BOOKINGS.value, result.count, len(all_clients), len(records))
         return result
+
+    async def get_cancelled_clients(self, days: int = 30) -> ClientSegmentResult:
+        settings = self._require_settings()
+        tz = _zoneinfo(settings.branch_timezone)
+        now_local = datetime.now(tz)
+        date_from = (now_local - timedelta(days=days)).date().isoformat()
+        date_to = now_local.date().isoformat()
+        started = time.perf_counter()
+        try:
+            records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
+        except YClientsError as exc:
+            logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", ClientSegmentType.CANCELLED.value, type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_yclients_error") from exc
+        members: dict[str, _MemberAccumulator] = {}
+        for record in records:
+            if _record_is_deleted(record) or not _record_is_cancelled(record):
+                continue
+            identity = _record_client_identity(record)
+            key = _business_client_key(identity)
+            if not key:
+                continue
+            accumulator = members.setdefault(key, _MemberAccumulator.from_identity(identity))
+            accumulator.add_visit(_record_datetime_utc(record) or _record_created_at_utc(record))
+        return self._build_result(
+            ClientSegmentType.CANCELLED,
+            members.values(),
+            settings.branch_timezone,
+            {"date_from": date_from, "date_to": date_to, "records_count": len(records), "duration_ms": int((time.perf_counter() - started) * 1000)},
+        )
+
+    async def list_masters(self) -> list[dict[str, str]]:
+        settings = self._require_settings()
+        try:
+            async with _build_client(settings) as client:
+                payload = await get_staff(client, company_id=str(settings.company_id))
+        except YClientsError as exc:
+            logger.warning("client_segment_yclients_error segment_type=by_master_picker error_class=%s", type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_yclients_error") from exc
+        items: list[dict[str, str]] = []
+        for row in _extract_rows(payload):
+            if _truthy(row.get("is_deleted") or row.get("deleted") or row.get("is_fired")):
+                continue
+            item_id = _normalize_id(row.get("id") or row.get("staff_id"))
+            if not item_id:
+                continue
+            items.append({"id": item_id, "title": _normalize_id(row.get("name") or row.get("fullname") or row.get("title")) or f"Мастер {item_id}"})
+        return items
+
+    async def list_service_categories(self) -> list[dict[str, str]]:
+        settings = self._require_settings()
+        try:
+            async with _build_client(settings) as client:
+                payload = await get_service_categories(client, company_id=str(settings.company_id))
+                rows = _extract_rows(payload)
+                if not rows:
+                    services_payload = await get_services(client, company_id=str(settings.company_id))
+                    rows = _service_categories_from_services(_extract_rows(services_payload))
+        except YClientsError as exc:
+            logger.warning("client_segment_yclients_error segment_type=by_service_picker error_class=%s", type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_yclients_error") from exc
+        items: list[dict[str, str]] = []
+        for row in rows:
+            item_id = _normalize_id(row.get("id") or row.get("category_id"))
+            if not item_id:
+                continue
+            items.append({"id": item_id, "title": _normalize_id(row.get("title") or row.get("name")) or f"Категория {item_id}"})
+        return list({item["id"]: item for item in items}.values())
+
+    async def get_clients_by_master(self, master_id: str) -> ClientSegmentResult:
+        return await self._get_clients_by_record_filter(ClientSegmentType.BY_MASTER, lambda record: _record_master_id(record) == str(master_id).strip(), {"master_id": str(master_id).strip()})
+
+    async def get_clients_by_service_category(self, category_id: str) -> ClientSegmentResult:
+        cid = str(category_id).strip()
+        return await self._get_clients_by_record_filter(ClientSegmentType.BY_SERVICE, lambda record: cid in _record_service_category_ids(record), {"category_id": cid})
+
+    async def get_birthday_soon_clients(self, window_days: int = 14) -> ClientSegmentResult:
+        settings = self._require_settings()
+        tz = _zoneinfo(settings.branch_timezone)
+        today = datetime.now(tz).date()
+        end = today + timedelta(days=window_days)
+        try:
+            client_rows = await self._fetch_clients(settings)
+        except YClientsError as exc:
+            logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", ClientSegmentType.BIRTHDAY_SOON.value, type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_yclients_error") from exc
+        members: dict[str, _MemberAccumulator] = {}
+        for row in client_rows:
+            if _client_is_deleted_or_archived(row):
+                continue
+            bday = _parse_birthday(row.get("birth_date") or row.get("birthday") or row.get("birthdate"))
+            if bday is None or not _is_birthday_soon(bday, today, end):
+                continue
+            identity = _client_identity(row)
+            key = _business_client_key(identity)
+            if key:
+                members[key] = _MemberAccumulator.from_identity(identity)
+        return self._build_result(ClientSegmentType.BIRTHDAY_SOON, members.values(), settings.branch_timezone, {"clients_count": len(client_rows), "date_from": today.isoformat(), "date_to": end.isoformat()})
+
+    async def _get_clients_by_record_filter(self, segment_type: ClientSegmentType, predicate, extra: dict[str, Any]) -> ClientSegmentResult:
+        settings = self._require_settings()
+        tz = _zoneinfo(settings.branch_timezone)
+        now_local = datetime.now(tz)
+        date_from = (now_local - timedelta(days=LOOKBACK_DAYS)).date().isoformat()
+        date_to = (now_local + timedelta(days=FUTURE_LOOKAHEAD_DAYS)).date().isoformat()
+        started = time.perf_counter()
+        try:
+            records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
+        except YClientsError as exc:
+            logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", segment_type.value, type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_yclients_error") from exc
+        members: dict[str, _MemberAccumulator] = {}
+        for record in records:
+            if _record_is_deleted(record) or _record_is_cancelled(record) or not predicate(record):
+                continue
+            identity = _record_client_identity(record)
+            key = _business_client_key(identity)
+            if not key:
+                continue
+            accumulator = members.setdefault(key, _MemberAccumulator.from_identity(identity))
+            event_dt = _record_datetime_utc(record)
+            if event_dt and event_dt > now_local.astimezone(timezone.utc):
+                accumulator.add_future_booking(event_dt)
+            else:
+                accumulator.add_visit(event_dt)
+        return self._build_result(segment_type, members.values(), settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "records_count": len(records), "duration_ms": int((time.perf_counter() - started) * 1000), **extra})
 
     def _require_settings(self) -> YClientsSettings:
         settings = load_active_yclients_settings(self._settings_repository, operation="get_client_segments")
@@ -590,10 +738,9 @@ def _plain_segment_title(title: str) -> str:
 def format_segments_overview(overview: ClientSegmentsOverview) -> str:
     return (
         "🎯 Сегменты клиентов\n\n"
+        "Бот автоматически распределяет клиентов по группам на основе визитов, записей и данных из YClients.\n\n"
         f"👥 Все клиенты: {overview.all_count}\n"
-        f"🔥 Активные 7 дней: {overview.active_7_count}\n"
-        f"📆 Активные 30 дней: {overview.active_30_count}\n"
-        f"🗓 Активные 90 дней: {overview.active_90_count}"
+        f"🔥 Активные за 30 дней: {overview.active_30_count}"
     )
 
 def _dedupe_client_rows(rows: list[dict[str, Any]]) -> dict[str, _MemberAccumulator]:
@@ -652,6 +799,73 @@ def _active_keys_by_window(records: list[dict[str, Any]], now_local: datetime, *
         if not matched:
             diagnostics["skipped_no_date_count"] += 1
     return windows, diagnostics
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "да"} or value is True
+
+
+def _record_master_id(record: dict[str, Any]) -> str:
+    staff = record.get("staff") if isinstance(record.get("staff"), dict) else {}
+    return _normalize_id(record.get("staff_id") or record.get("master_id") or staff.get("id"))
+
+
+def _record_service_category_ids(record: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    service = record.get("service") if isinstance(record.get("service"), dict) else {}
+    for value in (record.get("service_category_id"), record.get("category_id"), service.get("category_id"), service.get("category")):
+        if isinstance(value, dict):
+            value = value.get("id")
+        clean = _normalize_id(value)
+        if clean:
+            ids.add(clean)
+    services = record.get("services") if isinstance(record.get("services"), list) else []
+    for item in services:
+        if not isinstance(item, dict):
+            continue
+        for value in (item.get("category_id"), item.get("category")):
+            if isinstance(value, dict):
+                value = value.get("id")
+            clean = _normalize_id(value)
+            if clean:
+                ids.add(clean)
+    return ids
+
+
+def _service_categories_from_services(services: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    categories: dict[str, dict[str, Any]] = {}
+    for service in services:
+        raw = service.get("category") if isinstance(service.get("category"), dict) else {}
+        cid = _normalize_id(service.get("category_id") or raw.get("id"))
+        if cid:
+            categories[cid] = {"id": cid, "title": _normalize_id(raw.get("title") or raw.get("name") or service.get("category_title")) or f"Категория {cid}"}
+    return list(categories.values())
+
+
+def _parse_birthday(raw: Any):
+    text = _normalize_id(raw)
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m", "%m-%d"):
+        try:
+            parsed = datetime.strptime(text[:10] if fmt == "%Y-%m-%d" else text, fmt).date()
+            return parsed
+        except Exception:
+            continue
+    return None
+
+
+def _is_birthday_soon(parsed, today, end) -> bool:
+    try:
+        next_birthday = parsed.replace(year=today.year)
+    except ValueError:
+        next_birthday = parsed.replace(year=today.year, day=28)
+    if next_birthday < today:
+        try:
+            next_birthday = parsed.replace(year=today.year + 1)
+        except ValueError:
+            next_birthday = parsed.replace(year=today.year + 1, day=28)
+    return today <= next_birthday <= end
 
 def _client_is_deleted_or_archived(row: dict[str, Any]) -> bool:
     return bool(row.get("deleted") or row.get("is_deleted") or row.get("is_archive") or row.get("is_archived") or row.get("archive"))
