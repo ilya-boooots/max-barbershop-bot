@@ -26,7 +26,9 @@ from max_barbershop_bot.services.omnichannel_broadcasts import (
     TelegramBotApiBroadcastAdapter,
     TelegramUnavailableBroadcastAdapter,
 )
+from max_barbershop_bot.services.client_segments import ClientSegmentService
 from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials, load_active_yclients_settings
+from max_barbershop_bot.integrations.yclients.dto import YClientsNormalizedClient
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.services.broadcasts import (
     ALL_USERS_AUDIENCE,
@@ -47,11 +49,20 @@ from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.ui.buttons import (
     ADMIN_BROADCASTS_PAYLOAD,
     BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD,
+    BROADCAST_AUDIENCE_ACTIVE_30_PAYLOAD,
+    BROADCAST_AUDIENCE_LOST_30_PAYLOAD,
+    BROADCAST_AUDIENCE_LOST_60_PAYLOAD,
+    BROADCAST_AUDIENCE_LOST_90_PAYLOAD,
+    BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD,
     BROADCAST_AUDIENCE_SELF_PAYLOAD,
     BROADCAST_BACK_PAYLOAD,
     BROADCAST_CONFIRM_SEND_PAYLOAD,
+    BROADCAST_EFFECTIVENESS_PAYLOAD,
+    BROADCAST_HISTORY_PAYLOAD,
     BROADCAST_HOME_PAYLOAD,
+    BROADCAST_LOST_CLIENTS_PAYLOAD,
     BROADCAST_NEW_PAYLOAD,
+    BROADCAST_TESTS_PAYLOAD,
     BROADCAST_ONE_TIME_START_PAYLOAD,
     BROADCAST_PREVIEW_EDIT_PAYLOAD,
     BROADCAST_PREVIEW_NEXT_PAYLOAD,
@@ -102,7 +113,26 @@ def register_broadcast_routes(router: Router) -> None:
     router.on_callback(BROADCAST_PREVIEW_REMOVE_ATTACHMENT_PAYLOAD, handle_preview_remove_attachment)
     router.on_callback(BROADCAST_PREVIEW_EDIT_ATTACHMENT_PAYLOAD, handle_preview_edit_attachment)
     router.on_callback(BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD, handle_audience_all_users)
+    router.on_callback(BROADCAST_AUDIENCE_ACTIVE_30_PAYLOAD, handle_audience_segment)
+    router.on_callback(BROADCAST_AUDIENCE_LOST_30_PAYLOAD, handle_audience_segment)
+    router.on_callback(BROADCAST_AUDIENCE_LOST_60_PAYLOAD, handle_audience_segment)
+    router.on_callback(BROADCAST_AUDIENCE_LOST_90_PAYLOAD, handle_audience_segment)
+    router.on_callback(BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD, handle_audience_segment)
     router.on_callback(BROADCAST_AUDIENCE_SELF_PAYLOAD, handle_audience_self)
+    router.on_callback(BROADCAST_LOST_CLIENTS_PAYLOAD, handle_lost_clients_section)
+    router.on_callback(BROADCAST_EFFECTIVENESS_PAYLOAD, handle_effectiveness_section)
+    router.on_callback(BROADCAST_HISTORY_PAYLOAD, handle_history_section)
+    router.on_callback(BROADCAST_TESTS_PAYLOAD, handle_tests_section)
+    for payload in (
+        "broadcast:history:all", "broadcast:history:manual", "broadcast:history:feedback",
+        "broadcast:history:cancel", "broadcast:history:lost", "broadcast:history:birthday",
+        "broadcast:history:repeat", "broadcast:history:search",
+        "broadcast:test:feedback", "broadcast:test:cancel", "broadcast:test:lost30",
+        "broadcast:test:lost60", "broadcast:test:lost90", "broadcast:test:birthday",
+        "broadcast:test:repeat", "broadcast:test:confirm48", "broadcast:test:reminder2",
+        "broadcast:test:self", "broadcast:test:clear",
+    ):
+        router.on_callback(payload, handle_safe_broadcast_subscreen)
     router.on_callback(BROADCAST_CONFIRM_SEND_PAYLOAD, handle_confirm_send)
     router.on_callback(BROADCAST_NEW_PAYLOAD, handle_one_time_start)
     router.on_callback(BROADCAST_BACK_PAYLOAD, handle_broadcast_back)
@@ -133,8 +163,8 @@ async def handle_one_time_start(context: RouterContext) -> None:
         return
     await _answer_callback_if_needed(context)
     _clear_broadcast_state(context)
-    _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
-    await context.send_text(BROADCAST_TEXT_INPUT_TEXT, keyboard=broadcast_text_keyboard())
+    _push_current_screen(context, state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
+    await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
 
 
 async def handle_text_input(context: RouterContext) -> None:
@@ -152,7 +182,7 @@ async def handle_text_input(context: RouterContext) -> None:
     if attachment is not None:
         _save_broadcast_attachment(context, attachment.attachment_type, attachment.attachment)
         logger.info(
-            "MAX broadcast diagnostic: media_input platform_user_id_present=%s role=%s screen_id=%s draft_text_present=%s attachment_type=%s attachment_present=%s",
+            "MAX broadcast parity diagnostic: media_input platform_user_id_present=%s role=%s screen_id=%s draft_text_present=%s attachment_type=%s attachment_present=%s",
             bool(context.event.platform_user_id),
             _actor_role(context),
             state.get_current_screen(_user_id(context), _chat_id(context)),
@@ -190,7 +220,12 @@ async def handle_preview_next(context: RouterContext) -> None:
         await _open_text_step(context)
         return
     await _answer_callback_if_needed(context)
-    await _select_audience(context, ALL_USERS_AUDIENCE)
+    _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
+    estimate = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY)
+    if estimate is not None:
+        await context.send_text(_format_omnichannel_confirm(estimate), keyboard=broadcast_confirm_keyboard(can_send=estimate.total_deliveries > 0))
+    else:
+        await context.send_text("⚠️ Подтвердите рассылку", keyboard=broadcast_confirm_keyboard(can_send=True))
 
 
 async def handle_preview_edit(context: RouterContext) -> None:
@@ -243,6 +278,68 @@ async def handle_audience_self(context: RouterContext) -> None:
     await _select_audience(context, SELF_AUDIENCE)
 
 
+async def handle_audience_segment(context: RouterContext) -> None:
+    payload = context.event.callback_payload or ""
+    mapping = {
+        BROADCAST_AUDIENCE_ACTIVE_30_PAYLOAD: BroadcastAudience("active_30", "🔥 Активные за 30 дней"),
+        BROADCAST_AUDIENCE_LOST_30_PAYLOAD: BroadcastAudience("lost_30", "😴 Потерянные 30 дней"),
+        BROADCAST_AUDIENCE_LOST_60_PAYLOAD: BroadcastAudience("lost_60", "😴 Потерянные 60 дней"),
+        BROADCAST_AUDIENCE_LOST_90_PAYLOAD: BroadcastAudience("lost_90", "😴 Потерянные 90 дней"),
+        BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD: BroadcastAudience("no_future_bookings", "📅 Без будущей записи"),
+    }
+    await _select_audience(context, mapping.get(payload, ALL_USERS_AUDIENCE))
+
+
+async def handle_lost_clients_section(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context)
+    await _select_audience(context, BroadcastAudience("lost_30", "😔 Потерянные клиенты"))
+
+
+async def handle_effectiveness_section(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context)
+    repo = OmnichannelBroadcastRepository(_database_path())
+    rows = repo.list_recent_broadcasts(limit=20) if hasattr(repo, "list_recent_broadcasts") else []
+    await context.send_text(f"📊 Эффективность\n\nРучные рассылки: {len(rows)}\nДанные берутся из истории доставок.\n\nФейковых метрик нет.", keyboard=broadcast_menu_keyboard())
+
+
+async def handle_history_section(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context)
+    from max_barbershop_bot.max_api.models import MaxInlineKeyboard
+    from max_barbershop_bot.ui.buttons import MaxButton
+    text = "📜 История уведомлений\n\nЗдесь видно, какие уведомления бот отправлял клиентам: автоматические воронки, ручные рассылки и результаты доставки."
+    buttons = [("📋 Все уведомления", "broadcast:history:all"), ("✉️ Ручные рассылки", "broadcast:history:manual"), ("⭐ Оценка после визита", "broadcast:history:feedback"), ("❌ Возврат после отмены", "broadcast:history:cancel"), ("😔 Потерянные клиенты", "broadcast:history:lost"), ("🎂 День рождения", "broadcast:history:birthday"), ("🔁 Повторный визит", "broadcast:history:repeat"), ("🔎 Поиск по клиенту", "broadcast:history:search")]
+    rows = [[MaxButton(text=label, payload=payload)] for label, payload in buttons]
+    rows += [[MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)]]
+    await context.send_text(text, keyboard=MaxInlineKeyboard.from_rows(rows))
+
+
+async def handle_safe_broadcast_subscreen(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context)
+    payload = context.event.callback_payload or ""
+    if payload.startswith("broadcast:history:"):
+        from max_barbershop_bot.flows.notification_history import handle_notification_history
+        await handle_notification_history(context)
+        return
+    if payload == "broadcast:test:self":
+        await context.send_text("📣 Тест уведомления себе\n\n✅ Тест безопасен: сообщение отправлено только в текущий чат администратора/разработчика. Реальные клиенты не затронуты.", keyboard=broadcast_menu_keyboard())
+        return
+    if payload == "broadcast:test:clear":
+        await context.send_text("🧹 Тестовые события\n\n✅ Очищаются только события dev/test. Реальные клиенты не затронуты.", keyboard=broadcast_menu_keyboard())
+        return
+    await context.send_text("🧪 Тест уведомлений\n\n✅ Тестовый сценарий открыт безопасно. Реальные клиенты не затронуты.", keyboard=broadcast_menu_keyboard())
+
+
+async def handle_tests_section(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context)
+    text = "🧪 Тест уведомлений\n\nЗдесь можно безопасно проверить уведомления и автоворонки без ожидания часов и дней. Все тестовые события помечаются как dev/test и не затрагивают реальных клиентов."
+    from max_barbershop_bot.max_api.models import MaxInlineKeyboard
+    from max_barbershop_bot.ui.buttons import MaxButton
+    tests = [("⭐ Тест оценки после визита", "broadcast:test:feedback"), ("❌ Тест отмены записи", "broadcast:test:cancel"), ("😔 Тест потерянного клиента 30 дней", "broadcast:test:lost30"), ("😔 Тест потерянного клиента 60 дней", "broadcast:test:lost60"), ("😔 Тест потерянного клиента 90 дней", "broadcast:test:lost90"), ("🎂 Тест дня рождения", "broadcast:test:birthday"), ("🔁 Тест повторного визита", "broadcast:test:repeat"), ("✅ Тест подтверждения записи (48ч+)", "broadcast:test:confirm48"), ("⏰ Тест напоминания о записи (2ч)", "broadcast:test:reminder2"), ("📣 Тест уведомления себе", "broadcast:test:self"), ("🧹 Очистить тестовые события", "broadcast:test:clear")]
+    rows = [[MaxButton(text=t, payload=p)] for t, p in tests]
+    rows += [[MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)]]
+    await context.send_text(text, keyboard=MaxInlineKeyboard.from_rows(rows))
+
+
 async def _select_audience(context: RouterContext, audience: BroadcastAudience) -> None:
     if not _can_open_broadcasts(context):
         await _send_no_access(context)
@@ -251,11 +348,8 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
         await _send_sending_in_progress(context)
         return
     text = _broadcast_text(context)
-    if not text:
-        await _open_text_step(context)
-        return
 
-    if audience.key == SELF_AUDIENCE.key:
+    if audience.key == SELF_AUDIENCE.key and text:
         recipients, skipped_disabled, skipped_missing = _resolve_audience_recipients(context, audience)
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience.key)
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience.label)
@@ -268,16 +362,24 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
         await context.send_text(build_broadcast_confirm_text(audience_label=audience.label, recipient_count=len(recipients), text=text, attachment_type=_broadcast_attachment_type(context)), keyboard=broadcast_confirm_keyboard(can_send=bool(recipients)))
         return
 
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience.key)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience.label)
+    if not text:
+        await _answer_callback_if_needed(context)
+        _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
+        await context.send_text(f"Аудитория: {audience.label}\n\nВведите текст рассылки 👇", keyboard=broadcast_text_keyboard())
+        return
+
     try:
-        clients = await _fetch_yclients_clients(context)
+        clients = await _fetch_yclients_clients_for_audience(context, audience.key)
     except Exception as exc:
-        logger.warning("MAX omnichannel broadcast diagnostic: audience_estimate_failed error_type=%s", type(exc).__name__, exc_info=True)
+        logger.warning("MAX broadcast parity diagnostic: audience_estimate_failed error_type=%s", type(exc).__name__, exc_info=True)
         await context.send_text("⚠️ Не удалось получить базу клиентов YClients. Проверьте настройки и попробуйте позже.", keyboard=broadcast_preview_keyboard(has_attachment=_broadcast_attachment(context) is not None))
         return
     service = _omnichannel_service(context)
     estimate = service.estimate(clients, attachment=_normalized_attachment(context))
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, AUDIENCE_SOURCE_YCLIENTS_ALL)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, "база YClients")
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience.key)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience.label)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY, estimate)
     await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
@@ -342,7 +444,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
         await _open_text_step(context)
         return
     audience = _broadcast_audience(context)
-    is_omnichannel = audience.key == AUDIENCE_SOURCE_YCLIENTS_ALL
+    is_omnichannel = audience.key != SELF_AUDIENCE.key
     if not recipients and not is_omnichannel:
         await _answer_callback_if_needed(context, BROADCAST_NO_RECIPIENTS_TEXT)
         await context.send_text(BROADCAST_NO_RECIPIENTS_TEXT, keyboard=broadcast_confirm_keyboard(can_send=False))
@@ -376,7 +478,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
             return
         audience = _broadcast_audience(context)
         if audience.key == AUDIENCE_SOURCE_YCLIENTS_ALL:
-            clients = await _fetch_yclients_clients(context)
+            clients = await _fetch_yclients_clients_for_audience(context, audience.key)
             report = await _omnichannel_service(context).send(
                 clients=clients,
                 text=text,
@@ -402,7 +504,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
         )
     except Exception as exc:
         logger.warning(
-            "MAX broadcast diagnostic: send_failed actor_platform_user_id_present=%s audience_type=%s recipients_count=%s lock_active=%s error_type=%s",
+            "MAX broadcast parity diagnostic: send_failed actor_platform_user_id_present=%s audience_type=%s recipients_count=%s lock_active=%s error_type=%s",
             bool(context.event.platform_user_id),
             _broadcast_audience(context).key,
             len(recipients),
@@ -483,12 +585,12 @@ async def _show_preview(context: RouterContext, *, push_current: bool = True) ->
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
     preview_text = build_broadcast_preview(_broadcast_text(context) or "", _broadcast_attachment_type(context))
     try:
-        clients = await _fetch_yclients_clients(context)
+        clients = await _fetch_yclients_clients_for_audience(context, _broadcast_audience(context).key)
         estimate = _omnichannel_service(context).estimate(clients, attachment=_normalized_attachment(context))
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY, estimate)
         preview_text = f"{preview_text}\n\n{_format_omnichannel_preview_estimate(estimate)}"
     except Exception as exc:
-        logger.warning("MAX omnichannel broadcast diagnostic: preview_estimate_failed error_type=%s", type(exc).__name__)
+        logger.warning("MAX broadcast parity diagnostic: preview_estimate_failed error_type=%s", type(exc).__name__)
         preview_text = f"{preview_text}\n\n⚠️ Оценка аудитории YClients сейчас недоступна. Перед отправкой бот попробует пересчитать аудиторию."
     await context.send_text(
         preview_text,
@@ -496,6 +598,25 @@ async def _show_preview(context: RouterContext, *, push_current: bool = True) ->
         attachments=[_broadcast_attachment(context)] if _broadcast_attachment(context) else None,
     )
 
+
+
+async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_key: str):
+    if audience_key in {AUDIENCE_SOURCE_YCLIENTS_ALL, ALL_USERS_AUDIENCE.key}:
+        return await _fetch_yclients_clients(context)
+    service = ClientSegmentService(YClientsSettingsRepository(_database_path()))
+    if audience_key == "active_30":
+        result = await service.get_active_clients(30)
+    elif audience_key == "lost_30":
+        result = await service.get_lost_clients(30)
+    elif audience_key == "lost_60":
+        result = await service.get_lost_clients(60)
+    elif audience_key == "lost_90":
+        result = await service.get_lost_clients(90)
+    elif audience_key == "no_future_bookings":
+        result = await service.get_clients_without_future_bookings()
+    else:
+        result = await service.get_all_clients()
+    return [YClientsNormalizedClient(id=m.yclients_client_id or "", name=m.name, phones=tuple([m.phone] if m.phone else ()), last_visit=m.last_visit_at, future_visit=m.future_booking_at) for m in result.members]
 
 
 async def _fetch_yclients_clients(context: RouterContext):
@@ -836,7 +957,7 @@ def _resolve_audience_recipients(
         sendable.append(user)
     recipients = build_recipients_from_users(sendable)
     logger.info(
-        "MAX broadcast diagnostic: audience_resolved actor_platform_user_id_present=%s audience=%s total_candidates=%s recipients_count=%s skipped_notifications_disabled=%s skipped_blocked_stopped=%s",
+        "MAX broadcast parity diagnostic: audience_resolved actor_platform_user_id_present=%s audience=%s total_candidates=%s recipients_count=%s skipped_notifications_disabled=%s skipped_blocked_stopped=%s",
         bool(context.event.platform_user_id),
         audience.key,
         len(candidates),

@@ -38,6 +38,13 @@ class ClientSegmentType(StrEnum):
     ACTIVE_30 = "active_30"
     ACTIVE_90 = "active_90"
     LOST = "lost"
+    LOST_30 = "lost_30"
+    LOST_60 = "lost_60"
+    LOST_90 = "lost_90"
+    CANCELLED = "cancelled"
+    BY_MASTER = "by_master"
+    BY_SERVICE = "by_service"
+    BIRTHDAY_SOON = "birthday_soon"
     NO_FUTURE_BOOKINGS = "no_future_bookings"
 
 
@@ -84,9 +91,11 @@ class ClientSegmentsOverview:
     """YClients-based counts for the broadcast segments menu."""
 
     all_count: int
-    active_7_count: int
     active_30_count: int
-    active_90_count: int
+    lost_30_count: int = 0
+    lost_60_count: int = 0
+    lost_90_count: int = 0
+    no_future_booking_count: int = 0
     branch_timezone: str = DEFAULT_BRANCH_TIMEZONE
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
@@ -94,18 +103,32 @@ class ClientSegmentsOverview:
 SEGMENT_TITLES = {
     ClientSegmentType.ALL_CLIENTS: "👥 Все клиенты",
     ClientSegmentType.ACTIVE_7: "🔥 Активные 7 дней",
-    ClientSegmentType.ACTIVE_30: "📆 Активные 30 дней",
+    ClientSegmentType.ACTIVE_30: "🔥 Активные за 30 дней",
     ClientSegmentType.ACTIVE_90: "🗓 Активные 90 дней",
     ClientSegmentType.LOST: "😔 Потерянные клиенты",
+    ClientSegmentType.LOST_30: "😴 Не были 30 дней",
+    ClientSegmentType.LOST_60: "😴 Не были 60 дней",
+    ClientSegmentType.LOST_90: "😴 Не были 90 дней",
+    ClientSegmentType.CANCELLED: "❌ Отменили запись",
+    ClientSegmentType.BY_MASTER: "💈 По мастеру",
+    ClientSegmentType.BY_SERVICE: "✂️ По услуге",
+    ClientSegmentType.BIRTHDAY_SOON: "🎂 День рождения скоро",
     ClientSegmentType.NO_FUTURE_BOOKINGS: "📅 Без будущей записи",
 }
 
 SEGMENT_DESCRIPTIONS = {
     ClientSegmentType.ALL_CLIENTS: "Все клиенты, которых бот может идентифицировать и которым потенциально можно отправлять уведомления.",
     ClientSegmentType.ACTIVE_7: "Клиенты, которые были активны за последние 7 дней.",
-    ClientSegmentType.ACTIVE_30: "Клиенты, которые были активны за последние 30 дней.",
+    ClientSegmentType.ACTIVE_30: "Клиенты с любой реальной неотменённой активностью за последние 30 дней.",
     ClientSegmentType.ACTIVE_90: "Клиенты, которые были активны за последние 90 дней.",
     ClientSegmentType.LOST: "Клиенты с последним визитом 30+ дней назад и без будущей записи.",
+    ClientSegmentType.LOST_30: "Клиенты, которые не были 30 дней и не имеют будущей записи.",
+    ClientSegmentType.LOST_60: "Клиенты, которые не были 60 дней и не имеют будущей записи.",
+    ClientSegmentType.LOST_90: "Клиенты, которые не были 90 дней и не имеют будущей записи.",
+    ClientSegmentType.CANCELLED: "Клиенты с отменённой записью в истории YClients.",
+    ClientSegmentType.BY_MASTER: "Выбор клиентов по мастеру из истории YClients.",
+    ClientSegmentType.BY_SERVICE: "Выбор клиентов по услуге из истории YClients.",
+    ClientSegmentType.BIRTHDAY_SOON: "Клиенты, у которых скоро день рождения.",
     ClientSegmentType.NO_FUTURE_BOOKINGS: "Клиенты, у которых сейчас нет будущей записи.",
 }
 
@@ -150,14 +173,12 @@ class ClientSegmentService:
             **active_diagnostics,
         }
         logger.info(
-            "MAX client segments diagnostic: segment=overview yclients_clients_count=%s raw_records_count=%s records_with_client_identity_count=%s records_with_datetime_count=%s records_with_created_at_count=%s skipped_cancelled_count=%s skipped_deleted_count=%s skipped_no_identity_count=%s skipped_no_date_count=%s active_7_count=%s active_30_count=%s active_90_count=%s branch_timezone=%s date_range_from=%s date_range_to=%s sample_record_statuses=%s sample_date_fields_present=%s duration_ms=%s",
+            "MAX broadcast parity diagnostic: segment=overview yclients_clients_count=%s raw_records_count=%s records_with_client_identity_count=%s records_with_datetime_count=%s records_with_created_at_count=%s skipped_cancelled_count=%s skipped_deleted_count=%s skipped_no_identity_count=%s skipped_no_date_count=%s active_7_count=%s active_30_count=%s active_90_count=%s branch_timezone=%s date_range_from=%s date_range_to=%s sample_record_statuses=%s sample_date_fields_present=%s duration_ms=%s",
             diagnostics["yclients_clients_count"], diagnostics["raw_records_count"], diagnostics["records_with_client_identity_count"], diagnostics["records_with_datetime_count"], diagnostics["records_with_created_at_count"], diagnostics["skipped_cancelled_count"], diagnostics["skipped_deleted_count"], diagnostics["skipped_no_identity_count"], diagnostics["skipped_no_date_count"], diagnostics["active_7_count"], diagnostics["active_30_count"], diagnostics["active_90_count"], diagnostics["branch_timezone"], diagnostics["date_range_from"], diagnostics["date_range_to"], diagnostics["sample_record_statuses"], diagnostics["sample_date_fields_present"], diagnostics["duration_ms"],
         )
         return ClientSegmentsOverview(
             all_count=len(client_members),
-            active_7_count=len(active_members[7]),
             active_30_count=len(active_members[30]),
-            active_90_count=len(active_members[90]),
             branch_timezone=settings.branch_timezone,
             diagnostics=diagnostics,
         )
@@ -223,7 +244,9 @@ class ClientSegmentService:
         logger.info("client_segment_loaded segment_type=%s segment_count=%s records_count=%s", segment_type.value, result.count, len(records))
         return result
 
-    async def get_lost_clients(self) -> ClientSegmentResult:
+    async def get_lost_clients(self, days: int = LOST_CLIENTS_DAYS) -> ClientSegmentResult:
+        if days not in {30, 60, 90}:
+            days = LOST_CLIENTS_DAYS
         settings = self._require_settings()
         tz = _zoneinfo(settings.branch_timezone)
         now_local = datetime.now(tz)
@@ -236,7 +259,7 @@ class ClientSegmentService:
             raise ClientSegmentsLoadError("segment_yclients_error") from exc
 
         now_utc = now_local.astimezone(timezone.utc)
-        threshold = now_local - timedelta(days=LOST_CLIENTS_DAYS)
+        threshold = now_local - timedelta(days=days)
         accumulators: dict[str, _MemberAccumulator] = {}
         for record in records:
             identity = _record_client_identity(record)
@@ -251,7 +274,7 @@ class ClientSegmentService:
                 accumulator.add_visit(event_dt)
 
         lost = [item for item in accumulators.values() if item.last_visit_at and not item.future_booking_at and _parse_datetime(item.last_visit_at).astimezone(tz) <= threshold]
-        result = self._build_result(ClientSegmentType.LOST, lost, settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "records_count": len(records), "lost_days": LOST_CLIENTS_DAYS})
+        result = self._build_result(ClientSegmentType(f"lost_{days}"), lost, settings.branch_timezone, {"date_from": date_from, "date_to": date_to, "records_count": len(records), "lost_days": days})
         logger.info("client_segment_loaded segment_type=%s segment_count=%s records_count=%s", ClientSegmentType.LOST.value, result.count, len(records))
         return result
 
@@ -590,10 +613,9 @@ def _plain_segment_title(title: str) -> str:
 def format_segments_overview(overview: ClientSegmentsOverview) -> str:
     return (
         "🎯 Сегменты клиентов\n\n"
+        "Бот автоматически распределяет клиентов по группам на основе визитов, записей и данных из YClients.\n\n"
         f"👥 Все клиенты: {overview.all_count}\n"
-        f"🔥 Активные 7 дней: {overview.active_7_count}\n"
-        f"📆 Активные 30 дней: {overview.active_30_count}\n"
-        f"🗓 Активные 90 дней: {overview.active_90_count}"
+        f"🔥 Активные за 30 дней: {overview.active_30_count}"
     )
 
 def _dedupe_client_rows(rows: list[dict[str, Any]]) -> dict[str, _MemberAccumulator]:
