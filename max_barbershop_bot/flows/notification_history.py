@@ -59,7 +59,6 @@ _TYPE_LABELS = {
     "repeat_visit": "🔁 Повторный визит",
     "booking_confirmation_immediate": "✅ Подтверждение записи",
     "booking_confirmation_2d": "✅ Подтверждение записи (2 дня)",
-    "booking_reminder_48h": "⏰ Напоминание за 48 часов",
     "booking_reminder_6h": "⏰ Напоминание за 6 часов",
     "booking_reminder_2h": "⏰ Напоминание о записи (2 часа)",
 }
