@@ -101,6 +101,42 @@ class OmnichannelBroadcastRepository:
             )
             connection.commit()
 
+
+    def list_recent_broadcasts(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent manual omnichannel broadcasts for admin history/effectiveness."""
+
+        safe_limit = max(1, min(int(limit), 100))
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT b.*,
+                       SUM(CASE WHEN d.delivery_status = 'sent' THEN 1 ELSE 0 END) AS sent_count,
+                       SUM(CASE WHEN d.delivery_status LIKE 'skipped%' THEN 1 ELSE 0 END) AS skipped_count,
+                       SUM(CASE WHEN d.delivery_status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                       COUNT(d.id) AS delivery_count
+                FROM omnichannel_broadcasts b
+                LEFT JOIN omnichannel_broadcast_delivery d ON d.broadcast_id = b.broadcast_id
+                GROUP BY b.broadcast_id
+                ORDER BY COALESCE(b.finished_at, b.started_at, b.updated_at, b.created_at) DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [{key: row[key] for key in row.keys()} for row in rows]
+
+    def count_delivery_statuses(self) -> dict[str, int]:
+        """Return delivery status counters for broadcast effectiveness."""
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT delivery_status, COUNT(*) AS count
+                FROM omnichannel_broadcast_delivery
+                GROUP BY delivery_status
+                """
+            ).fetchall()
+        return {str(row['delivery_status']): int(row['count'] or 0) for row in rows}
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path)
         connection.execute("PRAGMA foreign_keys = ON")
