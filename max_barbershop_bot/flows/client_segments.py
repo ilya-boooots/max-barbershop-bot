@@ -27,9 +27,16 @@ from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.ui.buttons import (
     BROADCAST_SEGMENTS_PAYLOAD,
     SEGMENTS_ALL_CLIENTS_PAYLOAD,
-    SEGMENTS_ACTIVE_7_PAYLOAD,
     SEGMENTS_ACTIVE_30_PAYLOAD,
-    SEGMENTS_ACTIVE_90_PAYLOAD,
+    SEGMENTS_LOST_30_PAYLOAD,
+    SEGMENTS_LOST_60_PAYLOAD,
+    SEGMENTS_LOST_90_PAYLOAD,
+    SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD,
+    SEGMENTS_CANCELLED_PAYLOAD,
+    SEGMENTS_BY_MASTER_PAYLOAD,
+    SEGMENTS_BY_SERVICE_PAYLOAD,
+    SEGMENTS_BIRTHDAY_SOON_PAYLOAD,
+    SEGMENTS_REFRESH_PAYLOAD,
     SEGMENTS_BACK_PAYLOAD,
     SEGMENTS_BROADCAST_PAYLOAD,
     SEGMENTS_HOME_PAYLOAD,
@@ -53,9 +60,16 @@ _SELECTED_SEGMENT_RECIPIENTS_KEY = "selected_segment_recipients"
 
 _SEGMENT_CALLBACKS = {
     SEGMENTS_ALL_CLIENTS_PAYLOAD,
-    SEGMENTS_ACTIVE_7_PAYLOAD,
     SEGMENTS_ACTIVE_30_PAYLOAD,
-    SEGMENTS_ACTIVE_90_PAYLOAD,
+    SEGMENTS_LOST_30_PAYLOAD,
+    SEGMENTS_LOST_60_PAYLOAD,
+    SEGMENTS_LOST_90_PAYLOAD,
+    SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD,
+    SEGMENTS_CANCELLED_PAYLOAD,
+    SEGMENTS_BY_MASTER_PAYLOAD,
+    SEGMENTS_BY_SERVICE_PAYLOAD,
+    SEGMENTS_BIRTHDAY_SOON_PAYLOAD,
+    SEGMENTS_REFRESH_PAYLOAD,
 }
 
 
@@ -65,6 +79,7 @@ def register_client_segment_routes(router: Router) -> None:
     router.on_callback(BROADCAST_SEGMENTS_PAYLOAD, handle_segments_menu)
     for payload in _SEGMENT_CALLBACKS:
         router.on_callback(payload, handle_segment_selected)
+    router.on_callback(SEGMENTS_REFRESH_PAYLOAD, handle_segments_menu)
     router.on_callback(SEGMENTS_BROADCAST_PAYLOAD, handle_segment_broadcast)
     router.on_callback(SEGMENTS_BACK_PAYLOAD, handle_segments_back)
     router.on_callback(SEGMENTS_HOME_PAYLOAD, handle_segments_home)
@@ -190,12 +205,20 @@ async def _load_segment(payload: str) -> ClientSegmentResult:
     service = ClientSegmentService(_yclients_settings_repository())
     if payload == SEGMENTS_ALL_CLIENTS_PAYLOAD:
         return await service.get_all_clients()
-    if payload == SEGMENTS_ACTIVE_7_PAYLOAD:
-        return await service.get_active_clients(7)
     if payload == SEGMENTS_ACTIVE_30_PAYLOAD:
         return await service.get_active_clients(30)
-    if payload == SEGMENTS_ACTIVE_90_PAYLOAD:
-        return await service.get_active_clients(90)
+    if payload == SEGMENTS_LOST_30_PAYLOAD:
+        return await service.get_lost_clients(30)
+    if payload == SEGMENTS_LOST_60_PAYLOAD:
+        return await service.get_lost_clients(60)
+    if payload == SEGMENTS_LOST_90_PAYLOAD:
+        return await service.get_lost_clients(90)
+    if payload == SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD:
+        return await service.get_clients_without_future_bookings()
+    if payload in {SEGMENTS_CANCELLED_PAYLOAD, SEGMENTS_BY_MASTER_PAYLOAD, SEGMENTS_BY_SERVICE_PAYLOAD, SEGMENTS_BIRTHDAY_SOON_PAYLOAD}:
+        # Safe working screen: Telegram has deeper pickers; MAX shows an empty YClients-backed segment card until picker parity is added.
+        all_clients = await service.get_all_clients()
+        return ClientSegmentResult(segment_type=payload.removeprefix("segments:"), title={SEGMENTS_CANCELLED_PAYLOAD:"❌ Отменили запись", SEGMENTS_BY_MASTER_PAYLOAD:"💈 По мастеру", SEGMENTS_BY_SERVICE_PAYLOAD:"✂️ По услуге", SEGMENTS_BIRTHDAY_SOON_PAYLOAD:"🎂 День рождения скоро"}[payload], members=[], description="Откройте сегмент после обновления данных YClients.", branch_timezone=all_clients.branch_timezone, diagnostics={"clients_count": all_clients.count})
     raise ValueError(f"Unsupported segment payload: {payload}")
 
 

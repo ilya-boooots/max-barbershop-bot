@@ -136,6 +136,23 @@ BROADCAST_NEW_PAYLOAD = "broadcast:new"
 BROADCAST_BACK_PAYLOAD = "broadcast:back"
 BROADCAST_HOME_PAYLOAD = "broadcast:home"
 
+BROADCAST_LOST_CLIENTS_PAYLOAD = "broadcast:lost_clients"
+BROADCAST_EFFECTIVENESS_PAYLOAD = "broadcast:effectiveness"
+BROADCAST_HISTORY_PAYLOAD = "broadcast:history"
+BROADCAST_TESTS_PAYLOAD = "broadcast:tests"
+BROADCAST_AUDIENCE_ACTIVE_30_PAYLOAD = "broadcast:aud:active_30"
+BROADCAST_AUDIENCE_LOST_30_PAYLOAD = "broadcast:aud:lost_30"
+BROADCAST_AUDIENCE_LOST_60_PAYLOAD = "broadcast:aud:lost_60"
+BROADCAST_AUDIENCE_LOST_90_PAYLOAD = "broadcast:aud:lost_90"
+BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD = "broadcast:aud:no_future"
+SEGMENTS_LOST_30_PAYLOAD = "segments:lost:30"
+SEGMENTS_LOST_60_PAYLOAD = "segments:lost:60"
+SEGMENTS_LOST_90_PAYLOAD = "segments:lost:90"
+SEGMENTS_CANCELLED_PAYLOAD = "segments:cancelled"
+SEGMENTS_BY_MASTER_PAYLOAD = "segments:by_master"
+SEGMENTS_BY_SERVICE_PAYLOAD = "segments:by_service"
+SEGMENTS_BIRTHDAY_SOON_PAYLOAD = "segments:birthday_soon"
+
 NAV_BACK_PAYLOAD = "nav:back"
 NAV_HOME_PAYLOAD = "nav:home"
 
@@ -712,6 +729,10 @@ def broadcast_menu_keyboard() -> MaxInlineKeyboard:
         [
             [MaxButton(text="✉️ Разовая рассылка", payload=BROADCAST_ONE_TIME_START_PAYLOAD)],
             [MaxButton(text="🎯 Сегменты клиентов", payload=BROADCAST_SEGMENTS_PAYLOAD)],
+            [MaxButton(text="😔 Потерянные клиенты", payload=BROADCAST_LOST_CLIENTS_PAYLOAD)],
+            [MaxButton(text="📊 Эффективность", payload=BROADCAST_EFFECTIVENESS_PAYLOAD)],
+            [MaxButton(text="📜 История уведомлений", payload=BROADCAST_HISTORY_PAYLOAD)],
+            [MaxButton(text="🧪 Тест уведомлений", payload=BROADCAST_TESTS_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
         ]
@@ -724,9 +745,16 @@ def client_segments_menu_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(
         [
             [MaxButton(text="👥 Все клиенты", payload=SEGMENTS_ALL_CLIENTS_PAYLOAD)],
-            [MaxButton(text="🔥 Активные 7 дней", payload=SEGMENTS_ACTIVE_7_PAYLOAD)],
-            [MaxButton(text="📆 Активные 30 дней", payload=SEGMENTS_ACTIVE_30_PAYLOAD)],
-            [MaxButton(text="🗓 Активные 90 дней", payload=SEGMENTS_ACTIVE_90_PAYLOAD)],
+            [MaxButton(text="🔥 Активные за 30 дней", payload=SEGMENTS_ACTIVE_30_PAYLOAD)],
+            [MaxButton(text="😴 Не были 30 дней", payload=SEGMENTS_LOST_30_PAYLOAD)],
+            [MaxButton(text="😴 Не были 60 дней", payload=SEGMENTS_LOST_60_PAYLOAD)],
+            [MaxButton(text="😴 Не были 90 дней", payload=SEGMENTS_LOST_90_PAYLOAD)],
+            [MaxButton(text="📅 Без будущей записи", payload=SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD)],
+            [MaxButton(text="❌ Отменили запись", payload=SEGMENTS_CANCELLED_PAYLOAD)],
+            [MaxButton(text="💈 По мастеру", payload=SEGMENTS_BY_MASTER_PAYLOAD)],
+            [MaxButton(text="✂️ По услуге", payload=SEGMENTS_BY_SERVICE_PAYLOAD)],
+            [MaxButton(text="🎂 День рождения скоро", payload=SEGMENTS_BIRTHDAY_SOON_PAYLOAD)],
+            [MaxButton(text="🔄 Обновить сегменты", payload=SEGMENTS_REFRESH_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
         ]
@@ -800,6 +828,11 @@ def broadcast_audience_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(
         [
             [MaxButton(text="👥 Все клиенты", payload=BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD)],
+            [MaxButton(text="🔥 Активные за 30 дней", payload=BROADCAST_AUDIENCE_ACTIVE_30_PAYLOAD)],
+            [MaxButton(text="😴 Потерянные 30 дней", payload=BROADCAST_AUDIENCE_LOST_30_PAYLOAD)],
+            [MaxButton(text="😴 Потерянные 60 дней", payload=BROADCAST_AUDIENCE_LOST_60_PAYLOAD)],
+            [MaxButton(text="😴 Потерянные 90 дней", payload=BROADCAST_AUDIENCE_LOST_90_PAYLOAD)],
+            [MaxButton(text="📅 Без будущей записи", payload=BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD)],
             [MaxButton(text="🧪 Отправить себе", payload=BROADCAST_AUDIENCE_SELF_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
@@ -812,7 +845,7 @@ def broadcast_confirm_keyboard(*, can_send: bool = True) -> MaxInlineKeyboard:
 
     rows: list[list[MaxButton]] = []
     if can_send:
-        rows.append([MaxButton(text="✅ Отправить", payload=BROADCAST_CONFIRM_SEND_PAYLOAD)])
+        rows.append([MaxButton(text="🚀 Отправить", payload=BROADCAST_CONFIRM_SEND_PAYLOAD)])
     rows.extend(
         [
             [MaxButton(text="✏️ Изменить текст", payload=BROADCAST_PREVIEW_EDIT_PAYLOAD)],
