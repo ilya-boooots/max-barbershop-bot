@@ -54,6 +54,8 @@ from max_barbershop_bot.ui.buttons import (
     BROADCAST_AUDIENCE_LOST_60_PAYLOAD,
     BROADCAST_AUDIENCE_LOST_90_PAYLOAD,
     BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD,
+    BROADCAST_AUDIENCE_CANCELLED_PAYLOAD,
+    BROADCAST_AUDIENCE_BIRTHDAY_PAYLOAD,
     BROADCAST_AUDIENCE_SELF_PAYLOAD,
     BROADCAST_BACK_PAYLOAD,
     BROADCAST_CONFIRM_SEND_PAYLOAD,
@@ -63,6 +65,8 @@ from max_barbershop_bot.ui.buttons import (
     BROADCAST_LOST_CLIENTS_PAYLOAD,
     BROADCAST_NEW_PAYLOAD,
     BROADCAST_TESTS_PAYLOAD,
+    SEGMENTS_BY_MASTER_PREFIX,
+    SEGMENTS_BY_SERVICE_PREFIX,
     BROADCAST_ONE_TIME_START_PAYLOAD,
     BROADCAST_PREVIEW_EDIT_PAYLOAD,
     BROADCAST_PREVIEW_NEXT_PAYLOAD,
@@ -118,6 +122,8 @@ def register_broadcast_routes(router: Router) -> None:
     router.on_callback(BROADCAST_AUDIENCE_LOST_60_PAYLOAD, handle_audience_segment)
     router.on_callback(BROADCAST_AUDIENCE_LOST_90_PAYLOAD, handle_audience_segment)
     router.on_callback(BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD, handle_audience_segment)
+    router.on_callback(BROADCAST_AUDIENCE_CANCELLED_PAYLOAD, handle_audience_segment)
+    router.on_callback(BROADCAST_AUDIENCE_BIRTHDAY_PAYLOAD, handle_audience_segment)
     router.on_callback(BROADCAST_AUDIENCE_SELF_PAYLOAD, handle_audience_self)
     router.on_callback(BROADCAST_LOST_CLIENTS_PAYLOAD, handle_lost_clients_section)
     router.on_callback(BROADCAST_EFFECTIVENESS_PAYLOAD, handle_effectiveness_section)
@@ -200,6 +206,9 @@ async def handle_text_input(context: RouterContext) -> None:
         return
 
     _save_broadcast_text(context, validation.text)
+    if _broadcast_audience(context).key == SELF_AUDIENCE.key:
+        await _select_audience(context, SELF_AUDIENCE)
+        return
     if _broadcast_recipients(context):
         await show_segment_broadcast_confirm(context)
         return
@@ -286,6 +295,8 @@ async def handle_audience_segment(context: RouterContext) -> None:
         BROADCAST_AUDIENCE_LOST_60_PAYLOAD: BroadcastAudience("lost_60", "😴 Потерянные 60 дней"),
         BROADCAST_AUDIENCE_LOST_90_PAYLOAD: BroadcastAudience("lost_90", "😴 Потерянные 90 дней"),
         BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD: BroadcastAudience("no_future_bookings", "📅 Без будущей записи"),
+        BROADCAST_AUDIENCE_CANCELLED_PAYLOAD: BroadcastAudience("cancelled_30", "❌ Отменили запись"),
+        BROADCAST_AUDIENCE_BIRTHDAY_PAYLOAD: BroadcastAudience("birthday_soon", "🎂 День рождения скоро"),
     }
     await _select_audience(context, mapping.get(payload, ALL_USERS_AUDIENCE))
 
@@ -298,8 +309,20 @@ async def handle_lost_clients_section(context: RouterContext) -> None:
 async def handle_effectiveness_section(context: RouterContext) -> None:
     await _answer_callback_if_needed(context)
     repo = OmnichannelBroadcastRepository(_database_path())
-    rows = repo.list_recent_broadcasts(limit=20) if hasattr(repo, "list_recent_broadcasts") else []
-    await context.send_text(f"📊 Эффективность\n\nРучные рассылки: {len(rows)}\nДанные берутся из истории доставок.\n\nФейковых метрик нет.", keyboard=broadcast_menu_keyboard())
+    rows = repo.list_recent_broadcasts(limit=20)
+    statuses = repo.count_delivery_statuses()
+    sent = statuses.get("sent", 0)
+    failed = statuses.get("failed", 0)
+    skipped = sum(count for status, count in statuses.items() if status.startswith("skipped"))
+    text = (
+        "📊 Эффективность\n\n"
+        f"Ручные рассылки: {len(rows)}\n"
+        f"✅ Отправлено: {sent}\n"
+        f"❌ Ошибок: {failed}\n"
+        f"⏭ Пропущено: {skipped}\n\n"
+        "Данные берутся из истории доставок. Фейковых метрик нет."
+    )
+    await context.send_text(text, keyboard=broadcast_menu_keyboard())
 
 
 async def handle_history_section(context: RouterContext) -> None:
@@ -403,8 +426,9 @@ async def open_segment_broadcast_text(
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENTS_KEY, recipients)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY, return_screen)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
+    recipient_line = f"Получателей в MAX: {len(recipients)}\n" if recipients else "Аудитория будет рассчитана по YClients и omnichannel-доставке перед отправкой.\n"
     await context.send_text(
-        f"📣 Рассылка по сегменту\n\nАудитория: {audience_label}\nПолучателей в MAX: {len(recipients)}\n\nВведите текст рассылки 👇",
+        f"📣 Рассылка по сегменту\n\nАудитория: {audience_label}\n{recipient_line}\nВведите текст рассылки 👇",
         keyboard=broadcast_text_keyboard(),
     )
 
@@ -614,6 +638,14 @@ async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_
         result = await service.get_lost_clients(90)
     elif audience_key == "no_future_bookings":
         result = await service.get_clients_without_future_bookings()
+    elif audience_key == "cancelled_30":
+        result = await service.get_cancelled_clients(30)
+    elif audience_key == "birthday_soon":
+        result = await service.get_birthday_soon_clients()
+    elif audience_key.startswith("by_master:"):
+        result = await service.get_clients_by_master(audience_key.split(":", 1)[1])
+    elif audience_key.startswith("by_service:"):
+        result = await service.get_clients_by_service_category(audience_key.split(":", 1)[1])
     else:
         result = await service.get_all_clients()
     return [YClientsNormalizedClient(id=m.yclients_client_id or "", name=m.name, phones=tuple([m.phone] if m.phone else ()), last_visit=m.last_visit_at, future_visit=m.future_booking_at) for m in result.members]

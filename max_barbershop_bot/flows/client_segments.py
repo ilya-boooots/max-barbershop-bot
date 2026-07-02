@@ -34,7 +34,9 @@ from max_barbershop_bot.ui.buttons import (
     SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD,
     SEGMENTS_CANCELLED_PAYLOAD,
     SEGMENTS_BY_MASTER_PAYLOAD,
+    SEGMENTS_BY_MASTER_PREFIX,
     SEGMENTS_BY_SERVICE_PAYLOAD,
+    SEGMENTS_BY_SERVICE_PREFIX,
     SEGMENTS_BIRTHDAY_SOON_PAYLOAD,
     SEGMENTS_REFRESH_PAYLOAD,
     SEGMENTS_BACK_PAYLOAD,
@@ -67,7 +69,9 @@ _SEGMENT_CALLBACKS = {
     SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD,
     SEGMENTS_CANCELLED_PAYLOAD,
     SEGMENTS_BY_MASTER_PAYLOAD,
+    SEGMENTS_BY_MASTER_PREFIX,
     SEGMENTS_BY_SERVICE_PAYLOAD,
+    SEGMENTS_BY_SERVICE_PREFIX,
     SEGMENTS_BIRTHDAY_SOON_PAYLOAD,
     SEGMENTS_REFRESH_PAYLOAD,
 }
@@ -80,6 +84,8 @@ def register_client_segment_routes(router: Router) -> None:
     for payload in _SEGMENT_CALLBACKS:
         router.on_callback(payload, handle_segment_selected)
     router.on_callback(SEGMENTS_REFRESH_PAYLOAD, handle_segments_menu)
+    router.on_callback_prefix(SEGMENTS_BY_MASTER_PREFIX, handle_segment_selected)
+    router.on_callback_prefix(SEGMENTS_BY_SERVICE_PREFIX, handle_segment_selected)
     router.on_callback(SEGMENTS_BROADCAST_PAYLOAD, handle_segment_broadcast)
     router.on_callback(SEGMENTS_BACK_PAYLOAD, handle_segments_back)
     router.on_callback(SEGMENTS_HOME_PAYLOAD, handle_segments_home)
@@ -104,7 +110,13 @@ async def handle_segment_selected(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     payload = context.event.callback_payload
-    if payload not in _SEGMENT_CALLBACKS:
+    if payload == SEGMENTS_BY_MASTER_PAYLOAD:
+        await _show_master_picker(context)
+        return
+    if payload == SEGMENTS_BY_SERVICE_PAYLOAD:
+        await _show_service_picker(context)
+        return
+    if not payload or (payload not in _SEGMENT_CALLBACKS and not payload.startswith((SEGMENTS_BY_MASTER_PREFIX, SEGMENTS_BY_SERVICE_PREFIX))):
         return
     await _show_segment(context, payload)
 
@@ -128,11 +140,13 @@ async def handle_segment_broadcast(context: RouterContext) -> None:
         )
         if not recipients:
             return
+    payload = state.get_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SEGMENT_PAYLOAD_KEY) or result.segment_type
+    audience_key = _audience_key_from_segment_payload(str(payload), result.segment_type)
     await open_segment_broadcast_text(
         context,
-        audience_key=f"segment:{result.segment_type}",
+        audience_key=audience_key,
         audience_label=f"{result.title} · YClients: {result.count}",
-        recipients=recipients,
+        recipients=[],
     )
 
 
@@ -168,6 +182,34 @@ async def _show_segments_overview(context: RouterContext) -> None:
         await context.send_text(CLIENT_SEGMENTS_LOAD_ERROR_TEXT, keyboard=client_segments_menu_keyboard())
         return
     await context.send_text(format_segments_overview(overview), keyboard=client_segments_menu_keyboard())
+
+async def _show_master_picker(context: RouterContext) -> None:
+    await _answer_callback(context)
+    try:
+        masters = await ClientSegmentService(_yclients_settings_repository()).list_masters()
+    except (ClientSegmentsNotConfiguredError, ClientSegmentsLoadError):
+        await context.send_text(CLIENT_SEGMENTS_LOAD_ERROR_TEXT, keyboard=client_segments_menu_keyboard())
+        return
+    from max_barbershop_bot.max_api.models import MaxInlineKeyboard
+    from max_barbershop_bot.ui.buttons import MaxButton
+    rows = [[MaxButton(text=item["title"][:80], payload=f"{SEGMENTS_BY_MASTER_PREFIX}{item['id']}")] for item in masters[:30]]
+    rows += [[MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)]]
+    await context.send_text("💈 Выберите мастера", keyboard=MaxInlineKeyboard.from_rows(rows))
+
+
+async def _show_service_picker(context: RouterContext) -> None:
+    await _answer_callback(context)
+    try:
+        categories = await ClientSegmentService(_yclients_settings_repository()).list_service_categories()
+    except (ClientSegmentsNotConfiguredError, ClientSegmentsLoadError):
+        await context.send_text(CLIENT_SEGMENTS_LOAD_ERROR_TEXT, keyboard=client_segments_menu_keyboard())
+        return
+    from max_barbershop_bot.max_api.models import MaxInlineKeyboard
+    from max_barbershop_bot.ui.buttons import MaxButton
+    rows = [[MaxButton(text=item["title"][:80], payload=f"{SEGMENTS_BY_SERVICE_PREFIX}{item['id']}")] for item in categories[:30]]
+    rows += [[MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)]]
+    await context.send_text("✂️ Выберите категорию услуг", keyboard=MaxInlineKeyboard.from_rows(rows))
+
 
 async def _show_segment(context: RouterContext, payload: str, *, notification: str | None = None) -> None:
     await _answer_callback(context, notification)
@@ -215,12 +257,34 @@ async def _load_segment(payload: str) -> ClientSegmentResult:
         return await service.get_lost_clients(90)
     if payload == SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD:
         return await service.get_clients_without_future_bookings()
-    if payload in {SEGMENTS_CANCELLED_PAYLOAD, SEGMENTS_BY_MASTER_PAYLOAD, SEGMENTS_BY_SERVICE_PAYLOAD, SEGMENTS_BIRTHDAY_SOON_PAYLOAD}:
-        # Safe working screen: Telegram has deeper pickers; MAX shows an empty YClients-backed segment card until picker parity is added.
-        all_clients = await service.get_all_clients()
-        return ClientSegmentResult(segment_type=payload.removeprefix("segments:"), title={SEGMENTS_CANCELLED_PAYLOAD:"❌ Отменили запись", SEGMENTS_BY_MASTER_PAYLOAD:"💈 По мастеру", SEGMENTS_BY_SERVICE_PAYLOAD:"✂️ По услуге", SEGMENTS_BIRTHDAY_SOON_PAYLOAD:"🎂 День рождения скоро"}[payload], members=[], description="Откройте сегмент после обновления данных YClients.", branch_timezone=all_clients.branch_timezone, diagnostics={"clients_count": all_clients.count})
+    if payload == SEGMENTS_CANCELLED_PAYLOAD:
+        return await service.get_cancelled_clients(30)
+    if payload == SEGMENTS_BIRTHDAY_SOON_PAYLOAD:
+        return await service.get_birthday_soon_clients()
+    if payload.startswith(SEGMENTS_BY_MASTER_PREFIX):
+        return await service.get_clients_by_master(payload.removeprefix(SEGMENTS_BY_MASTER_PREFIX))
+    if payload.startswith(SEGMENTS_BY_SERVICE_PREFIX):
+        return await service.get_clients_by_service_category(payload.removeprefix(SEGMENTS_BY_SERVICE_PREFIX))
     raise ValueError(f"Unsupported segment payload: {payload}")
 
+
+
+def _audience_key_from_segment_payload(payload: str, segment_type: str) -> str:
+    if payload.startswith(SEGMENTS_BY_MASTER_PREFIX):
+        return "by_master:" + payload.removeprefix(SEGMENTS_BY_MASTER_PREFIX)
+    if payload.startswith(SEGMENTS_BY_SERVICE_PREFIX):
+        return "by_service:" + payload.removeprefix(SEGMENTS_BY_SERVICE_PREFIX)
+    mapping = {
+        "all_clients": "yclients_all_clients",
+        "active_30": "active_30",
+        "lost_30": "lost_30",
+        "lost_60": "lost_60",
+        "lost_90": "lost_90",
+        "no_future_bookings": "no_future_bookings",
+        "cancelled": "cancelled_30",
+        "birthday_soon": "birthday_soon",
+    }
+    return mapping.get(segment_type, segment_type)
 
 def _map_members_to_recipients(members: list[ClientSegmentMember]) -> list[BroadcastRecipient]:
     users = _users_repository().list_broadcast_recipients(platform=PLATFORM_MAX, notifications_enabled=True)
