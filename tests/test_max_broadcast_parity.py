@@ -78,3 +78,12 @@ def test_lost_clients_main_button_opens_section_not_text_prompt():
     lost_buttons = [button for row in keyboard.rows for button in row if button.text == "😔 Потерянные клиенты"]
     assert lost_buttons
     assert lost_buttons[0].payload == LOST_CLIENTS_OPEN_PAYLOAD
+
+
+def test_confirm_send_uses_omnichannel_for_all_non_self_audiences():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+
+    source = inspect.getsource(broadcasts.handle_confirm_send)
+    assert "if is_omnichannel:" in source
+    assert "if audience.key == AUDIENCE_SOURCE_YCLIENTS_ALL" not in source

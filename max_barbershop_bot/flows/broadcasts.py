@@ -501,7 +501,8 @@ async def handle_confirm_send(context: RouterContext) -> None:
             release_action_lock(_BROADCAST_SEND_LOCK_KEY)
             return
         audience = _broadcast_audience(context)
-        if audience.key == AUDIENCE_SOURCE_YCLIENTS_ALL:
+        is_omnichannel = audience.key != SELF_AUDIENCE.key
+        if is_omnichannel:
             clients = await _fetch_yclients_clients_for_audience(context, audience.key)
             report = await _omnichannel_service(context).send(
                 clients=clients,
