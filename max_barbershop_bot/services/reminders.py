@@ -11,7 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
-from max_barbershop_bot.max_api.models import MaxInlineKeyboard
+from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
@@ -45,7 +45,7 @@ REMINDER_OFFSETS = {
 }
 _NOTIFICATION_TYPE_LABELS = {
     BOOKING_CONFIRMATION_IMMEDIATE: "подтверждение записи",
-    BOOKING_REMINDER_48H: "напоминание за 48 часов",
+    BOOKING_REMINDER_48H: "подтверждение записи за 2 дня",
     BOOKING_REMINDER_6H: "напоминание за 6 часов",
     BOOKING_REMINDER_2H: "напоминание за 2 часа",
 }
@@ -265,7 +265,7 @@ async def get_due_reminders(
     """Find due reminders from local attribution and verify each record in YClients."""
 
     if not AppSettingsRepository(database_path).notifications_enabled():
-        _log_reminder_diagnostic(notification_type="all", skipped_reason="notifications_disabled", company_timezone=timezone_name)
+        _log_reminder_diagnostic(reminder_type=BOOKING_REMINDER_48H, loop_enabled=False, skipped_notifications_disabled_count=1)
         return []
 
     settings = load_active_yclients_settings(
@@ -279,9 +279,22 @@ async def get_due_reminders(
     branch_timezone_name = normalize_branch_timezone(timezone_name or settings.branch_timezone, flow="reminders", operation="get_due_reminders")
     branch_timezone = _zoneinfo(branch_timezone_name)
     now_local = _ensure_timezone(now or datetime.now(UTC), branch_timezone)
+    loop_started_at = datetime.now(UTC)
+    window_start = now_local
+    window_end = now_local + timedelta(hours=48)
+    yclients_records_checked = 0
+    due_candidates_count = 0
+    skipped_cancelled_count = 0
+    skipped_deleted_count = 0
+    skipped_past_count = 0
+    skipped_duplicate_count = 0
+    skipped_no_platform_mapping_count = 0
+    skipped_notifications_disabled_count = 0
+    skipped_blocked_count = 0
     due: list[DueReminder] = []
     attributions = PlatformAttributionRepository(database_path).list_with_yclients_record_ids(limit=limit)
     if not attributions:
+        _log_reminder_diagnostic(reminder_type=BOOKING_REMINDER_48H, loop_enabled=True, loop_interval_seconds=None, branch_timezone=branch_timezone_name, now_branch_time=now_local.isoformat(), due_window_start=window_start.isoformat(), due_window_end=window_end.isoformat(), yclients_records_checked=0, due_candidates_count=0, skipped_cancelled_count=0, skipped_deleted_count=0, skipped_past_count=0, skipped_duplicate_count=0, skipped_no_platform_mapping_count=0, skipped_notifications_disabled_count=0, skipped_blocked_count=0, sent_count=0, failed_count=0, duration_ms=0)
         return due
 
     async with build_yclients_client_from_active_settings(settings) as client:
@@ -290,17 +303,14 @@ async def get_due_reminders(
             if not attribution.yclients_record_id:
                 continue
             user = UsersRepository(database_path).find_by_platform_user_id(attribution.platform_user_id, platform=attribution.platform)
+            if user is None:
+                skipped_no_platform_mapping_count += 1
+            if user is not None and not user.notifications_enabled:
+                skipped_notifications_disabled_count += 1
             if user is None or not user.notifications_enabled:
-                _log_reminder_diagnostic(
-                    notification_type="all",
-                    platform_user_id=attribution.platform_user_id,
-                    yclients_record_id=attribution.yclients_record_id,
-                    company_timezone=branch_timezone_name,
-                    skipped_reason="notifications_disabled_or_user_missing",
-                    blocked_or_stopped=user is not None and not user.notifications_enabled,
-                )
                 continue
             try:
+                yclients_records_checked += 1
                 payload = await service.get_booking_details(
                     company_id=settings.company_id,
                     yclients_record_id=attribution.yclients_record_id,
@@ -315,6 +325,10 @@ async def get_due_reminders(
                 continue
             record = _extract_record(payload)
             if not _record_is_active(record):
+                if _record_is_deleted(record):
+                    skipped_deleted_count += 1
+                else:
+                    skipped_cancelled_count += 1
                 _record_skipped_reminders(
                     database_path,
                     attribution=attribution,
@@ -327,6 +341,7 @@ async def get_due_reminders(
                 continue
             booking_datetime = _ensure_timezone(booking_datetime, branch_timezone)
             if booking_datetime <= now_local:
+                skipped_past_count += 1
                 _record_skipped_reminders(
                     database_path,
                     attribution=attribution,
@@ -339,14 +354,19 @@ async def get_due_reminders(
             for notification_type, scheduled_for in schedule.items():
                 if not (scheduled_for <= now_local < booking_datetime):
                     continue
-                if get_notification_history(
+                existing_history = get_notification_history(
                     database_path,
                     platform=PLATFORM_MAX,
                     platform_user_id=attribution.platform_user_id,
                     yclients_record_id=attribution.yclients_record_id,
                     notification_type=notification_type,
-                ):
+                )
+                if existing_history:
+                    skipped_duplicate_count += 1
+                    if existing_history.is_blocked or existing_history.is_stopped:
+                        skipped_blocked_count += 1
                     continue
+                due_candidates_count += 1
                 due.append(
                     DueReminder(
                         context=BookingNotificationContext(
@@ -366,6 +386,7 @@ async def get_due_reminders(
                         record=record,
                     )
                 )
+    _log_reminder_diagnostic(reminder_type=BOOKING_REMINDER_48H, loop_enabled=True, loop_interval_seconds=None, branch_timezone=branch_timezone_name, now_branch_time=now_local.isoformat(), due_window_start=window_start.isoformat(), due_window_end=window_end.isoformat(), yclients_records_checked=yclients_records_checked, due_candidates_count=due_candidates_count, skipped_cancelled_count=skipped_cancelled_count, skipped_deleted_count=skipped_deleted_count, skipped_past_count=skipped_past_count, skipped_duplicate_count=skipped_duplicate_count, skipped_no_platform_mapping_count=skipped_no_platform_mapping_count, skipped_notifications_disabled_count=skipped_notifications_disabled_count, skipped_blocked_count=skipped_blocked_count, sent_count=0, failed_count=0, duration_ms=int((datetime.now(UTC) - loop_started_at).total_seconds() * 1000))
     return due
 
 
@@ -390,6 +411,7 @@ async def send_due_reminders(
             database_path=database_path,
             context=reminder.context,
             timezone_name=branch_timezone_name,
+            keyboard=_keyboard_for_reminder(reminder.context),
         )
         sent_or_recorded += 1
     return sent_or_recorded
@@ -456,6 +478,20 @@ async def run_reminder_loop(
     logger.info("booking_reminder_loop_stopped")
 
 
+def _keyboard_for_reminder(context: BookingNotificationContext) -> MaxInlineKeyboard | None:
+    if context.notification_type == BOOKING_REMINDER_48H:
+        return MaxInlineKeyboard.from_rows([
+            [MaxButton(text="✅ Да, запись в силе", payload=f"brc:y:{context.yclients_record_id}")],
+            [MaxButton(text="❌ Нет, отменить или перенести", payload=f"brc:n:{context.yclients_record_id}")],
+        ])
+    if context.notification_type == BOOKING_REMINDER_2H:
+        return MaxInlineKeyboard.from_rows([
+            [MaxButton(text="📅 Мои записи", payload="my_bookings:open")],
+            [MaxButton(text="🏠 Главное меню", payload="nav:home")],
+        ])
+    return None
+
+
 def _recipient(context: BookingNotificationContext) -> tuple[str, str | None]:
     if context.chat_id:
         return "chat", context.chat_id
@@ -480,7 +516,7 @@ def _extract_record(payload: dict[str, Any] | list[Any] | Any) -> dict[str, Any]
 
 
 def _record_is_active(record: dict[str, Any]) -> bool:
-    if _clean(record.get("deleted")).lower() in {"1", "true", "yes"}:
+    if _record_is_deleted(record):
         return False
     attendance = _clean(record.get("attendance") or record.get("visit_attendance"))
     if attendance in {"-1", "1"}:
@@ -489,6 +525,10 @@ def _record_is_active(record: dict[str, Any]) -> bool:
     if status in {"deleted", "cancelled", "canceled", "cancel", "отменена", "отменено"}:
         return False
     return True
+
+
+def _record_is_deleted(record: dict[str, Any]) -> bool:
+    return _clean(record.get("deleted") or record.get("is_deleted")).lower() in {"1", "true", "yes"}
 
 
 def _record_datetime(record: dict[str, Any], timezone_name: str) -> datetime | None:
@@ -620,16 +660,13 @@ def _record_skipped_reminders(database_path: str, *, attribution: Any, timezone_
 
 
 def _log_reminder_diagnostic(**fields: Any) -> None:
-    safe_fields = {
-        key: value
-        for key, value in fields.items()
-        if key in {
-            "notification_type", "due_at", "booking_datetime", "company_timezone",
-            "history_existing", "yclients_record_active", "canceled_or_rescheduled",
-            "send_attempted", "send_status", "delivery_status", "blocked_or_stopped",
-            "skipped_reason", "error_class", "http_status", "trace_id",
-        }
+    allowed = {
+        "reminder_type", "loop_enabled", "loop_interval_seconds", "branch_timezone",
+        "now_branch_time", "due_window_start", "due_window_end", "yclients_records_checked",
+        "due_candidates_count", "skipped_cancelled_count", "skipped_deleted_count",
+        "skipped_past_count", "skipped_duplicate_count", "skipped_no_platform_mapping_count",
+        "skipped_notifications_disabled_count", "skipped_blocked_count", "sent_count",
+        "failed_count", "duration_ms",
     }
-    safe_fields["platform_user_id_present"] = bool(fields.get("platform_user_id"))
-    safe_fields["yclients_record_id_present"] = bool(fields.get("yclients_record_id"))
-    logger.info("MAX notifications diagnostic: %s", safe_fields)
+    safe_fields = {key: value for key, value in fields.items() if key in allowed}
+    logger.info("MAX reminders diagnostic: %s", safe_fields)
