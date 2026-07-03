@@ -103,13 +103,13 @@ def build_reminder_schedule(booking_datetime: datetime, timezone_name: str, *, n
     branch_timezone = _zoneinfo(timezone_name)
     local_dt = _ensure_timezone(booking_datetime, branch_timezone)
     now_local = _ensure_timezone(now or datetime.now(UTC), branch_timezone)
-    schedule = {
-        notification_type: local_dt - offset
-        for notification_type, offset in REMINDER_OFFSETS.items()
-    }
+    schedule = {}
     confirmation_due = _calculate_telegram_confirmation_due(local_dt, now_local)
     if confirmation_due is not None:
         schedule[BOOKING_REMINDER_48H] = confirmation_due
+    reminder_2h_due = _calculate_telegram_2h_due(local_dt, now_local)
+    if reminder_2h_due is not None:
+        schedule[BOOKING_REMINDER_2H] = reminder_2h_due
     return schedule
 
 
@@ -162,6 +162,7 @@ async def send_booking_notification(
     text_override: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
     respect_global_settings: bool = True,
+    metadata: dict[str, Any] | None = None,
 ) -> NotificationHistoryRecord | None:
     """Send and record one booking notification without raising transport errors."""
 
@@ -185,6 +186,10 @@ async def send_booking_notification(
 
     text = text_override or render_booking_notification_text(context, timezone_name)
     try:
+        notification_metadata: dict[str, Any] = {"label": _NOTIFICATION_TYPE_LABELS.get(context.notification_type)}
+        if context.yclients_record_id.startswith("dev-test-"):
+            notification_metadata.update({"source": "dev_test", "is_test": True, "test": True})
+        notification_metadata.update(metadata or {})
         return await send_business_notification(
             sender,
             database_path=database_path,
@@ -201,7 +206,7 @@ async def send_booking_notification(
             recipient_id=recipient_id,
             keyboard=keyboard,
             attachments=attachments,
-            metadata={"label": _NOTIFICATION_TYPE_LABELS.get(context.notification_type)},
+            metadata=notification_metadata,
             respect_global_settings=respect_global_settings,
         )
     except Exception:
@@ -409,15 +414,31 @@ async def send_due_reminders(
     )
     branch_timezone_name = normalize_branch_timezone(timezone_name or (settings.branch_timezone if settings else None), flow="reminders", operation="send_due_reminders")
     sent_or_recorded = 0
+    failed_count = 0
+    loop_started_at = datetime.now(UTC)
     for reminder in await get_due_reminders(database_path=database_path, now=now, timezone_name=branch_timezone_name):
-        await send_booking_notification(
+        result = await send_booking_notification(
             sender,
             database_path=database_path,
             context=reminder.context,
             timezone_name=branch_timezone_name,
             keyboard=booking_reminder_keyboard(reminder.context),
         )
-        sent_or_recorded += 1
+        if result is None or result.status in {"failed", "blocked", "stopped", "rate_limited", "delivery_error"}:
+            failed_count += 1
+        elif result.status == "sent":
+            sent_or_recorded += 1
+        else:
+            sent_or_recorded += 1
+    _log_reminder_diagnostic(
+        reminder_type="booking_confirmation_2d+booking_reminder_2h",
+        loop_enabled=True,
+        loop_interval_seconds=None,
+        branch_timezone=branch_timezone_name,
+        sent_count=sent_or_recorded,
+        failed_count=failed_count,
+        duration_ms=int((datetime.now(UTC) - loop_started_at).total_seconds() * 1000),
+    )
     return sent_or_recorded
 
 
@@ -596,6 +617,13 @@ def _calculate_telegram_confirmation_due(booking_datetime: datetime, now: dateti
     if time_to_visit >= timedelta(hours=6):
         return booking_datetime - timedelta(hours=6)
     return now
+
+
+def _calculate_telegram_2h_due(booking_datetime: datetime, now: datetime) -> datetime | None:
+    if booking_datetime <= now:
+        return None
+    scheduled_local = booking_datetime - timedelta(hours=2)
+    return scheduled_local
 
 
 def _date_label_for(dt_local: datetime, now_local: datetime) -> str:

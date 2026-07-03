@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC, datetime, time, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.action_locks import DEFAULT_ACTION_LOCK_TTL_SECONDS, acquire_action_lock, is_action_locked, release_action_lock
@@ -27,6 +29,7 @@ from max_barbershop_bot.services.omnichannel_broadcasts import (
     TelegramUnavailableBroadcastAdapter,
 )
 from max_barbershop_bot.services.client_segments import ClientSegmentService
+from max_barbershop_bot.services.contacts import ContactsService
 from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials, load_active_yclients_settings
 from max_barbershop_bot.integrations.yclients.dto import YClientsNormalizedClient
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
@@ -46,6 +49,13 @@ from max_barbershop_bot.services.broadcasts import (
     validate_broadcast_text,
 )
 from max_barbershop_bot.services.navigation import show_home
+from max_barbershop_bot.services.notifications import BOOKING_REMINDER_2H, BOOKING_REMINDER_48H
+from max_barbershop_bot.services.reminders import (
+    BookingNotificationContext,
+    booking_reminder_keyboard,
+    render_booking_notification_text,
+    send_booking_notification,
+)
 from max_barbershop_bot.ui.buttons import (
     ADMIN_BROADCASTS_PAYLOAD,
     BROADCAST_AUDIENCE_ALL_USERS_PAYLOAD,
@@ -64,6 +74,8 @@ from max_barbershop_bot.ui.buttons import (
     BROADCAST_HOME_PAYLOAD,
     BROADCAST_LOST_CLIENTS_PAYLOAD,
     BROADCAST_NEW_PAYLOAD,
+    BROADCAST_TEST_CONFIRM_48H_PAYLOAD,
+    BROADCAST_TEST_REMINDER_2H_PAYLOAD,
     BROADCAST_TESTS_PAYLOAD,
     SEGMENTS_BY_MASTER_PREFIX,
     SEGMENTS_BY_SERVICE_PREFIX,
@@ -129,14 +141,15 @@ def register_broadcast_routes(router: Router) -> None:
     router.on_callback(BROADCAST_EFFECTIVENESS_PAYLOAD, handle_effectiveness_section)
     router.on_callback(BROADCAST_HISTORY_PAYLOAD, handle_history_section)
     router.on_callback(BROADCAST_TESTS_PAYLOAD, handle_tests_section)
+    router.on_callback(BROADCAST_TEST_CONFIRM_48H_PAYLOAD, handle_reminder_notification_test)
+    router.on_callback(BROADCAST_TEST_REMINDER_2H_PAYLOAD, handle_reminder_notification_test)
     for payload in (
         "broadcast:history:all", "broadcast:history:manual", "broadcast:history:feedback",
         "broadcast:history:cancel", "broadcast:history:lost", "broadcast:history:birthday",
         "broadcast:history:repeat", "broadcast:history:search",
         "broadcast:test:feedback", "broadcast:test:cancel", "broadcast:test:lost30",
         "broadcast:test:lost60", "broadcast:test:lost90", "broadcast:test:birthday",
-        "broadcast:test:repeat", "broadcast:test:confirm48", "broadcast:test:reminder2",
-        "broadcast:test:self", "broadcast:test:clear",
+        "broadcast:test:repeat", "broadcast:test:self", "broadcast:test:clear",
     ):
         router.on_callback(payload, handle_safe_broadcast_subscreen)
     router.on_callback(BROADCAST_CONFIRM_SEND_PAYLOAD, handle_confirm_send)
@@ -337,6 +350,9 @@ async def handle_history_section(context: RouterContext) -> None:
 
 
 async def handle_safe_broadcast_subscreen(context: RouterContext) -> None:
+    if not _can_open_broadcasts(context):
+        await _send_no_access(context)
+        return
     await _answer_callback_if_needed(context)
     payload = context.event.callback_payload or ""
     if payload.startswith("broadcast:history:"):
@@ -353,14 +369,108 @@ async def handle_safe_broadcast_subscreen(context: RouterContext) -> None:
 
 
 async def handle_tests_section(context: RouterContext) -> None:
+    if not _can_open_broadcasts(context):
+        await _send_no_access(context)
+        return
     await _answer_callback_if_needed(context)
     text = "🧪 Тест уведомлений\n\nЗдесь можно безопасно проверить уведомления и автоворонки без ожидания часов и дней. Все тестовые события помечаются как dev/test и не затрагивают реальных клиентов."
     from max_barbershop_bot.max_api.models import MaxInlineKeyboard
     from max_barbershop_bot.ui.buttons import MaxButton
-    tests = [("⭐ Тест оценки после визита", "broadcast:test:feedback"), ("❌ Тест отмены записи", "broadcast:test:cancel"), ("😔 Тест потерянного клиента 30 дней", "broadcast:test:lost30"), ("😔 Тест потерянного клиента 60 дней", "broadcast:test:lost60"), ("😔 Тест потерянного клиента 90 дней", "broadcast:test:lost90"), ("🎂 Тест дня рождения", "broadcast:test:birthday"), ("🔁 Тест повторного визита", "broadcast:test:repeat"), ("✅ Тест подтверждения записи (48ч+)", "broadcast:test:confirm48"), ("⏰ Тест напоминания о записи (2ч)", "broadcast:test:reminder2"), ("📣 Тест уведомления себе", "broadcast:test:self"), ("🧹 Очистить тестовые события", "broadcast:test:clear")]
+    tests = [
+        ("✅ Тест подтверждения записи (48ч+)", BROADCAST_TEST_CONFIRM_48H_PAYLOAD),
+        ("⏰ Тест напоминания о записи (2ч)", BROADCAST_TEST_REMINDER_2H_PAYLOAD),
+    ]
     rows = [[MaxButton(text=t, payload=p)] for t, p in tests]
     rows += [[MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)]]
     await context.send_text(text, keyboard=MaxInlineKeyboard.from_rows(rows))
+
+
+async def handle_reminder_notification_test(context: RouterContext) -> None:
+    """Send Telegram-parity booking reminder test only to the current operator."""
+
+    if not _can_open_broadcasts(context):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    payload = context.event.callback_payload or ""
+    notification_type = BOOKING_REMINDER_48H if payload == BROADCAST_TEST_CONFIRM_48H_PAYLOAD else BOOKING_REMINDER_2H
+    title = "Тест подтверждения записи" if notification_type == BOOKING_REMINDER_48H else "Тест напоминания о записи"
+    success_text = (
+        "✅ Тест подтверждения записи отправлен"
+        if notification_type == BOOKING_REMINDER_48H
+        else "✅ Тест напоминания о записи отправлен"
+    )
+    reminder_type = "confirm_2d" if notification_type == BOOKING_REMINDER_48H else "reminder_2h"
+    now_utc = datetime.now(UTC)
+    branch_timezone = "Europe/Moscow"
+    booking_datetime = _dev_test_booking_datetime(notification_type, now_utc, branch_timezone)
+    record_suffix = "confirm-48h" if notification_type == BOOKING_REMINDER_48H else "2h"
+    dev_record_id = f"dev-test-{record_suffix}-{context.event.platform_user_id}-{int(now_utc.timestamp() * 1000)}-{uuid4().hex[:8]}"
+    booking_context = BookingNotificationContext(
+        platform_user_id=str(context.event.platform_user_id or "dev-safe-test"),
+        max_user_id=context.event.max_user_id or context.event.platform_user_id,
+        chat_id=context.event.chat_id,
+        yclients_record_id=dev_record_id,
+        yclients_client_id="dev-test-client",
+        notification_type=notification_type,
+        booking_datetime=booking_datetime,
+        service_name="МУЖСКАЯ СТРИЖКА",
+        master_name="Рената Пономарёва",
+        client_name="Илья",
+        branch_address=await _dev_test_branch_address(),
+        scheduled_for=now_utc,
+    )
+    logger.info(
+        "MAX notification test diagnostic: reminder_type=%s actor_platform_user_id=%s yclients_record_id=%s source=dev_test",
+        reminder_type,
+        context.event.platform_user_id,
+        dev_record_id,
+    )
+    result = await send_booking_notification(
+        context.sender,
+        database_path=_database_path(),
+        context=booking_context,
+        timezone_name=branch_timezone,
+        keyboard=booking_reminder_keyboard(booking_context),
+        respect_global_settings=False,
+        metadata={
+            "source": "dev_test",
+            "is_test": True,
+            "test": True,
+            "test_button": payload,
+            "recipient": "current_user",
+        },
+    )
+    status = result.status if result else "failed"
+    preview = render_booking_notification_text(booking_context, branch_timezone)
+    await context.send_text(
+        (
+            f"{success_text if status == 'sent' else '⚠️ Тестовое уведомление не отправилось'}\n\n"
+            f"Тип: {title}\n"
+            f"delivery status: {status}\n"
+            f"notification type: {notification_type}\n"
+            "recipient: current user\n"
+            "dev/test: true\n\n"
+            "Предпросмотр текста:\n"
+            f"{preview}"
+        )[:3900],
+        keyboard=broadcast_menu_keyboard(),
+    )
+
+
+def _dev_test_booking_datetime(notification_type: str, now_utc: datetime, branch_timezone: str) -> datetime:
+    branch_tz = ZoneInfo(branch_timezone)
+    now_local = now_utc.astimezone(branch_tz)
+    visit_date = (now_local + timedelta(days=3 if notification_type == BOOKING_REMINDER_48H else 1)).date()
+    return datetime.combine(visit_date, time(hour=21, minute=0), tzinfo=branch_tz)
+
+
+async def _dev_test_branch_address() -> str:
+    try:
+        contacts = await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
+    except Exception:
+        return "Тестовый адрес"
+    return str(contacts.address or "Тестовый адрес").strip() or "Тестовый адрес"
 
 
 async def _select_audience(context: RouterContext, audience: BroadcastAudience) -> None:
