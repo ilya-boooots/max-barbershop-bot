@@ -7,6 +7,7 @@ from max_barbershop_bot.core.router import Router
 from max_barbershop_bot.flows.fallback import handle_unknown_callback, handle_unknown_text
 from max_barbershop_bot.flows.feedback import configure_feedback_flow, register_feedback_routes
 from max_barbershop_bot.flows.booking import register_booking_routes
+from max_barbershop_bot.flows.booking_reminders import register_booking_reminder_routes
 from max_barbershop_bot.flows.broadcasts import register_broadcast_routes
 from max_barbershop_bot.flows.client_segments import register_client_segment_routes
 from max_barbershop_bot.flows.contacts import register_contacts_routes
@@ -42,6 +43,7 @@ def create_router(config: Config | None = None) -> Router:
     register_lost_clients_routes(router)
     register_my_bookings_routes(router)
     register_booking_routes(router)
+    register_booking_reminder_routes(router)
     register_contacts_routes(router)
     register_support_routes(router)
     register_staff_routes(router)

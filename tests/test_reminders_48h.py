@@ -51,6 +51,17 @@ def test_booking_at_2h_is_due_candidate_in_branch_timezone() -> None:
     assert _calculate_telegram_2h_due(booking, now) == now
 
 
+def test_booking_more_than_2h_away_is_not_2h_due_yet() -> None:
+    tz = ZoneInfo("Europe/Moscow")
+    now = datetime(2026, 7, 3, 14, 15, tzinfo=tz)
+    booking = datetime(2026, 7, 3, 16, 30, tzinfo=tz)
+
+    scheduled_for = build_reminder_schedule(booking, "Europe/Moscow", now=now)[BOOKING_REMINDER_2H]
+
+    assert scheduled_for == datetime(2026, 7, 3, 14, 30, tzinfo=tz)
+    assert not (scheduled_for <= now < booking)
+
+
 def test_booking_already_received_48h_can_still_receive_2h_once(tmp_path) -> None:
     db = tmp_path / "db.sqlite3"
     init_database(str(db))

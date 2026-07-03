@@ -345,23 +345,26 @@ async def get_due_reminders(
                     reason="record_not_active",
                 )
                 continue
-            booking_datetime = _record_datetime(record, branch_timezone_name)
+            record_timezone_name = _record_timezone(record, branch_timezone_name)
+            record_timezone = _zoneinfo(record_timezone_name)
+            now_record_local = _ensure_timezone(now_local, record_timezone)
+            booking_datetime = _record_datetime(record, record_timezone_name)
             if booking_datetime is None:
                 continue
-            booking_datetime = _ensure_timezone(booking_datetime, branch_timezone)
-            if booking_datetime <= now_local:
+            booking_datetime = _ensure_timezone(booking_datetime, record_timezone)
+            if booking_datetime <= now_record_local:
                 skipped_past_count += 1
                 _record_skipped_reminders(
                     database_path,
                     attribution=attribution,
-                    timezone_name=branch_timezone_name,
+                    timezone_name=record_timezone_name,
                     reason="booking_in_past",
                 )
                 continue
-            schedule = build_reminder_schedule(booking_datetime, branch_timezone_name, now=now_local)
+            schedule = build_reminder_schedule(booking_datetime, record_timezone_name, now=now_record_local)
             branch_address = await _resolve_branch_address(database_path)
             for notification_type, scheduled_for in schedule.items():
-                if not (scheduled_for <= now_local < booking_datetime):
+                if not (scheduled_for <= now_record_local < booking_datetime):
                     continue
                 existing_history = get_notification_history(
                     database_path,
@@ -558,6 +561,14 @@ def _record_is_deleted(record: dict[str, Any]) -> bool:
 
 def _record_datetime(record: dict[str, Any], timezone_name: str) -> datetime | None:
     return _parse_datetime(record.get("datetime") or record.get("date"), timezone_name)
+
+
+def _record_timezone(record: dict[str, Any], fallback_timezone_name: str) -> str:
+    return normalize_branch_timezone(
+        _clean(record.get("timezone") or record.get("time_zone") or record.get("timezone_name") or record.get("tz")) or fallback_timezone_name,
+        flow="reminders",
+        operation="_record_timezone",
+    )
 
 
 def _record_service_name(record: dict[str, Any]) -> str:
