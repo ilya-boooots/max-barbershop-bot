@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -91,9 +92,10 @@ _CANCEL_CUTOFF_MINUTES = 10
 class MyBookingsError(RuntimeError):
     """Clean domain error safe for the MAX flow."""
 
-    def __init__(self, user_message: str) -> None:
+    def __init__(self, user_message: str, *, diagnostic: dict[str, Any] | None = None) -> None:
         super().__init__(user_message)
         self.user_message = user_message
+        self.diagnostic = diagnostic or {}
 
 
 class MyBookingsProfileMissingError(MyBookingsError):
@@ -240,18 +242,22 @@ class MyBookingsService:
                 )
         except YClientsError as exc:
             duration_ms = int((time.monotonic() - started_at) * 1000)
-            logger.warning(
-                "MAX my bookings diagnostic: max_user_id=%s has_yclients_client_id=%s has_phone=%s "
-                "yclients_records_count=%s active_records_count=%s endpoint_name=%s error_type=%s duration_ms=%s",
-                platform_user_id or "n/a",
-                bool(yclients_client_id),
-                bool(phone),
-                0,
-                0,
-                endpoint_name,
-                type(exc).__name__,
-                duration_ms,
+            diagnostic = _runtime_error_diagnostic(
+                function="MyBookingsService.get_bookings_for_user",
+                max_user_id=platform_user_id,
+                platform_user_id=platform_user_id,
+                user=user,
+                company_id_present=bool(settings and settings.company_id),
+                endpoint_name=endpoint_name,
+                request_mode=_request_mode(yclients_client_id, known_phones),
+                records_count=0,
+                parsed_records_count=0,
+                active_records_count=0,
+                skipped_malformed_count=0,
+                exc=exc,
+                duration_ms=duration_ms,
             )
+            logger.warning("MAX my bookings runtime error: %s", diagnostic)
             logger.warning(
                 "My bookings YClients error: operation=get_my_bookings platform_user_id=%s "
                 "yclients_client_id_present=%s phone_present=%s error_class=%s status_code=%s",
@@ -261,21 +267,25 @@ class MyBookingsService:
                 type(exc).__name__,
                 exc.status_code,
             )
-            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
+            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT, diagnostic=diagnostic) from exc
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
             duration_ms = int((time.monotonic() - started_at) * 1000)
-            logger.warning(
-                "MAX my bookings diagnostic: max_user_id=%s has_yclients_client_id=%s has_phone=%s "
-                "yclients_records_count=%s active_records_count=%s endpoint_name=%s error_type=%s duration_ms=%s",
-                platform_user_id or "n/a",
-                bool(yclients_client_id),
-                bool(phone),
-                0,
-                0,
-                endpoint_name,
-                type(exc).__name__,
-                duration_ms,
+            diagnostic = _runtime_error_diagnostic(
+                function="MyBookingsService.get_bookings_for_user",
+                max_user_id=platform_user_id,
+                platform_user_id=platform_user_id,
+                user=user,
+                company_id_present=bool(settings and settings.company_id),
+                endpoint_name=endpoint_name,
+                request_mode=_request_mode(yclients_client_id, known_phones),
+                records_count=0,
+                parsed_records_count=0,
+                active_records_count=0,
+                skipped_malformed_count=0,
+                exc=exc,
+                duration_ms=duration_ms,
             )
+            logger.warning("MAX my bookings runtime error: %s", diagnostic)
             logger.warning(
                 "My bookings unexpected error: operation=get_my_bookings platform_user_id=%s "
                 "yclients_client_id_present=%s phone_present=%s error_class=%s",
@@ -284,7 +294,7 @@ class MyBookingsService:
                 bool(phone),
                 type(exc).__name__,
             )
-            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
+            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT, diagnostic=diagnostic) from exc
 
         try:
             contacts = await ContactsService(self._settings_repository).get_contacts()
@@ -307,15 +317,24 @@ class MyBookingsService:
             hidden_cancelled_count = filter_counts["hidden_cancelled_count"]
             hidden_parse_error_count = filter_counts["hidden_parse_error_count"]
         except Exception as exc:  # noqa: BLE001 - bad contact/settings/payload shape must not make the callback silent.
-            logger.warning(
-                "My bookings payload normalization failed: operation=get_my_bookings platform_user_id=%s "
-                "yclients_client_id_present=%s phone_present=%s error_class=%s",
-                platform_user_id,
-                bool(yclients_client_id),
-                bool(phone),
-                type(exc).__name__,
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            diagnostic = _runtime_error_diagnostic(
+                function="MyBookingsService.get_bookings_for_user",
+                max_user_id=platform_user_id,
+                platform_user_id=platform_user_id,
+                user=user,
+                company_id_present=bool(settings and settings.company_id),
+                endpoint_name=endpoint_name,
+                request_mode=_request_mode(yclients_client_id, known_phones),
+                records_count=len(_extract_record_rows(payload)) if "payload" in locals() else 0,
+                parsed_records_count=0,
+                active_records_count=0,
+                skipped_malformed_count=0,
+                exc=exc,
+                duration_ms=duration_ms,
             )
-            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
+            logger.warning("MAX my bookings runtime error: %s", diagnostic)
+            raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT, diagnostic=diagnostic) from exc
         logger.info(
             "MAX my bookings ownership diagnostic: platform_user_id_present=%s yclients_client_id_present=%s "
             "registered_phone_present_masked=%s known_phones_count=%s attributed_record_ids_count=%s yclients_candidates_count=%s fresh_records_count=%s owned_records_count=%s future_count=%s visible_active_count=%s "
@@ -1343,24 +1362,32 @@ async def _fetch_all_relevant_records(
     attributed_ids = {_clean_text(record_id) for record_id in attributed_record_ids if _clean_text(record_id)}
     if yclients_client_id:
         rows.extend(
-            await _fetch_all_client_records_page_set(
-                yclients,
-                company_id=company_id,
-                yclients_client_id=yclients_client_id,
-                phone=None,
-                start_date=start_date,
-                end_date=end_date,
+            _mark_rows_request_context(
+                await _fetch_all_client_records_page_set(
+                    yclients,
+                    company_id=company_id,
+                    yclients_client_id=yclients_client_id,
+                    phone=None,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+                request_client_id=yclients_client_id,
+                request_phone=None,
             )
         )
     for known_phone in sorted(phones):
         rows.extend(
-            await _fetch_all_client_records_page_set(
-                yclients,
-                company_id=company_id,
-                yclients_client_id=None,
-                phone=known_phone,
-                start_date=start_date,
-                end_date=end_date,
+            _mark_rows_request_context(
+                await _fetch_all_client_records_page_set(
+                    yclients,
+                    company_id=company_id,
+                    yclients_client_id=None,
+                    phone=known_phone,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+                request_client_id=None,
+                request_phone=known_phone,
             )
         )
 
@@ -1466,6 +1493,31 @@ def _deduplicate_record_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         seen.add(key)
         result.append(row)
     return result
+
+
+def _mark_rows_request_context(
+    rows: list[dict[str, Any]],
+    *,
+    request_client_id: str | None,
+    request_phone: str | None,
+) -> list[dict[str, Any]]:
+    """Attach safe internal ownership context for scoped YClients list responses.
+
+    Some real /records responses omit nested ``client`` or phone fields even when
+    the request itself was scoped by client_id/phone.  Telegram treats those rows
+    as user rows because they came from a scoped request; MAX previously rejected
+    them as "not owned".
+    """
+
+    marked: list[dict[str, Any]] = []
+    for row in rows:
+        copy = dict(row)
+        if request_client_id:
+            copy["_max_request_client_id"] = _clean_text(request_client_id)
+        if request_phone:
+            copy["_max_request_phone"] = _normalize_phone_digits(request_phone)
+        marked.append(copy)
+    return marked
 
 
 def _mask_phone(phone: str | None) -> str:
@@ -1671,6 +1723,12 @@ def ownership_source_for_record(
         return "client_id"
     if actual_phone and actual_phone in known_phones:
         return "phone"
+    request_client_id = _clean_text(row.get("_max_request_client_id"))
+    if expected_client_id and request_client_id and request_client_id == expected_client_id:
+        return "request_client_id"
+    request_phone = _normalize_phone_digits(row.get("_max_request_phone"))
+    if request_phone and request_phone in known_phones:
+        return "request_phone"
     return "none"
 
 
@@ -1722,6 +1780,8 @@ def _extract_record_client_phone(row: dict[str, Any]) -> str:
 def _normalize_phone_digits(value: Any) -> str:
     normalized = normalize_phone(str(value or "")) if value else ""
     digits = "".join(ch for ch in normalized if ch.isdigit())
+    if len(digits) == 10:
+        return f"7{digits}"
     if len(digits) == 11 and digits.startswith("8"):
         return f"7{digits[1:]}"
     return digits
@@ -1798,3 +1858,53 @@ def _zoneinfo(timezone_name: str) -> ZoneInfo:
 
 def _clean_text(value: Any) -> str:
     return safe_str(value)
+
+
+def _request_mode(yclients_client_id: str | None, phones: set[str]) -> str:
+    has_client = bool(_clean_text(yclients_client_id))
+    has_phone = bool(phones)
+    if has_client and has_phone:
+        return "by_both"
+    if has_client:
+        return "by_client_id"
+    if has_phone:
+        return "by_phone"
+    return "no_identity"
+
+
+def _runtime_error_diagnostic(
+    *,
+    function: str,
+    max_user_id: str | None,
+    platform_user_id: str | None,
+    user: User | None,
+    company_id_present: bool,
+    endpoint_name: str,
+    request_mode: str,
+    records_count: int,
+    parsed_records_count: int,
+    active_records_count: int,
+    skipped_malformed_count: int,
+    exc: Exception,
+    duration_ms: int,
+) -> dict[str, Any]:
+    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    return {
+        "function": function,
+        "max_user_id": max_user_id or "n/a",
+        "platform_user_id": platform_user_id or "n/a",
+        "has_yclients_client_id": bool(user and user.yclients_client_id),
+        "has_phone": bool(user and user.phone),
+        "user_role": _clean_text(user.role if user else None) or "n/a",
+        "yclients_company_id_present": company_id_present,
+        "endpoint_name": endpoint_name,
+        "request_mode": request_mode,
+        "yclients_records_count": records_count,
+        "parsed_records_count": parsed_records_count,
+        "active_records_count": active_records_count,
+        "skipped_malformed_count": skipped_malformed_count,
+        "error_type": type(exc).__name__,
+        "error_message_short": str(exc)[:180],
+        "traceback_last_5_lines": "".join(tb_lines[-5:])[:900],
+        "duration_ms": duration_ms,
+    }

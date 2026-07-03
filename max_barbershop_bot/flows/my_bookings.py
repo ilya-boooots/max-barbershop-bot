@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from datetime import datetime
 from os import getenv
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.action_locks import DEFAULT_ACTION_LOCK_TTL_SECONDS, acquire_action_lock, release_action_lock
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
+from max_barbershop_bot.core.permissions import is_developer
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
@@ -860,17 +862,11 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
         await context.send_text(MY_BOOKINGS_NO_PROFILE_TEXT, keyboard=my_bookings_keyboard())
         return
     except MyBookingsLoadError as exc:
-        logger.warning(
-            "My bookings screen failed: operation=show_my_bookings platform_user_id=%s "
-            "user_exists=%s yclients_client_id_present=%s phone_present=%s error_class=%s",
-            platform_user_id,
-            user is not None,
-            bool(user and user.yclients_client_id),
-            bool(user and user.phone),
-            type(exc).__name__,
-        )
+        diagnostic = _my_bookings_flow_diagnostic(context, user, exc)
+        logger.warning("MAX my bookings runtime error: %s", diagnostic)
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_ERROR_SCREEN)
         await context.send_text(MY_BOOKINGS_LOAD_ERROR_TEXT, keyboard=my_bookings_keyboard())
+        await _send_my_bookings_dev_error_card_if_needed(context, user, diagnostic)
         return
 
     rendered_split = split_bookings_by_period(result.bookings, timezone_name=result.branch_timezone)
@@ -1274,3 +1270,60 @@ def _chat_id(context: RouterContext) -> str | None:
 
 def _database_path() -> str:
     return getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH
+
+
+def _my_bookings_flow_diagnostic(context: RouterContext, user: Any, exc: Exception) -> dict[str, Any]:
+    service_diagnostic = getattr(exc, "diagnostic", None)
+    if isinstance(service_diagnostic, dict) and service_diagnostic:
+        result = dict(service_diagnostic)
+        result.setdefault("callback", context.event.callback_payload or "n/a")
+        return result
+    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    return {
+        "function": "max_barbershop_bot.flows.my_bookings._show_my_bookings",
+        "callback": context.event.callback_payload or "n/a",
+        "max_user_id": context.event.max_user_id or "n/a",
+        "platform_user_id": context.event.platform_user_id or "n/a",
+        "has_yclients_client_id": bool(user and getattr(user, "yclients_client_id", None)),
+        "has_phone": bool(user and getattr(user, "phone", None)),
+        "user_role": getattr(user, "role", None) or "n/a",
+        "yclients_company_id_present": "unknown",
+        "endpoint_name": "list_user_bookings",
+        "request_mode": "unknown",
+        "yclients_records_count": "unknown",
+        "parsed_records_count": "unknown",
+        "active_records_count": "unknown",
+        "skipped_malformed_count": "unknown",
+        "error_type": type(exc).__name__,
+        "error_message_short": str(exc)[:180],
+        "traceback_last_5_lines": "".join(tb_lines[-5:])[:900],
+        "duration_ms": "unknown",
+    }
+
+
+async def _send_my_bookings_dev_error_card_if_needed(
+    context: RouterContext,
+    user: Any,
+    diagnostic: dict[str, Any],
+) -> None:
+    if not (user and is_developer(getattr(user, "role", None))):
+        return
+    tb_tail = str(diagnostic.get("traceback_last_5_lines") or "")
+    tb_last_3 = "\n".join(tb_tail.splitlines()[-3:])[:600] or "—"
+    text = "\n".join(
+        [
+            "🛠️ MAX my bookings runtime error:",
+            f"function: {diagnostic.get('function', 'n/a')}",
+            f"error_type: {diagnostic.get('error_type', 'n/a')}",
+            f"message: {diagnostic.get('error_message_short', '—')}",
+            f"endpoint: {diagnostic.get('endpoint_name', 'n/a')}",
+            f"request_mode: {diagnostic.get('request_mode', 'n/a')}",
+            "counters: "
+            f"records={diagnostic.get('yclients_records_count', 'n/a')}, "
+            f"parsed={diagnostic.get('parsed_records_count', 'n/a')}, "
+            f"active={diagnostic.get('active_records_count', 'n/a')}, "
+            f"skipped={diagnostic.get('skipped_malformed_count', 'n/a')}",
+            f"traceback_last_3_lines:\n{tb_last_3}",
+        ]
+    )
+    await context.send_text(text[:1800])
