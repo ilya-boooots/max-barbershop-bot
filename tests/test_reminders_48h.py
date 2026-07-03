@@ -12,6 +12,7 @@ from max_barbershop_bot.services.notifications import (
 )
 from max_barbershop_bot.services.reminders import (
     BookingNotificationContext,
+    _calculate_telegram_2h_due,
     _calculate_telegram_confirmation_due,
     _keyboard_for_reminder,
     _record_is_active,
@@ -37,6 +38,62 @@ def test_48h_fallback_matches_telegram_6h_rule() -> None:
     booking = now + timedelta(hours=24)
 
     assert build_reminder_schedule(booking, "Europe/Moscow", now=now)[BOOKING_REMINDER_48H] == booking - timedelta(hours=6)
+
+
+def test_booking_at_2h_is_due_candidate_in_branch_timezone() -> None:
+    tz = ZoneInfo("Asia/Yekaterinburg")
+    now = datetime(2026, 7, 2, 12, 0, tzinfo=tz)
+    booking = now + timedelta(hours=2)
+
+    schedule = build_reminder_schedule(booking, "Asia/Yekaterinburg", now=now)
+
+    assert schedule[BOOKING_REMINDER_2H] == now
+    assert _calculate_telegram_2h_due(booking, now) == now
+
+
+def test_booking_more_than_2h_away_is_not_2h_due_yet() -> None:
+    tz = ZoneInfo("Europe/Moscow")
+    now = datetime(2026, 7, 3, 14, 15, tzinfo=tz)
+    booking = datetime(2026, 7, 3, 16, 30, tzinfo=tz)
+
+    scheduled_for = build_reminder_schedule(booking, "Europe/Moscow", now=now)[BOOKING_REMINDER_2H]
+
+    assert scheduled_for == datetime(2026, 7, 3, 14, 30, tzinfo=tz)
+    assert not (scheduled_for <= now < booking)
+
+
+def test_booking_already_received_48h_can_still_receive_2h_once(tmp_path) -> None:
+    db = tmp_path / "db.sqlite3"
+    init_database(str(db))
+
+    first_48h = reserve_notification_history(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u1",
+        yclients_record_id="r1",
+        notification_type=BOOKING_REMINDER_48H,
+        scheduled_for="2026-07-02T12:00:00+03:00",
+    )
+    first_2h = reserve_notification_history(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u1",
+        yclients_record_id="r1",
+        notification_type=BOOKING_REMINDER_2H,
+        scheduled_for="2026-07-04T10:00:00+03:00",
+    )
+    second_2h = reserve_notification_history(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u1",
+        yclients_record_id="r1",
+        notification_type=BOOKING_REMINDER_2H,
+        scheduled_for="2026-07-04T10:00:00+03:00",
+    )
+
+    assert first_48h is not None
+    assert first_2h is not None
+    assert second_2h is None
 
 
 def test_same_booking_processed_twice_has_one_active_history_row(tmp_path) -> None:
@@ -132,6 +189,30 @@ def test_48h_text_and_buttons_match_telegram_reference_meaning() -> None:
     assert keyboard is not None
     assert keyboard.rows[0][0].text == "✅ Да, запись в силе"
     assert keyboard.rows[1][0].text == "❌ Нет, отменить или перенести"
+
+
+def test_2h_text_and_buttons_match_telegram_reference_meaning() -> None:
+    tz = ZoneInfo("Europe/Moscow")
+    context = BookingNotificationContext(
+        platform_user_id="u1",
+        yclients_record_id="r1",
+        notification_type=BOOKING_REMINDER_2H,
+        booking_datetime=datetime(2026, 7, 4, 21, 0, tzinfo=tz),
+        service_name="МУЖСКАЯ СТРИЖКА",
+        master_name="Рената Пономарёва",
+        client_name="Илья Иванов",
+        branch_address="г. Москва, ул. Тестовая, 1",
+    )
+
+    text = render_booking_notification_text(context, "Europe/Moscow")
+    keyboard = _keyboard_for_reminder(context)
+
+    assert "Илья, вы записаны на услугу «МУЖСКАЯ СТРИЖКА», ждём вас 04.07.2026 к 21:00." in text
+    assert "Ваш мастер: Рената Пономарёва" in text
+    assert "📍 Адрес: г. Москва, ул. Тестовая, 1" in text
+    assert keyboard is not None
+    assert keyboard.rows[0][0].text == "📅 Мои записи"
+    assert keyboard.rows[1][0].text == "🏠 Главное меню"
 
 
 import sqlite3
