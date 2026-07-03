@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -221,6 +222,8 @@ class MyBookingsService:
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT)
 
         now = datetime.now(_zoneinfo(timezone_name))
+        started_at = time.monotonic()
+        endpoint_name = "list_user_bookings"
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
@@ -236,6 +239,19 @@ class MyBookingsService:
                     end_date=(now.date() + timedelta(days=365)).isoformat(),
                 )
         except YClientsError as exc:
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            logger.warning(
+                "MAX my bookings diagnostic: max_user_id=%s has_yclients_client_id=%s has_phone=%s "
+                "yclients_records_count=%s active_records_count=%s endpoint_name=%s error_type=%s duration_ms=%s",
+                platform_user_id or "n/a",
+                bool(yclients_client_id),
+                bool(phone),
+                0,
+                0,
+                endpoint_name,
+                type(exc).__name__,
+                duration_ms,
+            )
             logger.warning(
                 "My bookings YClients error: operation=get_my_bookings platform_user_id=%s "
                 "yclients_client_id_present=%s phone_present=%s error_class=%s status_code=%s",
@@ -247,6 +263,19 @@ class MyBookingsService:
             )
             raise MyBookingsLoadError(MY_BOOKINGS_LOAD_ERROR_TEXT) from exc
         except Exception as exc:  # noqa: BLE001 - convert unexpected integration errors to domain errors.
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            logger.warning(
+                "MAX my bookings diagnostic: max_user_id=%s has_yclients_client_id=%s has_phone=%s "
+                "yclients_records_count=%s active_records_count=%s endpoint_name=%s error_type=%s duration_ms=%s",
+                platform_user_id or "n/a",
+                bool(yclients_client_id),
+                bool(phone),
+                0,
+                0,
+                endpoint_name,
+                type(exc).__name__,
+                duration_ms,
+            )
             logger.warning(
                 "My bookings unexpected error: operation=get_my_bookings platform_user_id=%s "
                 "yclients_client_id_present=%s phone_present=%s error_class=%s",
@@ -311,6 +340,19 @@ class MyBookingsService:
             status_diagnostics["mapped"],
             timezone_name,
             "future_and_not_explicitly_cancelled_or_completed",
+        )
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        logger.info(
+            "MAX my bookings diagnostic: max_user_id=%s has_yclients_client_id=%s has_phone=%s "
+            "yclients_records_count=%s active_records_count=%s endpoint_name=%s error_type=%s duration_ms=%s",
+            platform_user_id or "n/a",
+            bool(yclients_client_id),
+            bool(phone),
+            len(raw_rows),
+            len(all_bookings),
+            endpoint_name,
+            "none",
+            duration_ms,
         )
         logger.info(
             "MAX my bookings list diagnostic: platform_user_id_present=%s phone_present_masked=%s "
@@ -1298,8 +1340,7 @@ async def _fetch_all_relevant_records(
     """Fetch fresh YClients records by scoped ownership candidates only."""
 
     rows: list[dict[str, Any]] = []
-    for record_id in attributed_record_ids:
-        rows.append({"id": record_id})
+    attributed_ids = {_clean_text(record_id) for record_id in attributed_record_ids if _clean_text(record_id)}
     if yclients_client_id:
         rows.extend(
             await _fetch_all_client_records_page_set(
@@ -1323,19 +1364,19 @@ async def _fetch_all_relevant_records(
             )
         )
 
-    fresh_rows: list[dict[str, Any]] = []
-    for row in _deduplicate_record_rows(rows):
-        record_id = _clean_text(row.get("record_id") or row.get("id") or row.get("booking_id") or row.get("visit_id"))
-        if not record_id:
-            continue
+    fetched_ids = {
+        _clean_text(row.get("record_id") or row.get("id") or row.get("booking_id") or row.get("visit_id"))
+        for row in rows
+    }
+    for record_id in sorted(attributed_ids - fetched_ids):
         try:
             payload = await yclients.get_booking_details(company_id=company_id, yclients_record_id=record_id)
         except YClientsNotFoundError:
             continue
         fresh_row = _extract_record_detail_row(payload)
         if fresh_row:
-            fresh_rows.append(fresh_row)
-    return _deduplicate_record_rows(fresh_rows)
+            rows.append(fresh_row)
+    return _deduplicate_record_rows(rows)
 
 
 async def _fetch_all_client_records_page_set(
@@ -1697,7 +1738,10 @@ def _is_yclients_record_active(item: dict[str, Any] | MyBookingItem) -> bool:
         return False
     if attendance in {"0", "2"}:
         return True
-    return _normalize_status(raw_status) in _ACTIVE_BOOKING_STATUSES
+    normalized_status = _normalize_status(raw_status)
+    if not normalized_status:
+        return True
+    return normalized_status in _ACTIVE_BOOKING_STATUSES
 
 
 def _has_deleted_flag(row: dict[str, Any] | None) -> bool:
