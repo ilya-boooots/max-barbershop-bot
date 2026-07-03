@@ -162,6 +162,7 @@ async def send_booking_notification(
     text_override: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
     respect_global_settings: bool = True,
+    metadata: dict[str, Any] | None = None,
 ) -> NotificationHistoryRecord | None:
     """Send and record one booking notification without raising transport errors."""
 
@@ -185,6 +186,10 @@ async def send_booking_notification(
 
     text = text_override or render_booking_notification_text(context, timezone_name)
     try:
+        notification_metadata: dict[str, Any] = {"label": _NOTIFICATION_TYPE_LABELS.get(context.notification_type)}
+        if context.yclients_record_id.startswith("dev-test-"):
+            notification_metadata.update({"source": "dev_test", "is_test": True, "test": True})
+        notification_metadata.update(metadata or {})
         return await send_business_notification(
             sender,
             database_path=database_path,
@@ -201,7 +206,7 @@ async def send_booking_notification(
             recipient_id=recipient_id,
             keyboard=keyboard,
             attachments=attachments,
-            metadata={"label": _NOTIFICATION_TYPE_LABELS.get(context.notification_type)},
+            metadata=notification_metadata,
             respect_global_settings=respect_global_settings,
         )
     except Exception:
