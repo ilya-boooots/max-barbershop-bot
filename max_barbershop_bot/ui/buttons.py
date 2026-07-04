@@ -1101,6 +1101,18 @@ def booking_success_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows([[MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)]])
 
 
+def my_bookings_rate_limit_keyboard() -> MaxInlineKeyboard:
+    """Build retry/back/home buttons for temporary YClients throttling."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="🔄 Повторить", payload=MENU_MY_BOOKINGS_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
+
+
 def my_bookings_keyboard(*, include_booking: bool = False) -> MaxInlineKeyboard:
     """Build My bookings navigation buttons."""
 

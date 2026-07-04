@@ -43,6 +43,7 @@ from max_barbershop_bot.services.my_bookings import (
     MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT,
     MY_BOOKING_RESCHEDULE_SLOTS_TEXT,
     MY_BOOKINGS_LOAD_ERROR_TEXT,
+    MY_BOOKINGS_RATE_LIMIT_TEXT,
     MY_BOOKINGS_NO_PROFILE_TEXT,
     MyBookingCancellationError,
     MyBookingRescheduleError,
@@ -94,6 +95,7 @@ from max_barbershop_bot.ui.buttons import (
     my_booking_reschedule_slots_keyboard,
     my_bookings_history_keyboard,
     my_bookings_keyboard,
+    my_bookings_rate_limit_keyboard,
     my_bookings_list_keyboard,
     my_bookings_main_keyboard,
 )
@@ -865,7 +867,11 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
         diagnostic = _my_bookings_flow_diagnostic(context, user, exc)
         logger.warning("MAX my bookings runtime error: %s", diagnostic)
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_ERROR_SCREEN)
-        await context.send_text(MY_BOOKINGS_LOAD_ERROR_TEXT, keyboard=my_bookings_keyboard())
+        is_rate_limit = diagnostic.get("error_category") == "rate_limit" or diagnostic.get("error_type") == "YClientsRateLimitError"
+        await context.send_text(
+            MY_BOOKINGS_RATE_LIMIT_TEXT if is_rate_limit else MY_BOOKINGS_LOAD_ERROR_TEXT,
+            keyboard=my_bookings_rate_limit_keyboard() if is_rate_limit else my_bookings_keyboard(),
+        )
         await _send_my_bookings_dev_error_card_if_needed(context, user, diagnostic)
         return
 
@@ -1308,22 +1314,38 @@ async def _send_my_bookings_dev_error_card_if_needed(
 ) -> None:
     if not (user and is_developer(getattr(user, "role", None))):
         return
-    tb_tail = str(diagnostic.get("traceback_last_5_lines") or "")
-    tb_last_3 = "\n".join(tb_tail.splitlines()[-3:])[:600] or "—"
-    text = "\n".join(
-        [
-            "🛠️ MAX my bookings runtime error:",
-            f"function: {diagnostic.get('function', 'n/a')}",
-            f"error_type: {diagnostic.get('error_type', 'n/a')}",
-            f"message: {diagnostic.get('error_message_short', '—')}",
-            f"endpoint: {diagnostic.get('endpoint_name', 'n/a')}",
-            f"request_mode: {diagnostic.get('request_mode', 'n/a')}",
-            "counters: "
-            f"records={diagnostic.get('yclients_records_count', 'n/a')}, "
-            f"parsed={diagnostic.get('parsed_records_count', 'n/a')}, "
-            f"active={diagnostic.get('active_records_count', 'n/a')}, "
-            f"skipped={diagnostic.get('skipped_malformed_count', 'n/a')}",
-            f"traceback_last_3_lines:\n{tb_last_3}",
-        ]
-    )
+    if diagnostic.get("error_category") == "rate_limit" or diagnostic.get("error_type") == "YClientsRateLimitError":
+        text = "\n".join(
+            [
+                "MAX YClients rate limit diagnostic:",
+                f"function: {diagnostic.get('function', 'n/a')}",
+                f"endpoint_name: {diagnostic.get('endpoint_name', 'n/a')}",
+                f"request_mode: {diagnostic.get('request_mode', 'n/a')}",
+                f"retry_after_seconds: {diagnostic.get('retry_after_seconds', 'n/a')}",
+                f"max_user_id: {diagnostic.get('max_user_id', 'n/a')}",
+                f"has_yclients_client_id: {diagnostic.get('has_yclients_client_id', 'n/a')}",
+                f"has_phone: {diagnostic.get('has_phone', 'n/a')}",
+                f"action: {diagnostic.get('action', 'my_bookings_open')}",
+                f"duration_ms: {diagnostic.get('duration_ms', 'n/a')}",
+            ]
+        )
+    else:
+        tb_tail = str(diagnostic.get("traceback_last_5_lines") or "")
+        tb_last_3 = "\n".join(tb_tail.splitlines()[-3:])[:600] or "—"
+        text = "\n".join(
+            [
+                "🛠️ MAX my bookings runtime error:",
+                f"function: {diagnostic.get('function', 'n/a')}",
+                f"error_type: {diagnostic.get('error_type', 'n/a')}",
+                f"message: {diagnostic.get('error_message_short', '—')}",
+                f"endpoint: {diagnostic.get('endpoint_name', 'n/a')}",
+                f"request_mode: {diagnostic.get('request_mode', 'n/a')}",
+                "counters: "
+                f"records={diagnostic.get('yclients_records_count', 'n/a')}, "
+                f"parsed={diagnostic.get('parsed_records_count', 'n/a')}, "
+                f"active={diagnostic.get('active_records_count', 'n/a')}, "
+                f"skipped={diagnostic.get('skipped_malformed_count', 'n/a')}",
+                f"traceback_last_3_lines:\n{tb_last_3}",
+            ]
+        )
     await context.send_text(text[:1800])
