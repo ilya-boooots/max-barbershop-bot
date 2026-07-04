@@ -1480,7 +1480,7 @@ def format_slot_button(slot: BookingSlotItem | YClientsSlot | dict[str, Any]) ->
     """Format a slot button in the Telegram reference style."""
 
     normalized = _normalize_slot(slot, timezone_name=DEFAULT_BRANCH_TIMEZONE)
-    return f"🕒 {normalized.time}" if normalized.time else "🕒 —"
+    return normalized.time or "—"
 
 
 def is_past_date(value: date | str, *, timezone_name: str = DEFAULT_BRANCH_TIMEZONE) -> bool:
