@@ -86,7 +86,6 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_DATETIME_FIRST_SERVICE_TEXT,
     BOOKING_CONFIRMATION_MISSING_DATA_TEXT,
     BOOKING_CREATE_ERROR_TEXT,
-    BOOKING_CREATE_IN_PROGRESS_TEXT,
     BOOKING_EMPTY_TEXT,
     BOOKING_MASTER_TEXT,
     BOOKING_CONTACT_PHONE_MISSING_TEXT,
@@ -150,7 +149,7 @@ _ENTRY_MODE_DATETIME_FIRST = "datetime_first"
 _ENTRY_MODE_REPEAT = "repeat_booking"
 _REPEAT_SOURCE_SCREEN_STATE_KEY = "repeat_source_screen"
 def _confirm_lock_key(context: RouterContext) -> str:
-    return f"booking:create:{_user_id(context) or 'unknown'}:{_chat_id(context) or 'unknown'}"
+    return f"booking_create|{_user_id(context) or 'unknown'}"
 
 
 def register_booking_routes(router: Router) -> None:
@@ -651,20 +650,32 @@ async def handle_booking_confirm(context: RouterContext) -> None:
 
     lock_key = _confirm_lock_key(context)
     if _state_value(context, _BOOKING_CREATION_IN_PROGRESS_STATE_KEY) is True:
+        logger.info(
+            "MAX booking confirm duplicate diagnostic: max_user_id=%s lock_key=%s callback=%s action=%s",
+            _user_id(context), lock_key, context.event.callback_payload, "duplicate",
+        )
         await context.answer_callback()
-        await context.send_text(BOOKING_CREATE_IN_PROGRESS_TEXT)
+        await context.send_text("⏳ Уже создаём запись, секундочку 🙂")
         return
     if _state_value(context, _BOOKING_COMPLETED_RECORD_ID_STATE_KEY):
+        logger.info(
+            "MAX booking confirm duplicate diagnostic: max_user_id=%s draft_id=%s lock_key=%s callback=%s action=%s yclients_record_id=%s",
+            _user_id(context), _chat_id(context), lock_key, context.event.callback_payload, "stale", _state_value(context, _BOOKING_COMPLETED_RECORD_ID_STATE_KEY),
+        )
         await context.answer_callback()
         return
     if not acquire_action_lock(lock_key, ttl_seconds=BOOKING_CREATE_LOCK_TTL_SECONDS):
         logger.info(
-            "MAX antiflood/action lock diagnostic: event_type=%s platform_user_id_present=%s chat_id_present=%s action=%s lock_key_type=%s lock_acquired=%s lock_active=%s ttl_seconds=%s payload_present=%s",
-            context.event.update_type, bool(_user_id(context)), bool(_chat_id(context)), "create_booking", "booking:create", False, True, BOOKING_CREATE_LOCK_TTL_SECONDS, bool(context.event.callback_payload),
+            "MAX booking confirm duplicate diagnostic: max_user_id=%s draft_id=%s lock_key=%s callback=%s action=%s",
+            _user_id(context), _chat_id(context), lock_key, context.event.callback_payload, "duplicate",
         )
         await context.answer_callback()
-        await context.send_text(BOOKING_CREATE_IN_PROGRESS_TEXT)
+        await context.send_text("⏳ Уже создаём запись, секундочку 🙂")
         return
+    logger.info(
+        "MAX booking confirm duplicate diagnostic: max_user_id=%s draft_id=%s lock_key=%s callback=%s action=%s",
+        _user_id(context), _chat_id(context), lock_key, context.event.callback_payload, "acquired",
+    )
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, True)
     await _create_booking_after_lock(context, lock_key=lock_key)
 
@@ -748,6 +759,10 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
             booking_data.get("selected_slot_time"),
             type(exc).__name__,
         )
+        logger.info(
+            "MAX booking confirm duplicate diagnostic: max_user_id=%s draft_id=%s lock_key=%s callback=%s action=%s error_type=%s",
+            _user_id(context), _chat_id(context), lock_key, context.event.callback_payload, "failed", type(exc).__name__,
+        )
         await _send_booking_service_error(context, exc, operation="create booking", fallback_text=BOOKING_CREATE_ERROR_TEXT)
     finally:
         state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
@@ -758,6 +773,10 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_COMPLETED_RECORD_ID_STATE_KEY, created.yclients_record_id)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BOOKING_CREATION_IN_PROGRESS_STATE_KEY, False)
+    logger.info(
+        "MAX booking confirm duplicate diagnostic: max_user_id=%s draft_id=%s lock_key=%s callback=%s action=%s yclients_record_id=%s",
+        _user_id(context), _chat_id(context), lock_key, context.event.callback_payload, "created", created.yclients_record_id,
+    )
     _save_attribution_safely(
         platform_user_id=user.platform_user_id,
         yclients_record_id=created.yclients_record_id,
@@ -772,7 +791,14 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
     )
     if created.datetime_iso:
         state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, created.datetime_iso)
-    await _send_immediate_confirmation_safely(context, created=created, user=user, booking_data=booking_data)
+    try:
+        await _send_immediate_confirmation_safely(context, created=created, user=user, booking_data=booking_data)
+    finally:
+        release_action_lock(lock_key)
+        logger.info(
+            "MAX booking confirm duplicate diagnostic: max_user_id=%s draft_id=%s lock_key=%s callback=%s action=%s yclients_record_id=%s",
+            _user_id(context), _chat_id(context), lock_key, context.event.callback_payload, "released", created.yclients_record_id,
+        )
 
 
 async def handle_booking_back(context: RouterContext) -> None:
