@@ -543,6 +543,12 @@ async def handle_booking_date(context: RouterContext) -> None:
     await context.answer_callback()
     booking_date = _mapped_value(context, _DATE_MAP_STATE_KEY, context.event.callback_payload)
     if not booking_date:
+        await context.send_text("😔 На эту дату свободного времени нет. Выберите другую дату.")
+        await _show_booking_dates(context, push_current=False)
+        return
+    dates = _dates(context)
+    if dates is not None and not any(item.isoformat() == booking_date for item in dates):
+        await context.send_text("😔 На эту дату свободного времени нет. Выберите другую дату.")
         await _show_booking_dates(context, push_current=False)
         return
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_DATE_STATE_KEY, booking_date)
@@ -570,6 +576,7 @@ async def handle_booking_slot(context: RouterContext) -> None:
     booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
     if not slot_time or slots is None or not isinstance(booking_date, str):
         await context.answer_callback()
+        await context.send_text("😔 Это окно уже неактуально. Обновляю список 🙂")
         if isinstance(booking_date, str) and booking_date:
             await _open_booking_slots(context, booking_date, push_current=False, stale_if_empty=True)
             return
@@ -579,6 +586,7 @@ async def handle_booking_slot(context: RouterContext) -> None:
     slot = next((item for item in slots if item.time == slot_time), None)
     if slot is None:
         await context.answer_callback()
+        await context.send_text("😔 Это окно уже неактуально. Обновляю список 🙂")
         await _open_booking_slots(context, booking_date, push_current=False, stale_if_empty=True)
         return
 
@@ -1925,6 +1933,13 @@ def _booking_step_text(context: RouterContext, *, tail: str, include_selected_da
 def _slots(context: RouterContext) -> list[BookingSlotItem] | None:
     value = _state_value(context, _SLOTS_STATE_KEY)
     if isinstance(value, list) and all(isinstance(item, BookingSlotItem) for item in value):
+        return value
+    return None
+
+
+def _dates(context: RouterContext) -> list[date] | None:
+    value = _state_value(context, _DATES_STATE_KEY)
+    if isinstance(value, list) and all(isinstance(item, date) for item in value):
         return value
     return None
 
