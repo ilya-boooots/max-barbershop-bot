@@ -80,8 +80,6 @@ from max_barbershop_bot.ui.buttons import (
     navigation_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
-    BOOKING_CATEGORY_EMPTY_TEXT,
-    BOOKING_CATEGORY_SERVICES_EMPTY_TEXT,
     BOOKING_CATEGORY_TEXT,
     BOOKING_DATETIME_FIRST_CATEGORY_TEXT,
     BOOKING_DATETIME_FIRST_SERVICE_TEXT,
@@ -383,7 +381,11 @@ async def handle_booking_service(context: RouterContext) -> None:
     selected_master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
     if _entry_mode(context) == _ENTRY_MODE_STAFF_FIRST and isinstance(selected_master_id, str) and selected_master_id:
         if not is_service_compatible_with_master(service, selected_master_id):
-            await context.answer_callback()
+            await context.send_text("😔 Эта услуга недоступна у выбранного мастера. Пожалуйста, выберите другую услугу.")
+            state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_STATE_KEY, None)
+            state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_NAME_STATE_KEY, None)
+            state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_PRICE_STATE_KEY, None)
+            state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_DURATION_STATE_KEY, None)
             await _show_selected_category_services(context)
             return
         await _show_booking_dates(context)
@@ -1052,7 +1054,12 @@ async def _open_booking_catalog(context: RouterContext, *, push_current: bool = 
     if not has_available_services(catalog):
         if push_current:
             _push_current_screen(context, state.BOOKING_CATEGORIES_SCREEN)
-        await context.send_text(BOOKING_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        empty_text = (
+            "😔 У этого мастера сейчас нет доступных услуг. Пожалуйста, выберите другого специалиста."
+            if _entry_mode(context) == _ENTRY_MODE_STAFF_FIRST and _state_value(context, _SELECTED_MASTER_STATE_KEY)
+            else "😔 Пока нет доступных категорий услуг."
+        )
+        await context.send_text(empty_text, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
         return
 
     if catalog.categories:
@@ -1634,7 +1641,17 @@ async def _show_selected_category_services(context: RouterContext) -> None:
         services = catalog.services
     selected_master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
     if _entry_mode(context) == _ENTRY_MODE_STAFF_FIRST and isinstance(selected_master_id, str) and selected_master_id:
-        services = [item for item in services if is_service_compatible_with_master(item, selected_master_id)]
+        booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+        try:
+            services = await booking_service.get_valid_services_for_constraints(
+                entry_mode=_ENTRY_MODE_STAFF_FIRST,
+                selected_master_id=selected_master_id,
+                services=services,
+                category_id=category_id if isinstance(category_id, str) else None,
+            )
+        except BookingServiceError as exc:
+            await _send_booking_service_error(context, exc, operation="load services")
+            return
     await _show_services(context, services, category_title=category.title if category else None, push_current=False)
 
 
@@ -1654,7 +1671,7 @@ async def _show_categories(context: RouterContext, categories: list, *, page: in
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_CATEGORIES_SCREEN)
     if not display_categories:
-        await context.send_text(BOOKING_CATEGORY_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await context.send_text("😔 Пока нет доступных категорий услуг.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
         return
     await context.send_text(
         _booking_category_text(context),
@@ -1690,7 +1707,7 @@ async def _show_services(
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SERVICES_SCREEN)
     if not display_services:
-        empty_text = BOOKING_CATEGORY_SERVICES_EMPTY_TEXT if category_title else BOOKING_EMPTY_TEXT
+        empty_text = "😕 В этой категории пока нет доступных услуг." if category_title else "😔 Пока нет доступных категорий услуг."
         await context.send_text(empty_text, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
         return
     logger.info(
