@@ -56,7 +56,9 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_CATEGORY_PREV_PAYLOAD,
     BOOKING_CONFIRM_PAYLOAD,
     BOOKING_CANCEL_DRAFT_PAYLOAD,
+    BOOKING_DATE_NEXT_PAYLOAD,
     BOOKING_PHONE_USE_REGISTERED_PAYLOAD,
+    BOOKING_DATE_PREV_PAYLOAD,
     BOOKING_MASTER_NEXT_PAYLOAD,
     BOOKING_DATE_PAYLOAD_PREFIX,
     BOOKING_MASTER_PAYLOAD_PREFIX,
@@ -64,7 +66,9 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_SERVICE_NEXT_PAYLOAD,
     BOOKING_SERVICE_PAYLOAD_PREFIX,
     BOOKING_SERVICE_PREV_PAYLOAD,
+    BOOKING_SLOT_NEXT_PAYLOAD,
     BOOKING_SLOT_PAYLOAD_PREFIX,
+    BOOKING_SLOT_PREV_PAYLOAD,
     MENU_BOOKING_PAYLOAD,
     NAV_HOME_PAYLOAD,
     booking_categories_keyboard,
@@ -120,6 +124,8 @@ _ELIGIBLE_MASTER_IDS_STATE_KEY = "booking_eligible_master_ids"
 _CATEGORY_PAGE_STATE_KEY = "booking_category_page"
 _SERVICE_PAGE_STATE_KEY = "booking_service_page"
 _MASTER_PAGE_STATE_KEY = "booking_master_page"
+_DATE_PAGE_STATE_KEY = "booking_date_page"
+_SLOT_PAGE_STATE_KEY = "booking_slot_page"
 _SELECTED_CATEGORY_STATE_KEY = "selected_yclients_category_id"
 _SELECTED_CATEGORY_NAME_STATE_KEY = "selected_category_name"
 _SELECTED_SERVICE_STATE_KEY = "selected_yclients_service_id"
@@ -171,6 +177,10 @@ def register_booking_routes(router: Router) -> None:
     router.on_callback(BOOKING_SERVICE_NEXT_PAYLOAD, handle_booking_service_page)
     router.on_callback(BOOKING_MASTER_PREV_PAYLOAD, handle_booking_master_page)
     router.on_callback(BOOKING_MASTER_NEXT_PAYLOAD, handle_booking_master_page)
+    router.on_callback(BOOKING_DATE_PREV_PAYLOAD, handle_booking_date_page)
+    router.on_callback(BOOKING_DATE_NEXT_PAYLOAD, handle_booking_date_page)
+    router.on_callback(BOOKING_SLOT_PREV_PAYLOAD, handle_booking_slot_page)
+    router.on_callback(BOOKING_SLOT_NEXT_PAYLOAD, handle_booking_slot_page)
     for index in range(_CALLBACK_PAYLOAD_SLOTS):
         router.on_callback(f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}{index}", handle_booking_category)
         router.on_callback(f"{BOOKING_SERVICE_PAYLOAD_PREFIX}{index}", handle_booking_service)
@@ -440,6 +450,60 @@ async def handle_booking_master_page(context: RouterContext) -> None:
     await _show_masters(context, masters, page=max(0, current_page + delta), push_current=False)
 
 
+async def handle_booking_date_page(context: RouterContext) -> None:
+    """Move between booking date pages using Telegram-reference prev/next behavior."""
+
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
+    await context.answer_callback()
+    dates = _dates(context)
+    if dates is None:
+        await context.send_text("😔 Список дат уже обновился. Показываю актуальные даты 🙂")
+        if _entry_mode(context) == _ENTRY_MODE_DATETIME_FIRST and not _state_value(context, _SELECTED_SERVICE_STATE_KEY):
+            await _open_datetime_first_dates(context, push_current=False)
+            return
+        await _show_booking_dates(context, push_current=False)
+        return
+    current_page = _int_state_value(context, _DATE_PAGE_STATE_KEY)
+    delta = -1 if context.event.callback_payload == BOOKING_DATE_PREV_PAYLOAD else 1
+    requested_page = current_page + delta
+    page = _clamp_page(requested_page, len(dates), page_size=DATE_PAGE_SIZE)
+    if page != requested_page:
+        await context.send_text("😔 Список дат уже обновился. Показываю актуальные даты 🙂")
+    await _show_dates(context, dates, timezone_name=BookingService(YClientsSettingsRepository(_database_path())).get_branch_timezone(), page=page, push_current=False)
+
+
+async def handle_booking_slot_page(context: RouterContext) -> None:
+    """Move between booking time slot pages using Telegram-reference prev/next behavior."""
+
+    if not _is_active_booking_screen(context):
+        await show_booking_stale_callback(context)
+        return
+    await context.answer_callback()
+    slots = _slots(context)
+    booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
+    if slots is None:
+        await context.send_text("😔 Список времени уже обновился. Показываю актуальные окна 🙂")
+        if isinstance(booking_date, str) and booking_date:
+            if _entry_mode(context) == _ENTRY_MODE_DATETIME_FIRST and (
+                not _state_value(context, _SELECTED_SERVICE_STATE_KEY) or not _state_value(context, _SELECTED_MASTER_STATE_KEY)
+            ):
+                await _open_datetime_first_slots(context, booking_date, push_current=False, stale_if_empty=True)
+                return
+            await _open_booking_slots(context, booking_date, push_current=False, stale_if_empty=True)
+            return
+        await _show_booking_dates(context, push_current=False)
+        return
+    current_page = _int_state_value(context, _SLOT_PAGE_STATE_KEY)
+    delta = -1 if context.event.callback_payload == BOOKING_SLOT_PREV_PAYLOAD else 1
+    requested_page = current_page + delta
+    page = _clamp_page(requested_page, len(slots), page_size=TIME_PAGE_SIZE)
+    if page != requested_page:
+        await context.send_text("😔 Список времени уже обновился. Показываю актуальные окна 🙂")
+    await _show_slots(context, slots, page=page, push_current=False)
+
+
 async def handle_booking_service_page(context: RouterContext) -> None:
     """Move between service pages using short registered payloads."""
 
@@ -543,6 +607,12 @@ async def handle_booking_date(context: RouterContext) -> None:
     await context.answer_callback()
     booking_date = _mapped_value(context, _DATE_MAP_STATE_KEY, context.event.callback_payload)
     if not booking_date:
+        await context.send_text("😔 На эту дату свободного времени нет. Выберите другую дату.")
+        await _show_booking_dates(context, push_current=False)
+        return
+    dates = _dates(context)
+    if dates is not None and not any(item.isoformat() == booking_date for item in dates):
+        await context.send_text("😔 На эту дату свободного времени нет. Выберите другую дату.")
         await _show_booking_dates(context, push_current=False)
         return
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_DATE_STATE_KEY, booking_date)
@@ -570,6 +640,7 @@ async def handle_booking_slot(context: RouterContext) -> None:
     booking_date = _state_value(context, _SELECTED_DATE_STATE_KEY)
     if not slot_time or slots is None or not isinstance(booking_date, str):
         await context.answer_callback()
+        await context.send_text("😔 Это окно уже неактуально. Обновляю список 🙂")
         if isinstance(booking_date, str) and booking_date:
             await _open_booking_slots(context, booking_date, push_current=False, stale_if_empty=True)
             return
@@ -579,6 +650,7 @@ async def handle_booking_slot(context: RouterContext) -> None:
     slot = next((item for item in slots if item.time == slot_time), None)
     if slot is None:
         await context.answer_callback()
+        await context.send_text("😔 Это окно уже неактуально. Обновляю список 🙂")
         await _open_booking_slots(context, booking_date, push_current=False, stale_if_empty=True)
         return
 
@@ -1774,15 +1846,20 @@ async def _show_dates(
     dates: list,
     *,
     timezone_name: str,
+    page: int = 0,
     push_current: bool = True,
     tail: str = "📅 Выберите дату:",
     include_selected_date: bool = False,
 ) -> None:
+    page = _clamp_page(page, len(dates), page_size=DATE_PAGE_SIZE)
+    start = page * DATE_PAGE_SIZE
+    display_dates = dates[start : start + DATE_PAGE_SIZE]
     date_payloads = {
         f"{BOOKING_DATE_PAYLOAD_PREFIX}{index}": item.isoformat()
-        for index, item in enumerate(dates[:DATE_PAGE_SIZE])
+        for index, item in enumerate(display_dates)
     }
     state.set_state_data_value(_user_id(context), _chat_id(context), _DATE_MAP_STATE_KEY, date_payloads)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _DATE_PAGE_STATE_KEY, page)
     if push_current:
         _push_current_screen(context, state.BOOKING_DATES_SCREEN)
     else:
@@ -1791,8 +1868,10 @@ async def _show_dates(
     await context.send_text(
         _booking_step_text(context, tail=tail, include_selected_date=include_selected_date),
         keyboard=booking_dates_keyboard(
-            dates[:DATE_PAGE_SIZE],
+            display_dates,
             lambda value: format_date_button(value, timezone_name=timezone_name),
+            has_previous=page > 0,
+            has_next=(page + 1) * DATE_PAGE_SIZE < len(dates),
             back_payload=BOOKING_BACK_PAYLOAD,
         ),
         attachments=attachment,
@@ -1803,15 +1882,19 @@ async def _show_slots(
     context: RouterContext,
     slots: list[BookingSlotItem],
     *,
+    page: int = 0,
     push_current: bool = True,
     tail: str = "🕐 Выберите удобное время:",
 ) -> None:
-    display_slots = slots[:TIME_PAGE_SIZE]
+    page = _clamp_page(page, len(slots), page_size=TIME_PAGE_SIZE)
+    start = page * TIME_PAGE_SIZE
+    display_slots = slots[start : start + TIME_PAGE_SIZE]
     slot_payloads = {
         f"{BOOKING_SLOT_PAYLOAD_PREFIX}{index}": item.time
         for index, item in enumerate(display_slots)
     }
     state.set_state_data_value(_user_id(context), _chat_id(context), _SLOT_MAP_STATE_KEY, slot_payloads)
+    state.set_state_data_value(_user_id(context), _chat_id(context), _SLOT_PAGE_STATE_KEY, page)
     if push_current:
         _push_current_screen(context, state.BOOKING_SLOTS_SCREEN)
     else:
@@ -1822,13 +1905,19 @@ async def _show_slots(
         return
     await context.send_text(
         _booking_step_text(context, tail=tail),
-        keyboard=booking_slots_keyboard(display_slots, format_slot_button, back_payload=BOOKING_BACK_PAYLOAD),
+        keyboard=booking_slots_keyboard(
+            display_slots,
+            format_slot_button,
+            has_previous=page > 0,
+            has_next=(page + 1) * TIME_PAGE_SIZE < len(slots),
+            back_payload=BOOKING_BACK_PAYLOAD,
+        ),
         attachments=attachment,
     )
 
 
-def _clamp_page(page: int, item_count: int) -> int:
-    max_page = max((item_count - 1) // BOOKING_PAGE_SIZE, 0)
+def _clamp_page(page: int, item_count: int, *, page_size: int = BOOKING_PAGE_SIZE) -> int:
+    max_page = max((item_count - 1) // page_size, 0)
     return max(0, min(page, max_page))
 
 
@@ -1925,6 +2014,13 @@ def _booking_step_text(context: RouterContext, *, tail: str, include_selected_da
 def _slots(context: RouterContext) -> list[BookingSlotItem] | None:
     value = _state_value(context, _SLOTS_STATE_KEY)
     if isinstance(value, list) and all(isinstance(item, BookingSlotItem) for item in value):
+        return value
+    return None
+
+
+def _dates(context: RouterContext) -> list[date] | None:
+    value = _state_value(context, _DATES_STATE_KEY)
+    if isinstance(value, list) and all(isinstance(item, date) for item in value):
         return value
     return None
 
