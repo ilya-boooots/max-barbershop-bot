@@ -190,7 +190,11 @@ BOOKING_MASTER_PAYLOAD_PREFIX = "booking:master:"
 BOOKING_MASTER_PREV_PAYLOAD = "booking:master_page:prev"
 BOOKING_MASTER_NEXT_PAYLOAD = "booking:master_page:next"
 BOOKING_DATE_PAYLOAD_PREFIX = "booking:date:"
+BOOKING_DATE_PREV_PAYLOAD = "booking:date_page:prev"
+BOOKING_DATE_NEXT_PAYLOAD = "booking:date_page:next"
 BOOKING_SLOT_PAYLOAD_PREFIX = "booking:slot:"
+BOOKING_SLOT_PREV_PAYLOAD = "booking:slot_page:prev"
+BOOKING_SLOT_NEXT_PAYLOAD = "booking:slot_page:next"
 BOOKING_CONFIRM_PAYLOAD = "booking:confirm"
 BOOKING_CANCEL_DRAFT_PAYLOAD = "booking:cancel_draft"
 BOOKING_PHONE_USE_REGISTERED_PAYLOAD = "booking:phone:use_registered"
@@ -1028,6 +1032,8 @@ def booking_dates_keyboard(
     dates: list[object],
     title_formatter,
     *,
+    has_previous: bool = False,
+    has_next: bool = False,
     back_payload: str = BOOKING_BACK_PAYLOAD,
 ) -> MaxInlineKeyboard:
     """Build MAX-compatible date picker buttons."""
@@ -1042,6 +1048,13 @@ def booking_dates_keyboard(
     ]
     for index in range(0, len(date_buttons), 2):
         rows.append(date_buttons[index : index + 2])
+    page_row = []
+    if has_previous:
+        page_row.append(MaxButton(text="⬅️", payload=BOOKING_DATE_PREV_PAYLOAD))
+    if has_next:
+        page_row.append(MaxButton(text="➡️", payload=BOOKING_DATE_NEXT_PAYLOAD))
+    if page_row:
+        rows.append(page_row)
     rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
@@ -1051,6 +1064,8 @@ def booking_slots_keyboard(
     slots: list[object],
     title_formatter,
     *,
+    has_previous: bool = False,
+    has_next: bool = False,
     back_payload: str = BOOKING_BACK_PAYLOAD,
 ) -> MaxInlineKeyboard:
     """Build MAX-compatible slot picker buttons."""
@@ -1065,6 +1080,13 @@ def booking_slots_keyboard(
     ]
     for index in range(0, len(slot_buttons), 3):
         rows.append(slot_buttons[index : index + 3])
+    page_row = []
+    if has_previous:
+        page_row.append(MaxButton(text="⬅️", payload=BOOKING_SLOT_PREV_PAYLOAD))
+    if has_next:
+        page_row.append(MaxButton(text="➡️", payload=BOOKING_SLOT_NEXT_PAYLOAD))
+    if page_row:
+        rows.append(page_row)
     rows.append([MaxButton(text="⬅️ Назад", payload=back_payload)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
