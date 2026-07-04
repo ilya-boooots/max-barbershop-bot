@@ -808,6 +808,7 @@ async def handle_booking_back(context: RouterContext) -> None:
     current_screen = state.get_current_screen(_user_id(context), _chat_id(context))
     entry_mode = _entry_mode(context)
     if current_screen == state.BOOKING_HUB_SCREEN:
+        _clear_booking_state(context)
         await show_home(context)
         return
     if current_screen == state.BOOKING_CATEGORIES_SCREEN:
