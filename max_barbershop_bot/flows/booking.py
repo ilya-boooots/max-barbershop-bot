@@ -1598,6 +1598,14 @@ def _save_attribution_safely(
     booking_phone: str | None = None,
     source: str | None = None,
 ) -> None:
+    if not str(yclients_record_id or "").strip():
+        logger.warning(
+            "MAX booking create payload diagnostic: max_user_id=%s yclients_record_id_present=%s attribution_saved=%s",
+            platform_user_id,
+            False,
+            False,
+        )
+        return
     try:
         PlatformAttributionRepository(_database_path()).create_if_missing(
             platform=PLATFORM_MAX,
