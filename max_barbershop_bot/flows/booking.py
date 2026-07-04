@@ -66,6 +66,7 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_SERVICE_PREV_PAYLOAD,
     BOOKING_SLOT_PAYLOAD_PREFIX,
     MENU_BOOKING_PAYLOAD,
+    NAV_HOME_PAYLOAD,
     booking_categories_keyboard,
     booking_hub_keyboard,
     booking_dates_keyboard,
@@ -158,6 +159,7 @@ def register_booking_routes(router: Router) -> None:
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback(CANCELLATION_RECOVERY_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
+    router.on_callback(NAV_HOME_PAYLOAD, handle_booking_home)
     router.on_callback(BOOKING_CONFIRM_PAYLOAD, handle_booking_confirm)
     router.on_callback(BOOKING_CANCEL_DRAFT_PAYLOAD, handle_booking_cancel_draft)
     router.on_callback(BOOKING_PHONE_USE_REGISTERED_PAYLOAD, handle_booking_phone_use_registered)
@@ -801,6 +803,15 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
         )
 
 
+async def handle_booking_home(context: RouterContext) -> None:
+    """Handle Home from booking hub with Telegram-style booking state cleanup."""
+
+    await context.answer_callback()
+    if state.get_current_screen(_user_id(context), _chat_id(context)) == state.BOOKING_HUB_SCREEN:
+        _clear_booking_state(context)
+    await show_home(context)
+
+
 async def handle_booking_back(context: RouterContext) -> None:
     """Navigate back inside booking without affecting other flows."""
 
@@ -808,6 +819,7 @@ async def handle_booking_back(context: RouterContext) -> None:
     current_screen = state.get_current_screen(_user_id(context), _chat_id(context))
     entry_mode = _entry_mode(context)
     if current_screen == state.BOOKING_HUB_SCREEN:
+        _clear_booking_state(context)
         await show_home(context)
         return
     if current_screen == state.BOOKING_CATEGORIES_SCREEN:
