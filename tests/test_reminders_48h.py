@@ -7,8 +7,12 @@ from max_barbershop_bot.services.notifications import (
     BOOKING_REMINDER_48H,
     BOOKING_REMINDER_2H,
     get_notification_history,
+    mark_notification_history_failed,
+    mark_notification_history_sent,
     mark_notification_history_skipped,
     reserve_notification_history,
+    NotificationDeliveryResult,
+    save_delivery_result,
 )
 from max_barbershop_bot.services.reminders import (
     BookingNotificationContext,
@@ -296,3 +300,121 @@ def test_settings_test_2h_sends_real_dev_message_and_logs_history(tmp_path, monk
     assert sender.sent[0][3].rows[0][0].text == "📅 Мои записи"
     assert _count_rows(db, "notification_history", BOOKING_REMINDER_2H) == 1
     assert _count_rows(db, "notification_delivery", BOOKING_REMINDER_2H) == 1
+
+
+def test_pr001_reserve_creates_one_pending_row_and_duplicate_uses_record_type_key(tmp_path) -> None:
+    db = tmp_path / "db.sqlite3"
+    init_database(str(db))
+
+    first_id = reserve_notification_history(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u1",
+        yclients_record_id="record-dup",
+        notification_type=BOOKING_REMINDER_48H,
+        scheduled_for="2026-07-04T12:00:00+03:00",
+    )
+    duplicate_for_other_user = reserve_notification_history(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u2",
+        yclients_record_id="record-dup",
+        notification_type=BOOKING_REMINDER_48H,
+        scheduled_for="2026-07-04T12:00:00+03:00",
+    )
+    row = get_notification_history(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u1",
+        yclients_record_id="record-dup",
+        notification_type=BOOKING_REMINDER_48H,
+    )
+
+    assert first_id is not None
+    assert duplicate_for_other_user is None
+    assert row is not None
+    assert row.status == "pending"
+
+
+def test_pr001_mark_sent_failed_skipped_blocked_and_rate_limited_statuses(tmp_path) -> None:
+    db = tmp_path / "db.sqlite3"
+    init_database(str(db))
+
+    sent_id = reserve_notification_history(str(db), platform=PLATFORM_MAX, platform_user_id="u1", yclients_record_id="sent", notification_type=BOOKING_REMINDER_48H)
+    failed_id = reserve_notification_history(str(db), platform=PLATFORM_MAX, platform_user_id="u1", yclients_record_id="failed", notification_type=BOOKING_REMINDER_48H)
+    blocked_id = reserve_notification_history(str(db), platform=PLATFORM_MAX, platform_user_id="u1", yclients_record_id="blocked", notification_type=BOOKING_REMINDER_48H)
+    rate_id = reserve_notification_history(str(db), platform=PLATFORM_MAX, platform_user_id="u1", yclients_record_id="rate", notification_type=BOOKING_REMINDER_48H)
+
+    sent = mark_notification_history_sent(str(db), history_id=sent_id, result=MaxSendResult(ok=True, status_code=200, message_id="m1", recipient_type="user", recipient_id="u1"))
+    failed = mark_notification_history_failed(str(db), history_id=failed_id, result=MaxSendResult(ok=False, status_code=500, error_code="server_error", error_message="server failed", message_id=None, recipient_type="user", recipient_id="u1"))
+    blocked = mark_notification_history_failed(str(db), history_id=blocked_id, result=MaxSendResult(ok=False, status_code=403, error_code="forbidden", error_message="bot blocked", message_id=None, recipient_type="user", recipient_id="u1", is_blocked=True))
+    rate = mark_notification_history_failed(str(db), history_id=rate_id, result=MaxSendResult(ok=False, status_code=429, error_code="rate_limit", error_message="too many requests", message_id=None, recipient_type="user", recipient_id="u1"))
+    skipped = mark_notification_history_skipped(str(db), platform=PLATFORM_MAX, platform_user_id="u1", yclients_record_id="skipped", notification_type=BOOKING_REMINDER_48H, scheduled_for=None, reason="disabled")
+
+    assert sent.status == "sent" and sent.sent_at
+    assert failed.status == "failed"
+    assert blocked.status == "blocked" and blocked.is_blocked
+    assert rate.status == "rate_limited" and rate.delivery_error_code == "rate_limit"
+    assert skipped.status == "skipped" and skipped.delivery_error_message == "disabled"
+
+
+def test_pr001_metadata_masking_prevents_phone_token_and_raw_payload_leaks(tmp_path) -> None:
+    db = tmp_path / "db.sqlite3"
+    init_database(str(db))
+
+    history_id = reserve_notification_history(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u1",
+        yclients_record_id="safe-meta",
+        notification_type=BOOKING_REMINDER_48H,
+        metadata={"phone": "+7 999 123-45-67", "token": "secret-token", "raw_payload": {"phone": "+79991234567"}, "trace_id": "trace-1"},
+    )
+    row = get_notification_history(str(db), platform=PLATFORM_MAX, platform_user_id="u1", yclients_record_id="safe-meta", notification_type=BOOKING_REMINDER_48H)
+    delivery_id = save_delivery_result(
+        str(db),
+        NotificationDeliveryResult(platform=PLATFORM_MAX, platform_user_id="u1", recipient_type="user", recipient_id="u1", status="failed", error_message="Bearer token abc", metadata={"client_phone": "+7 999 123-45-67", "trace_id": "trace-2", "raw_max_payload": {"secret": "x"}}),
+    )
+
+    assert history_id is not None and delivery_id is not None
+    stored = str(row.metadata)
+    with sqlite3.connect(db) as connection:
+        delivery_json, error_message = connection.execute("SELECT metadata_json, error_message FROM notification_delivery WHERE id=?", (delivery_id,)).fetchone()
+    combined = stored + str(delivery_json) + str(error_message)
+    assert "+7 999 123-45-67" not in combined
+    assert "79991234567" not in combined
+    assert "secret-token" not in combined
+    assert "raw_payload" not in combined
+    assert "raw_max_payload" not in combined
+    assert "***4567" in combined
+    assert "trace-1" in combined and "trace-2" in combined
+    assert "скрыто из соображений безопасности" in combined
+
+
+
+def test_pr001_history_root_detail_buttons_and_role_access_match_telegram_meaning() -> None:
+    from max_barbershop_bot.core.permissions import can_view_notification_history
+    from max_barbershop_bot.flows.notification_history import _ROOT_TEXT, format_notification_status_label
+    from max_barbershop_bot.ui.buttons import notification_history_detail_keyboard, notification_history_keyboard
+
+    root_keyboard = notification_history_keyboard([])
+    detail_keyboard = notification_history_detail_keyboard()
+    root_texts = [button.text for row in root_keyboard.rows for button in row]
+    detail_texts = [button.text for row in detail_keyboard.rows for button in row]
+
+    assert "📜 История уведомлений" in _ROOT_TEXT
+    assert "❌ Только ошибки" in root_texts
+    assert "🔄 Обновить" in root_texts
+    assert "⬅️ Назад" in root_texts
+    assert "🏠 Главное меню" in root_texts
+    assert "🔎 Диагностика" in detail_texts
+    assert "⬅️ Назад" in detail_texts
+    assert "🏠 Главное меню" in detail_texts
+    assert format_notification_status_label("sent") == "✅ Отправлено"
+    assert format_notification_status_label("failed") == "❌ Ошибка"
+    assert format_notification_status_label("blocked") == "🚫 Пользователь заблокировал бота"
+    assert format_notification_status_label("skipped_duplicate") == "⏭ Пропущено"
+    assert can_view_notification_history("developer")
+    assert can_view_notification_history("admin")
+    assert can_view_notification_history("manager")
+    assert not can_view_notification_history("user")

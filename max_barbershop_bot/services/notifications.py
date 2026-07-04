@@ -31,7 +31,7 @@ BOOKING_NOTIFICATION_TYPES = {
     BOOKING_REMINDER_6H,
     BOOKING_REMINDER_2H,
 }
-_ACTIVE_HISTORY_STATUSES = {"scheduled", "sending", "sent"}
+_ACTIVE_HISTORY_STATUSES = {"pending", "sent", "delivering"}
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ class NotificationDeliveryResult:
             message_type=message_type,
             recipient_type=result.recipient_type,
             recipient_id=result.recipient_id,
-            status="sent" if result.ok else "blocked" if result.is_blocked else "stopped" if result.is_stopped else "failed",
+            status="sent" if result.ok else "blocked" if result.is_blocked else "skipped" if result.is_stopped else "rate_limited" if result.status_code == 429 else "failed",
             status_code=result.status_code,
             error_code=result.error_code,
             error_message=result.error_message,
@@ -279,7 +279,7 @@ async def send_business_notification(
         message_type=notification_type,
         metadata={**dict(metadata or {}), "yclients_record_id": yclients_record_id},
     )
-    status = "sent" if result.ok else "blocked" if result.is_blocked else "stopped" if result.is_stopped else "failed"
+    status = "sent" if result.ok else "blocked" if result.is_blocked else "skipped" if result.is_stopped else "rate_limited" if result.status_code == 429 else "failed"
     updated = mark_notification_history_result(database_path, history_id=history_id, status=status, result=result)
     if result.is_blocked or result.is_stopped:
         _disable_user_notifications(database_path, platform=platform, platform_user_id=platform_user_id)
@@ -299,15 +299,25 @@ def reserve_notification_history(
     scheduled_for: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> int | None:
-    """Create a sending marker; return None when the unique key already exists."""
+    """Create a pending marker before send; return None for duplicate business key."""
 
     with closing(_connect(database_path)) as connection:
+        existing = connection.execute(
+            """
+            SELECT id FROM notification_history
+            WHERE platform = ? AND yclients_record_id = ? AND notification_type = ?
+            LIMIT 1
+            """,
+            (_required_text(platform, "platform"), _required_text(yclients_record_id, "yclients_record_id"), _required_text(notification_type, "notification_type")),
+        ).fetchone()
+        if existing is not None:
+            return None
         cursor = connection.execute(
             """
             INSERT OR IGNORE INTO notification_history (
                 platform, platform_user_id, max_user_id, chat_id, yclients_record_id,
                 yclients_client_id, notification_type, scheduled_for, status, attempts, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sending', 0, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)
             """,
             (
                 _required_text(platform, "platform"),
@@ -349,7 +359,7 @@ def mark_notification_history_result(
                 sent_at,
                 result.status_code,
                 result.error_code,
-                result.error_message,
+                _safe_error_text(result.error_message),
                 result.message_id,
                 max(1, result.attempts),
                 int(result.is_blocked),
@@ -360,6 +370,19 @@ def mark_notification_history_result(
         connection.commit()
         row = connection.execute("SELECT * FROM notification_history WHERE id = ?", (history_id,)).fetchone()
         return _row_to_history(row)
+
+
+def mark_notification_history_sent(database_path: str, *, history_id: int, result: MaxSendResult) -> NotificationHistoryRecord | None:
+    """Telegram-parity explicit mark sent helper."""
+
+    return mark_notification_history_result(database_path, history_id=history_id, status="sent", result=result)
+
+
+def mark_notification_history_failed(database_path: str, *, history_id: int, result: MaxSendResult) -> NotificationHistoryRecord | None:
+    """Telegram-parity explicit mark failed helper."""
+
+    status = "blocked" if result.is_blocked else "rate_limited" if result.status_code == 429 else "failed"
+    return mark_notification_history_result(database_path, history_id=history_id, status=status, result=result)
 
 
 def mark_notification_history_skipped(
@@ -389,7 +412,7 @@ def mark_notification_history_skipped(
                 _required_text(yclients_record_id, "yclients_record_id"),
                 _required_text(notification_type, "notification_type"),
                 _optional_text(scheduled_for),
-                reason[:240],
+                _safe_error_text(reason)[:240],
                 _dump_metadata(metadata or {}),
             ),
         )
@@ -457,7 +480,7 @@ def save_delivery_result(database_path: str, delivery: NotificationDeliveryResul
                 delivery.status,
                 delivery.status_code,
                 delivery.error_code,
-                delivery.error_message,
+                _safe_error_text(delivery.error_message),
                 max(1, delivery.attempts),
                 delivery.message_id,
                 int(delivery.is_blocked),
@@ -524,7 +547,46 @@ def _row_to_history(row: sqlite3.Row | None) -> NotificationHistoryRecord | None
 def _dump_metadata(metadata: Mapping[str, Any]) -> str | None:
     if not metadata:
         return None
-    return json.dumps(dict(metadata), ensure_ascii=False, sort_keys=True, default=str)
+    safe = _safe_metadata_dict(metadata)
+    if not safe:
+        return None
+    return json.dumps(safe, ensure_ascii=False, sort_keys=True, default=str)
+
+
+_SENSITIVE_METADATA_KEYS = ("token", "authorization", "bearer", "password", "secret", "payload", "raw", "phone")
+
+
+def _safe_metadata_dict(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, value in dict(metadata).items():
+        clean_key = str(key)
+        low_key = clean_key.lower()
+        if any(word in low_key for word in _SENSITIVE_METADATA_KEYS):
+            if "phone" in low_key:
+                masked = _mask_phone(value)
+                if masked:
+                    safe[clean_key] = masked
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            safe[clean_key] = _safe_error_text(value) if isinstance(value, str) else value
+    return safe
+
+
+def _mask_phone(value: object) -> str | None:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(digits) < 5:
+        return None
+    return f"***{digits[-4:]}"
+
+
+def _safe_error_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    clean = " ".join(str(value).split())
+    lowered = clean.lower()
+    if any(word in lowered for word in ("token", "authorization", "bearer", "password", "secret")):
+        return "скрыто из соображений безопасности"
+    return clean[:240]
 
 
 def _load_metadata(value: str | None) -> dict[str, Any]:
