@@ -73,6 +73,7 @@ class YClientsClient:
     _failure_window_seconds = 60.0
     _failure_threshold = 5
     _cooldown_seconds = 30.0
+    _rate_limit_cooldowns: dict[str, float] = {}
 
     def __init__(
         self,
@@ -136,6 +137,7 @@ class YClientsClient:
         self._ensure_available()
         method_upper = method.upper()
         path_with_query = self._build_path_with_query(path, params)
+        self._ensure_endpoint_not_rate_limited(path_with_query, method_upper)
         partner_token_present = bool(self._credentials.partner_token)
         user_token_present = bool(self._credentials.user_token)
         if not self._credentials.company_id or not partner_token_present or not user_token_present:
@@ -185,7 +187,14 @@ class YClientsClient:
 
                     if response.status in {429} or 500 <= response.status < 600:
                         self._record_failure(f"status_{response.status}")
-                        if attempt < self._retry.attempts:
+                        if response.status == 429:
+                            from .exceptions import extract_retry_after_seconds
+
+                            self._set_endpoint_rate_limit_cooldown(
+                                path_with_query,
+                                extract_retry_after_seconds(body_text) or 5,
+                            )
+                        if response.status != 429 and attempt < self._retry.attempts:
                             await asyncio.sleep(self._backoff(attempt))
                             continue
 
@@ -311,7 +320,13 @@ class YClientsClient:
         if status_code == 404:
             raise YClientsNotFoundError(message, **exception_kwargs)
         if status_code == 429:
-            raise YClientsRateLimitError(message, **exception_kwargs)
+            from .exceptions import extract_retry_after_seconds
+
+            raise YClientsRateLimitError(
+                message,
+                retry_after_seconds=extract_retry_after_seconds(response.body, response.response_snippet, message),
+                **exception_kwargs,
+            )
         if 500 <= status_code < 600:
             raise YClientsServerError(message, **exception_kwargs)
         raise YClientsServerError(f"Unexpected YClients status: {status_code}", **exception_kwargs)
@@ -328,6 +343,29 @@ class YClientsClient:
         if cls._cooldown_until and now >= cls._cooldown_until:
             cls._cooldown_until = 0.0
             logger.info("YClients cooldown recovered")
+
+    @classmethod
+    def _ensure_endpoint_not_rate_limited(cls, path_with_query: str, method: str) -> None:
+        now = time.monotonic()
+        endpoint = sanitize_yclients_endpoint(path_with_query) or path_with_query
+        expires_at = cls._rate_limit_cooldowns.get(endpoint)
+        if not expires_at:
+            return
+        if now >= expires_at:
+            cls._rate_limit_cooldowns.pop(endpoint, None)
+            return
+        raise YClientsRateLimitError(
+            "YClients rate limit cooldown is active",
+            retry_after_seconds=max(1, int(expires_at - now)),
+            method=method,
+            endpoint=endpoint,
+            status_code=429,
+        )
+
+    @classmethod
+    def _set_endpoint_rate_limit_cooldown(cls, path_with_query: str, retry_after_seconds: int) -> None:
+        endpoint = sanitize_yclients_endpoint(path_with_query) or path_with_query
+        cls._rate_limit_cooldowns[endpoint] = time.monotonic() + max(5, min(int(retry_after_seconds or 5), 60))
 
     @classmethod
     def _record_failure(cls, reason: str) -> None:

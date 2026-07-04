@@ -36,9 +36,11 @@ logger = logging.getLogger(__name__)
 
 _MY_BOOKINGS_PAGE_SIZE = 200
 _MY_BOOKINGS_MAX_PAGES = 10
+_RATE_LIMIT_COOLDOWNS: dict[tuple[str, str, str, str], float] = {}
 
 MY_BOOKINGS_NO_PROFILE_TEXT = "Не получилось найти ваши данные для записей 🙏\n\nНажмите /start и пройдите регистрацию заново."
 MY_BOOKINGS_LOAD_ERROR_TEXT = "Не удалось загрузить ваши записи 🙏\n\nПожалуйста, попробуйте позже."
+MY_BOOKINGS_RATE_LIMIT_TEXT = "YClients временно ограничил количество запросов 🙏\n\nПопробуйте ещё раз через пару минут."
 MY_BOOKINGS_EMPTY_TEXT = "Пока у вас нет записей 🙏"
 MY_BOOKINGS_TITLE_TEXT = "📅 Ваши записи"
 MY_BOOKING_NOT_FOUND_TEXT = "Эта запись уже неактуальна 🙏\n\nОткройте список записей заново."
@@ -226,6 +228,19 @@ class MyBookingsService:
         now = datetime.now(_zoneinfo(timezone_name))
         started_at = time.monotonic()
         endpoint_name = "list_user_bookings"
+        request_mode = _request_mode(yclients_client_id, known_phones)
+        cooldown_key = (endpoint_name, str(settings.company_id), str(platform_user_id or "n/a"), request_mode)
+        if _rate_limit_cooldown_active(cooldown_key):
+            diagnostic = _rate_limit_diagnostic(
+                function="MyBookingsService.get_bookings_for_user",
+                max_user_id=platform_user_id,
+                user=user,
+                endpoint_name=endpoint_name,
+                request_mode=request_mode,
+                retry_after_seconds=max(1, int(_RATE_LIMIT_COOLDOWNS[cooldown_key] - time.monotonic())),
+                duration_ms=int((time.monotonic() - started_at) * 1000),
+            )
+            raise MyBookingsLoadError(MY_BOOKINGS_RATE_LIMIT_TEXT, diagnostic=diagnostic)
         try:
             async with build_yclients_client_from_active_settings(settings) as client:
                 yclients = YClientsServiceLayer(client, company_id=settings.company_id)
@@ -242,6 +257,19 @@ class MyBookingsService:
                 )
         except YClientsError as exc:
             duration_ms = int((time.monotonic() - started_at) * 1000)
+            if isinstance(exc, YClientsRateLimitError):
+                _set_rate_limit_cooldown(cooldown_key, exc.retry_after_seconds)
+                diagnostic = _rate_limit_diagnostic(
+                    function="MyBookingsService.get_bookings_for_user",
+                    max_user_id=platform_user_id,
+                    user=user,
+                    endpoint_name=endpoint_name,
+                    request_mode=request_mode,
+                    retry_after_seconds=exc.retry_after_seconds,
+                    duration_ms=duration_ms,
+                )
+                logger.warning("MAX YClients rate limit diagnostic: %s", diagnostic)
+                raise MyBookingsLoadError(MY_BOOKINGS_RATE_LIMIT_TEXT, diagnostic=diagnostic) from exc
             diagnostic = _runtime_error_diagnostic(
                 function="MyBookingsService.get_bookings_for_user",
                 max_user_id=platform_user_id,
@@ -249,7 +277,7 @@ class MyBookingsService:
                 user=user,
                 company_id_present=bool(settings and settings.company_id),
                 endpoint_name=endpoint_name,
-                request_mode=_request_mode(yclients_client_id, known_phones),
+                request_mode=request_mode,
                 records_count=0,
                 parsed_records_count=0,
                 active_records_count=0,
@@ -1375,7 +1403,10 @@ async def _fetch_all_relevant_records(
                 request_phone=None,
             )
         )
-    for known_phone in sorted(phones):
+    # Prefer the scoped client_id lookup. Phone fallback is used only when it is needed,
+    # so a user with both identifiers does not cause two immediate equivalent /records calls.
+    phones_to_try = sorted(phones) if (not yclients_client_id or not rows) else []
+    for known_phone in phones_to_try:
         rows.extend(
             _mark_rows_request_context(
                 await _fetch_all_client_records_page_set(
@@ -1907,4 +1938,35 @@ def _runtime_error_diagnostic(
         "error_message_short": str(exc)[:180],
         "traceback_last_5_lines": "".join(tb_lines[-5:])[:900],
         "duration_ms": duration_ms,
+    }
+
+
+def _rate_limit_cooldown_active(key: tuple[str, str, str, str]) -> bool:
+    expires_at = _RATE_LIMIT_COOLDOWNS.get(key)
+    if not expires_at:
+        return False
+    if time.monotonic() >= expires_at:
+        _RATE_LIMIT_COOLDOWNS.pop(key, None)
+        return False
+    return True
+
+
+def _set_rate_limit_cooldown(key: tuple[str, str, str, str], retry_after_seconds: int | None) -> None:
+    delay = max(5, min(int(retry_after_seconds or 5), 60))
+    _RATE_LIMIT_COOLDOWNS[key] = time.monotonic() + delay
+
+
+def _rate_limit_diagnostic(*, function: str, max_user_id: str | None, user: User | None, endpoint_name: str, request_mode: str, retry_after_seconds: int, duration_ms: int) -> dict[str, Any]:
+    return {
+        "function": function,
+        "endpoint_name": endpoint_name,
+        "request_mode": request_mode,
+        "retry_after_seconds": retry_after_seconds,
+        "max_user_id": max_user_id or "n/a",
+        "has_yclients_client_id": bool(user and user.yclients_client_id),
+        "has_phone": bool(user and user.phone),
+        "action": "my_bookings_open",
+        "duration_ms": duration_ms,
+        "error_type": "YClientsRateLimitError",
+        "error_category": "rate_limit",
     }

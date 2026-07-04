@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+
+_SAFE_RETRY_AFTER_FALLBACK_SECONDS = 5
+_RETRY_AFTER_RE = re.compile(r"(?i)(?:retry[-_ ]?after|повторить[^0-9]{0,40}|через)\D*(\d{1,5})")
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -146,8 +149,60 @@ class YClientsNotFoundError(YClientsError):
     """404 not found error."""
 
 
+def extract_retry_after_seconds(*values: Any) -> int | None:
+    """Extract a safe retry-after value from sanitized headers/body/message."""
+
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            nested = extract_retry_after_seconds(
+                value.get("retry_after"),
+                value.get("retry-after"),
+                value.get("Retry-After"),
+                value.get("retry_after_seconds"),
+                value.get("message"),
+                value.get("detail"),
+                value.get("error"),
+            )
+            if nested is not None:
+                return nested
+            continue
+        text = str(value)
+        if text.strip().isdigit():
+            seconds = int(text.strip())
+            return seconds if seconds > 0 else _SAFE_RETRY_AFTER_FALLBACK_SECONDS
+        match = _RETRY_AFTER_RE.search(text)
+        if match:
+            seconds = int(match.group(1))
+            return seconds if seconds > 0 else _SAFE_RETRY_AFTER_FALLBACK_SECONDS
+    return None
+
+
 class YClientsRateLimitError(YClientsError):
-    """429 request throttling error."""
+    """429 request throttling error with structured retry metadata."""
+
+    def __init__(self, message: str, *, retry_after_seconds: int | None = None, endpoint_name: str | None = None, **kwargs: Any) -> None:
+        retry_after = retry_after_seconds or extract_retry_after_seconds(message, kwargs.get("response_snippet"))
+        super().__init__(message or "YClients rate limit", **kwargs)
+        self.retry_after_seconds = retry_after or _SAFE_RETRY_AFTER_FALLBACK_SECONDS
+        self.endpoint_name = endpoint_name or _endpoint_name_from_path(getattr(self, "endpoint", None))
+        self.safe_short_message = "YClients rate limit"
+
+
+def _endpoint_name_from_path(endpoint: str | None) -> str | None:
+    if not endpoint:
+        return None
+    text = str(endpoint)
+    if "/records" in text or "/record/" in text:
+        return "list_user_bookings"
+    if "/services" in text or "service_categories" in text:
+        return "booking_catalog"
+    if "/staff" in text:
+        return "booking_staff"
+    if "book_times" in text:
+        return "booking_slots"
+    return None
 
 
 class YClientsServerError(YClientsError):
