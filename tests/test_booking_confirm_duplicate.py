@@ -19,6 +19,7 @@ class _User:
     chat_id: str = "100"
     yclients_client_id: str | None = "client1"
     notifications_enabled: bool = False
+    phone: str | None = "+79991234567"
     first_name: str | None = "Иван"
     last_name: str | None = "Иванов"
     display_name: str | None = "Иван Иванов"
@@ -42,6 +43,7 @@ class _Sender:
 class _FakeBookingService:
     create_calls = 0
     fail = False
+    revalidate_ok = True
 
     def __init__(self, *args, **kwargs) -> None:
         pass
@@ -50,7 +52,7 @@ class _FakeBookingService:
         return "Europe/Moscow"
 
     async def revalidate_selected_slot(self, **kwargs) -> bool:
-        return True
+        return type(self).revalidate_ok
 
     async def create_booking(self, **kwargs) -> CreatedBooking:
         type(self).create_calls += 1
@@ -91,6 +93,7 @@ def _prepare(monkeypatch):
         state.set_state_data_value("u1", "100", key, value)
     _FakeBookingService.create_calls = 0
     _FakeBookingService.fail = False
+    _FakeBookingService.revalidate_ok = True
     monkeypatch.setattr(booking, "BookingService", _FakeBookingService)
     monkeypatch.setattr(booking, "_current_user", lambda context: _User())
     monkeypatch.setattr(booking, "_save_attribution_safely", lambda **kwargs: None)
@@ -150,3 +153,56 @@ def test_booking_confirm_already_created_stale_callback_does_not_create(monkeypa
 
     assert _FakeBookingService.create_calls == 0
     assert sender.texts == []
+
+
+def test_booking_confirm_final_revalidation_failure_blocks_create_and_attribution(monkeypatch):
+    _prepare(monkeypatch)
+    sender = _Sender()
+    attribution_calls: list[dict] = []
+    slots_reopened: list[str] = []
+    _FakeBookingService.revalidate_ok = False
+    monkeypatch.setattr(booking, "_save_attribution_safely", lambda **kwargs: attribution_calls.append(kwargs))
+
+    async def _open_slots(context, booking_date, **kwargs):
+        slots_reopened.append(booking_date)
+
+    monkeypatch.setattr(booking, "_open_booking_slots", _open_slots)
+
+    asyncio.run(booking.handle_booking_confirm(_context(sender)))
+
+    assert _FakeBookingService.create_calls == 0
+    assert attribution_calls == []
+    assert "Это время уже недоступно" in "\n".join(sender.texts)
+    assert slots_reopened == ["2026-07-05"]
+
+
+def test_successful_booking_completed_marker_does_not_block_future_slot_selection(monkeypatch):
+    _prepare(monkeypatch)
+    sender = _Sender()
+    state.set_current_screen("u1", "100", state.BOOKING_SLOTS_SCREEN)
+    state.set_state_data_value("u1", "100", booking._BOOKING_COMPLETED_RECORD_ID_STATE_KEY, "rec-1")
+    state.set_state_data_value("u1", "100", booking._SLOT_MAP_STATE_KEY, {"slot:0": "11:00"})
+    state.set_state_data_value(
+        "u1",
+        "100",
+        booking._SLOTS_STATE_KEY,
+        [booking.BookingSlotItem(time="11:00", datetime_iso="2026-07-06T11:00:00+03:00")],
+    )
+    context = RouterContext(
+        event=NormalizedEvent(
+            update_type="message_callback",
+            platform_user_id="u1",
+            max_user_id="u1",
+            chat_id="100",
+            text=None,
+            callback_payload="slot:0",
+            callback_id="cb-slot",
+        ),
+        sender=sender,
+    )
+
+    asyncio.run(booking.handle_booking_slot(context))
+
+    assert state.get_state_data_value("u1", "100", booking._BOOKING_COMPLETED_RECORD_ID_STATE_KEY) is None
+    assert state.get_state_data_value("u1", "100", booking._SELECTED_SLOT_TIME_STATE_KEY) == "11:00"
+    assert state.get_current_screen("u1", "100") == state.BOOKING_PHONE_SCREEN

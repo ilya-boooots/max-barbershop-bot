@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import asyncio
+import logging
 
 import pytest
 
@@ -170,6 +171,28 @@ def test_successful_create_saves_platform_attribution(tmp_path, monkeypatch) -> 
     assert record.created_at
 
 
+def test_duplicate_attribution_save_creates_one_row_and_enriches_metadata(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "bot.sqlite3"
+    init_database(str(db_path))
+    monkeypatch.setattr(booking_flow, "_database_path", lambda: str(db_path))
+
+    for source in ("booking_created_from_max", "duplicate_confirm_retry"):
+        booking_flow._save_attribution_safely(
+            platform_user_id="max-user-1",
+            yclients_record_id="record-1",
+            yclients_client_id="client-1",
+            marker="Клиент записался из MAX бота 05.07.2026 в 10:30",
+            booking_phone="+79991234567",
+            source=source,
+        )
+
+    repository = PlatformAttributionRepository(str(db_path))
+    records = repository.list_by_platform_user_id("max-user-1")
+    assert len(records) == 1
+    assert records[0].yclients_record_id == "record-1"
+    assert records[0].source == "duplicate_confirm_retry"
+
+
 def test_missing_record_id_does_not_create_fake_attribution(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "bot.sqlite3"
     init_database(str(db_path))
@@ -194,3 +217,43 @@ def test_failed_create_path_does_not_save_attribution(monkeypatch) -> None:
     # In the booking flow attribution is called only after create_booking returns a record id.
     # A failed create never reaches _save_attribution_safely, so no repository call is made.
     assert calls == []
+
+
+def test_booking_error_diagnostics_do_not_log_token_raw_payload_or_full_phone(caplog) -> None:
+    diagnostic = {
+        "trace_id": "trace-1",
+        "error_category": "server",
+        "error_class": "YClientsError",
+        "http_status": 500,
+        "endpoint_path": "/api/v1/book_record/company",
+        "method": "POST",
+        "safe_response_snippet": "masked response",
+    }
+    error = booking_flow.BookingServiceError(
+        "Не удалось создать запись 🙏",
+        diagnostic={
+            **diagnostic,
+            "token": "secret-token",
+            "raw_payload": {"phone": "+79991234567"},
+            "phone": "+79991234567",
+        },
+    )
+
+    class _Context:
+        event = type(
+            "_Event",
+            (),
+            {"platform_user_id": "max-user-1", "chat_id": "chat-1"},
+        )()
+
+        async def send_text(self, text, keyboard=None, attachments=None):
+            return None
+
+    caplog.set_level(logging.WARNING)
+    asyncio.run(booking_flow._send_booking_service_error(_Context(), error, operation="create booking"))
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+
+    assert "secret-token" not in logs
+    assert "raw_payload" not in logs
+    assert "+79991234567" not in logs
+    assert "masked response" in logs
