@@ -120,12 +120,12 @@ def render_booking_notification_text(context: BookingNotificationContext, timezo
     dt_local = _ensure_timezone(context.booking_datetime, branch_timezone)
     date_text = dt_local.strftime("%d.%m.%Y")
     time_text = dt_local.strftime("%H:%M")
-    service_name = context.service_name or "услуга"
     master_name = context.master_name or "ваш мастер"
     client_name = _first_name(context.client_name) or "Здравствуйте"
     date_label = _date_label_for(dt_local, datetime.now(branch_timezone))
 
     if context.notification_type == BOOKING_CONFIRMATION_IMMEDIATE:
+        service_name = context.service_name or "услуга"
         return (
             "✅ Готово! Вы записаны 💈\n\n"
             f"Услуга: {service_name}\n"
@@ -134,6 +134,7 @@ def render_booking_notification_text(context: BookingNotificationContext, timezo
             f"Время: {time_text}"
         )
     if context.notification_type == BOOKING_REMINDER_48H:
+        service_name = context.service_name or "услуга"
         date_fragment = f"{date_label} ({date_text})" if date_label else date_text
         return (
             f"{client_name}, здравствуйте! {master_name} ждёт вас {date_fragment} "
@@ -141,6 +142,7 @@ def render_booking_notification_text(context: BookingNotificationContext, timezo
             "Подтвердите, пожалуйста, запись 👇"
         )
     if context.notification_type == BOOKING_REMINDER_2H:
+        service_name = context.service_name or "услугу"
         lines = [
             f"{client_name}, вы записаны на услугу «{service_name}», ждём вас {date_text} к {time_text}.",
             f"Ваш мастер: {master_name}",

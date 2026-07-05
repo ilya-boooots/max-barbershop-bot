@@ -22,6 +22,7 @@ from max_barbershop_bot.services.reminders import (
     _record_is_active,
     build_reminder_schedule,
     render_booking_notification_text,
+    send_booking_notification,
 )
 
 
@@ -219,6 +220,59 @@ def test_2h_text_and_buttons_match_telegram_reference_meaning() -> None:
     assert keyboard.rows[1][0].text == "🏠 Главное меню"
 
 
+def test_2h_empty_service_fallback_matches_telegram_template() -> None:
+    tz = ZoneInfo("Europe/Moscow")
+    context = BookingNotificationContext(
+        platform_user_id="u1",
+        yclients_record_id="r-empty-service",
+        notification_type=BOOKING_REMINDER_2H,
+        booking_datetime=datetime(2026, 7, 4, 21, 0, tzinfo=tz),
+        service_name="",
+        master_name="",
+        client_name="",
+    )
+
+    text = render_booking_notification_text(context, "Europe/Moscow")
+
+    assert "Здравствуйте, вы записаны на услугу «услугу», ждём вас 04.07.2026 к 21:00." in text
+    assert "Ваш мастер: ваш мастер" in text
+
+
+def test_2h_inside_due_window_is_selected_and_outside_is_not_selected() -> None:
+    tz = ZoneInfo("Europe/Moscow")
+    booking = datetime(2026, 7, 4, 21, 0, tzinfo=tz)
+    inside_now = datetime(2026, 7, 4, 19, 5, tzinfo=tz)
+    outside_now = datetime(2026, 7, 4, 18, 55, tzinfo=tz)
+
+    inside_scheduled = build_reminder_schedule(booking, "Europe/Moscow", now=inside_now)[BOOKING_REMINDER_2H]
+    outside_scheduled = build_reminder_schedule(booking, "Europe/Moscow", now=outside_now)[BOOKING_REMINDER_2H]
+
+    assert inside_scheduled <= inside_now < booking
+    assert not (outside_scheduled <= outside_now < booking)
+
+
+def test_2h_past_appointment_is_not_scheduled() -> None:
+    tz = ZoneInfo("Europe/Moscow")
+    now = datetime(2026, 7, 4, 21, 1, tzinfo=tz)
+    booking = datetime(2026, 7, 4, 21, 0, tzinfo=tz)
+
+    assert BOOKING_REMINDER_2H not in build_reminder_schedule(booking, "Europe/Moscow", now=now)
+
+
+def test_deleted_inactive_records_are_not_active_for_2h_skip_rules() -> None:
+    assert not _record_is_active({"deleted": True})
+    assert not _record_is_active({"is_deleted": "1"})
+    assert not _record_is_active({"status": "deleted"})
+
+
+def test_2h_cancelled_attendance_records_are_skipped_like_telegram() -> None:
+    assert not _record_is_active({"attendance": "-1"})
+    assert not _record_is_active({"visit_attendance": "-1"})
+    assert not _record_is_active({"attendance": "1"})
+    assert not _record_is_active({"visit_attendance": "1"})
+    assert not _record_is_active({"status": "cancelled"})
+
+
 import sqlite3
 
 import max_barbershop_bot.flows.settings as settings_flow
@@ -239,6 +293,20 @@ class FakeSender:
     async def send_to_chat(self, chat_id, text, *, keyboard=None, attachments=None, format=None, metadata=None):
         self.sent.append(("chat", str(chat_id), text, keyboard))
         return MaxSendResult(ok=True, status_code=200, message_id="msg-chat", recipient_type="chat", recipient_id=str(chat_id))
+
+
+class FailingSender(FakeSender):
+    async def send_to_chat(self, chat_id, text, *, keyboard=None, attachments=None, format=None, metadata=None):
+        self.sent.append(("chat", str(chat_id), text, keyboard))
+        return MaxSendResult(
+            ok=False,
+            status_code=500,
+            error_code="server_error",
+            error_message="send failed",
+            message_id=None,
+            recipient_type="chat",
+            recipient_id=str(chat_id),
+        )
 
 
 def _test_context(sender: FakeSender) -> RouterContext:
@@ -300,6 +368,70 @@ def test_settings_test_2h_sends_real_dev_message_and_logs_history(tmp_path, monk
     assert sender.sent[0][3].rows[0][0].text == "📅 Мои записи"
     assert _count_rows(db, "notification_history", BOOKING_REMINDER_2H) == 1
     assert _count_rows(db, "notification_delivery", BOOKING_REMINDER_2H) == 1
+
+
+def test_2h_duplicate_disabled_success_and_failed_history_behaviour(tmp_path) -> None:
+    import asyncio
+
+    db = tmp_path / "db.sqlite3"
+    init_database(str(db))
+    tz = ZoneInfo("Europe/Moscow")
+    context = BookingNotificationContext(
+        platform_user_id="u1",
+        max_user_id="u1",
+        chat_id="c1",
+        yclients_record_id="r-2h-history",
+        notification_type=BOOKING_REMINDER_2H,
+        booking_datetime=datetime(2026, 7, 4, 21, 0, tzinfo=tz),
+        service_name="МУЖСКАЯ СТРИЖКА",
+        master_name="Рената Пономарёва",
+        client_name="Илья",
+        scheduled_for=datetime(2026, 7, 4, 19, 0, tzinfo=tz),
+    )
+
+    first = asyncio.run(send_booking_notification(FakeSender(), database_path=str(db), context=context, timezone_name="Europe/Moscow"))
+    duplicate_sender = FakeSender()
+    duplicate = asyncio.run(send_booking_notification(duplicate_sender, database_path=str(db), context=context, timezone_name="Europe/Moscow"))
+
+    assert first is not None and first.status == "sent"
+    assert duplicate is not None and duplicate.id == first.id
+    assert duplicate_sender.sent == []
+    assert _count_rows(db, "notification_history", BOOKING_REMINDER_2H) == 1
+    assert _count_rows(db, "notification_delivery", BOOKING_REMINDER_2H) == 1
+
+    failed_context = BookingNotificationContext(
+        platform_user_id="u2",
+        max_user_id="u2",
+        chat_id="c2",
+        yclients_record_id="r-2h-failed",
+        notification_type=BOOKING_REMINDER_2H,
+        booking_datetime=datetime(2026, 7, 4, 21, 0, tzinfo=tz),
+        service_name="МУЖСКАЯ СТРИЖКА",
+        master_name="Рената Пономарёва",
+        client_name="Илья",
+        scheduled_for=datetime(2026, 7, 4, 19, 0, tzinfo=tz),
+    )
+    failed = asyncio.run(send_booking_notification(FailingSender(), database_path=str(db), context=failed_context, timezone_name="Europe/Moscow"))
+
+    assert failed is not None and failed.status == "failed"
+
+    mark_notification_history_skipped(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u3",
+        yclients_record_id="r-2h-disabled",
+        notification_type=BOOKING_REMINDER_2H,
+        scheduled_for=None,
+        reason="notifications_disabled",
+    )
+    assert reserve_notification_history(
+        str(db),
+        platform=PLATFORM_MAX,
+        platform_user_id="u3",
+        yclients_record_id="r-2h-disabled",
+        notification_type=BOOKING_REMINDER_2H,
+        scheduled_for="2026-07-04T19:00:00+03:00",
+    ) is None
 
 
 def test_pr001_reserve_creates_one_pending_row_and_duplicate_uses_record_type_key(tmp_path) -> None:
