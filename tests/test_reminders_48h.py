@@ -22,6 +22,7 @@ from max_barbershop_bot.services.reminders import (
     _record_is_active,
     build_reminder_schedule,
     render_booking_notification_text,
+    send_booking_notification,
 )
 
 
@@ -178,7 +179,7 @@ def test_48h_text_and_buttons_match_telegram_reference_meaning() -> None:
         platform_user_id="u1",
         yclients_record_id="r1",
         notification_type=BOOKING_REMINDER_48H,
-        booking_datetime=datetime.now(tz) + timedelta(days=2),
+        booking_datetime=datetime.now(tz).replace(hour=21, minute=0, second=0, microsecond=0) + timedelta(days=2),
         service_name="МУЖСКАЯ СТРИЖКА",
         master_name="Рената Пономарёва",
         client_name="Илья Иванов",
@@ -189,10 +190,13 @@ def test_48h_text_and_buttons_match_telegram_reference_meaning() -> None:
 
     assert 'Илья, здравствуйте! Рената Пономарёва ждёт вас' in text
     assert 'на услугу "МУЖСКАЯ СТРИЖКА"' in text
+    assert "к 21:00" in text
     assert "Подтвердите, пожалуйста, запись 👇" in text
     assert keyboard is not None
     assert keyboard.rows[0][0].text == "✅ Да, запись в силе"
+    assert keyboard.rows[0][0].payload == "brc:y:r1"
     assert keyboard.rows[1][0].text == "❌ Нет, отменить или перенести"
+    assert keyboard.rows[1][0].payload == "brc:n:r1"
 
 
 def test_2h_text_and_buttons_match_telegram_reference_meaning() -> None:
@@ -284,6 +288,92 @@ def test_settings_test_48h_sends_real_dev_message_and_logs_history(tmp_path, mon
     assert sender.sent and sender.sent[0][0] == "chat"
     assert "Подтвердите, пожалуйста, запись 👇" in sender.sent[0][2]
     assert sender.sent[0][3].rows[0][0].text == "✅ Да, запись в силе"
+    assert _count_rows(db, "notification_history", BOOKING_REMINDER_48H) == 1
+    assert _count_rows(db, "notification_delivery", BOOKING_REMINDER_48H) == 1
+
+
+def test_48h_successful_send_creates_history_and_delivery(tmp_path) -> None:
+    import asyncio
+
+    db = tmp_path / "db.sqlite3"
+    init_database(str(db))
+    sender = FakeSender()
+    context = BookingNotificationContext(
+        platform_user_id="100",
+        max_user_id="100",
+        chat_id="200",
+        yclients_record_id="record-success-48h",
+        yclients_client_id="client-1",
+        notification_type=BOOKING_REMINDER_48H,
+        booking_datetime=datetime(2026, 7, 7, 21, 0, tzinfo=ZoneInfo("Europe/Moscow")),
+        service_name="МУЖСКАЯ СТРИЖКА",
+        master_name="Рената Пономарёва",
+        client_name="Илья Иванов",
+        scheduled_for=datetime(2026, 7, 5, 21, 0, tzinfo=ZoneInfo("Europe/Moscow")),
+    )
+
+    row = asyncio.run(
+        send_booking_notification(
+            sender,
+            database_path=str(db),
+            context=context,
+            timezone_name="Europe/Moscow",
+            keyboard=_keyboard_for_reminder(context),
+        )
+    )
+
+    assert row is not None
+    assert row.status == "sent"
+    assert row.message_id == "msg-chat"
+    assert _count_rows(db, "notification_history", BOOKING_REMINDER_48H) == 1
+    assert _count_rows(db, "notification_delivery", BOOKING_REMINDER_48H) == 1
+
+
+def test_48h_failed_send_creates_failed_history_and_delivery(tmp_path) -> None:
+    import asyncio
+
+    class FailingSender(FakeSender):
+        async def send_to_chat(self, chat_id, text, *, keyboard=None, attachments=None, format=None, metadata=None):
+            self.sent.append(("chat", str(chat_id), text, keyboard))
+            return MaxSendResult(
+                ok=False,
+                status_code=500,
+                error_code="server_error",
+                error_message="server failed",
+                message_id=None,
+                recipient_type="chat",
+                recipient_id=str(chat_id),
+            )
+
+    db = tmp_path / "db.sqlite3"
+    init_database(str(db))
+    sender = FailingSender()
+    context = BookingNotificationContext(
+        platform_user_id="100",
+        max_user_id="100",
+        chat_id="200",
+        yclients_record_id="record-failed-48h",
+        notification_type=BOOKING_REMINDER_48H,
+        booking_datetime=datetime(2026, 7, 7, 21, 0, tzinfo=ZoneInfo("Europe/Moscow")),
+        service_name="МУЖСКАЯ СТРИЖКА",
+        master_name="Рената Пономарёва",
+        client_name="Илья Иванов",
+        scheduled_for=datetime(2026, 7, 5, 21, 0, tzinfo=ZoneInfo("Europe/Moscow")),
+    )
+
+    row = asyncio.run(
+        send_booking_notification(
+            sender,
+            database_path=str(db),
+            context=context,
+            timezone_name="Europe/Moscow",
+            keyboard=_keyboard_for_reminder(context),
+        )
+    )
+
+    assert row is not None
+    assert row.status == "failed"
+    assert row.delivery_error_code == "server_error"
     assert _count_rows(db, "notification_history", BOOKING_REMINDER_48H) == 1
     assert _count_rows(db, "notification_delivery", BOOKING_REMINDER_48H) == 1
 
