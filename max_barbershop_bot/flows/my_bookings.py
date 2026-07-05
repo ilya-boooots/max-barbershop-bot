@@ -910,8 +910,8 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
     if not rendered_split.upcoming:
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKINGS_EMPTY_SCREEN)
         await context.send_text(
-            "📅 Ваши записи\n\nПока у вас нет активных записей 🙏",
-            keyboard=my_bookings_empty_keyboard(show_history=bool(rendered_split.past)),
+            MY_BOOKINGS_EMPTY_TEXT,
+            keyboard=my_bookings_empty_keyboard(),
         )
         return
     else:
@@ -924,7 +924,6 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
             nearest_booking,
             timezone_name=result.branch_timezone,
             title="📅 Моя ближайшая запись",
-            include_status=False,
         ),
         keyboard=my_booking_entry_keyboard(
             can_cancel=is_booking_cancelable(nearest_booking, timezone_name=result.branch_timezone),
