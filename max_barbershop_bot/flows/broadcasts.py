@@ -109,6 +109,7 @@ _BROADCAST_RECIPIENTS_KEY = "broadcast_recipients"
 _BROADCAST_ESTIMATE_KEY = "broadcast_omnichannel_estimate"
 _BROADCAST_IN_PROGRESS_KEY = "broadcast_in_progress"
 _BROADCAST_SEND_TOKEN_KEY = "broadcast_send_token"
+_BROADCAST_PREVIEW_TOKEN_KEY = "broadcast_preview_token"
 _BROADCAST_SKIPPED_DISABLED_KEY = "broadcast_skipped_disabled"
 _BROADCAST_SKIPPED_MISSING_KEY = "broadcast_skipped_missing"
 _BROADCAST_RETURN_SCREEN_KEY = "broadcast_return_screen"
@@ -222,9 +223,6 @@ async def handle_text_input(context: RouterContext) -> None:
     if _broadcast_audience(context).key == SELF_AUDIENCE.key:
         await _select_audience(context, SELF_AUDIENCE)
         return
-    if _broadcast_recipients(context):
-        await show_segment_broadcast_confirm(context)
-        return
     await _show_preview(context)
 
 
@@ -241,8 +239,15 @@ async def handle_preview_next(context: RouterContext) -> None:
     if not text:
         await _open_text_step(context)
         return
+    if state.get_current_screen(_user_id(context), _chat_id(context)) != state.BROADCAST_ONE_TIME_PREVIEW_SCREEN or not state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_PREVIEW_TOKEN_KEY):
+        await _show_stale_broadcast(context)
+        return
     await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
+    recipients = _broadcast_recipients(context)
+    if recipients:
+        await context.send_text(build_broadcast_confirm_text(audience_label=_broadcast_audience(context).label, recipient_count=len(recipients), text=text, attachment_type=_broadcast_attachment_type(context)), keyboard=broadcast_confirm_keyboard(can_send=True))
+        return
     estimate = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY)
     if estimate is not None:
         await context.send_text(_format_omnichannel_confirm(estimate), keyboard=broadcast_confirm_keyboard(can_send=estimate.total_deliveries > 0))
@@ -492,7 +497,7 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_MISSING_KEY, skipped_missing)
         await _answer_callback_if_needed(context)
         _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
-        await context.send_text(build_broadcast_confirm_text(audience_label=audience.label, recipient_count=len(recipients), text=text, attachment_type=_broadcast_attachment_type(context)), keyboard=broadcast_confirm_keyboard(can_send=bool(recipients)))
+        await _show_preview(context)
         return
 
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience.key)
@@ -515,8 +520,7 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience.label)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY, estimate)
     await _answer_callback_if_needed(context)
-    _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
-    await context.send_text(_format_omnichannel_confirm(estimate), keyboard=broadcast_confirm_keyboard(can_send=estimate.total_deliveries > 0))
+    await _show_preview(context)
 
 
 async def open_segment_broadcast_text(
@@ -552,7 +556,6 @@ async def show_segment_broadcast_confirm(context: RouterContext) -> None:
         await _open_text_step(context)
         return
     label = _broadcast_audience(context).label
-    _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
     if not recipients:
         await context.send_text(BROADCAST_NO_RECIPIENTS_TEXT, keyboard=broadcast_confirm_keyboard(can_send=False))
         return
@@ -576,6 +579,9 @@ async def handle_confirm_send(context: RouterContext) -> None:
     recipients = _broadcast_recipients(context)
     if not text:
         await _open_text_step(context)
+        return
+    if state.get_current_screen(_user_id(context), _chat_id(context)) != state.BROADCAST_ONE_TIME_CONFIRM_SCREEN or not state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_PREVIEW_TOKEN_KEY):
+        await _show_stale_broadcast(context)
         return
     audience = _broadcast_audience(context)
     is_omnichannel = audience.key != SELF_AUDIENCE.key
@@ -678,9 +684,11 @@ async def handle_broadcast_back(context: RouterContext) -> None:
     await _answer_callback_if_needed(context)
     current = state.get_current_screen(_user_id(context), _chat_id(context))
     if current == state.BROADCAST_ONE_TIME_TEXT_SCREEN:
-        state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_MENU_SCREEN)
-        await context.send_text(BROADCAST_MENU_TEXT, keyboard=broadcast_menu_keyboard())
+        _clear_broadcast_state(context)
+        state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
+        await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
     elif current == state.BROADCAST_ONE_TIME_PREVIEW_SCREEN:
+        state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_PREVIEW_TOKEN_KEY, None)
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_TEXT_SCREEN)
         await context.send_text(BROADCAST_TEXT_INPUT_TEXT, keyboard=broadcast_text_keyboard())
     elif current == state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN:
@@ -718,7 +726,15 @@ async def _show_preview(context: RouterContext, *, push_current: bool = True) ->
         _push_current_screen(context, state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
-    preview_text = build_broadcast_preview(_broadcast_text(context) or "", _broadcast_attachment_type(context))
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_PREVIEW_TOKEN_KEY, uuid4().hex)
+    preview_text = _build_telegram_parity_preview(context)
+    if _broadcast_audience(context).key == SELF_AUDIENCE.key or _broadcast_recipients(context):
+        await context.send_text(
+            preview_text,
+            keyboard=broadcast_preview_keyboard(has_attachment=_broadcast_attachment(context) is not None),
+            attachments=[_broadcast_attachment(context)] if _broadcast_attachment(context) else None,
+        )
+        return
     try:
         clients = await _fetch_yclients_clients_for_audience(context, _broadcast_audience(context).key)
         estimate = _omnichannel_service(context).estimate(clients, attachment=_normalized_attachment(context))
@@ -733,6 +749,28 @@ async def _show_preview(context: RouterContext, *, push_current: bool = True) ->
         attachments=[_broadcast_attachment(context)] if _broadcast_attachment(context) else None,
     )
 
+
+
+def _build_telegram_parity_preview(context: RouterContext) -> str:
+    audience = _broadcast_audience(context)
+    count = len(_broadcast_recipients(context))
+    if audience.key != SELF_AUDIENCE.key and count == 0:
+        estimate = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY)
+        count = int(getattr(estimate, "total_deliveries", 0) or _state_int(context, _BROADCAST_RECIPIENT_COUNT_KEY))
+    return (
+        f"👀 Предпросмотр рассылки\n\n"
+        f"{_broadcast_text(context) or ''}\n\n"
+        f"Аудитория: {audience.label}\n"
+        f"Получателей: {count}\n\n"
+        "Отправить рассылку?"
+    )
+
+
+async def _show_stale_broadcast(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context)
+    _clear_broadcast_state(context)
+    state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_MENU_SCREEN)
+    await context.send_text("⚠️ Эта рассылка уже отправляется или была отправлена.", keyboard=broadcast_menu_keyboard())
 
 
 async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_key: str):
