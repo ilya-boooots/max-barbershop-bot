@@ -268,6 +268,14 @@ def test_deleted_inactive_records_are_not_active_for_2h_skip_rules() -> None:
     assert not _record_is_active({"status": "deleted"})
 
 
+def test_2h_cancelled_attendance_records_are_skipped_like_telegram() -> None:
+    assert not _record_is_active({"attendance": "-1"})
+    assert not _record_is_active({"visit_attendance": "-1"})
+    assert not _record_is_active({"attendance": "1"})
+    assert not _record_is_active({"visit_attendance": "1"})
+    assert not _record_is_active({"status": "cancelled"})
+
+
 import sqlite3
 
 import max_barbershop_bot.flows.settings as settings_flow
