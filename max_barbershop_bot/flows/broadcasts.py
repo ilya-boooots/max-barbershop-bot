@@ -227,32 +227,9 @@ async def handle_text_input(context: RouterContext) -> None:
 
 
 async def handle_preview_next(context: RouterContext) -> None:
-    """Move from preview to final YClients audience confirmation."""
+    """Legacy preview button handler: Telegram sends directly from preview."""
 
-    if not _can_open_broadcasts(context):
-        await _send_no_access(context)
-        return
-    if _is_sending(context) or is_action_locked(_BROADCAST_SEND_LOCK_KEY):
-        await _send_sending_in_progress(context)
-        return
-    text = _broadcast_text(context)
-    if not text:
-        await _open_text_step(context)
-        return
-    if state.get_current_screen(_user_id(context), _chat_id(context)) != state.BROADCAST_ONE_TIME_PREVIEW_SCREEN or not state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_PREVIEW_TOKEN_KEY):
-        await _show_stale_broadcast(context)
-        return
-    await _answer_callback_if_needed(context)
-    _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
-    recipients = _broadcast_recipients(context)
-    if recipients:
-        await context.send_text(build_broadcast_confirm_text(audience_label=_broadcast_audience(context).label, recipient_count=len(recipients), text=text, attachment_type=_broadcast_attachment_type(context)), keyboard=broadcast_confirm_keyboard(can_send=True))
-        return
-    estimate = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ESTIMATE_KEY)
-    if estimate is not None:
-        await context.send_text(_format_omnichannel_confirm(estimate), keyboard=broadcast_confirm_keyboard(can_send=estimate.total_deliveries > 0))
-    else:
-        await context.send_text("⚠️ Подтвердите рассылку", keyboard=broadcast_confirm_keyboard(can_send=True))
+    await handle_confirm_send(context)
 
 
 async def handle_preview_edit(context: RouterContext) -> None:
@@ -496,7 +473,6 @@ async def _select_audience(context: RouterContext, audience: BroadcastAudience) 
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_DISABLED_KEY, skipped_disabled)
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_SKIPPED_MISSING_KEY, skipped_missing)
         await _answer_callback_if_needed(context)
-        _push_current_screen(context, state.BROADCAST_ONE_TIME_CONFIRM_SCREEN)
         await _show_preview(context)
         return
 
@@ -580,7 +556,7 @@ async def handle_confirm_send(context: RouterContext) -> None:
     if not text:
         await _open_text_step(context)
         return
-    if state.get_current_screen(_user_id(context), _chat_id(context)) != state.BROADCAST_ONE_TIME_CONFIRM_SCREEN or not state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_PREVIEW_TOKEN_KEY):
+    if state.get_current_screen(_user_id(context), _chat_id(context)) != state.BROADCAST_ONE_TIME_PREVIEW_SCREEN or not state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_PREVIEW_TOKEN_KEY):
         await _show_stale_broadcast(context)
         return
     audience = _broadcast_audience(context)
@@ -694,17 +670,6 @@ async def handle_broadcast_back(context: RouterContext) -> None:
     elif current == state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
         await _show_preview(context, push_current=False)
-    elif current == state.BROADCAST_ONE_TIME_CONFIRM_SCREEN:
-        return_screen = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY)
-        if return_screen == state.CLIENT_SEGMENT_RESULT_SCREEN:
-            state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENT_RESULT_SCREEN)
-            await context.send_text("Вернитесь к сегменту через меню рассылки 🎯", keyboard=broadcast_menu_keyboard())
-        elif return_screen == state.LOST_CLIENTS_SCREEN:
-            state.set_current_screen(_user_id(context), _chat_id(context), state.LOST_CLIENTS_SCREEN)
-            await context.send_text("Вернитесь к потерянным клиентам через меню сегментов 😔", keyboard=broadcast_menu_keyboard())
-        else:
-            state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
-            await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_MENU_SCREEN)
         await context.send_text(BROADCAST_MENU_TEXT, keyboard=broadcast_menu_keyboard())

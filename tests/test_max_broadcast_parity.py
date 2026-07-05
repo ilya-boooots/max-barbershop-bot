@@ -124,12 +124,21 @@ def test_preview_and_confirm_buttons_match_telegram_labels():
     ]
 
 
+def test_preview_send_label_sends_without_intermediate_confirm_screen():
+    from max_barbershop_bot.ui.buttons import BROADCAST_CONFIRM_SEND_PAYLOAD, broadcast_preview_keyboard
+
+    first_button = broadcast_preview_keyboard().rows[0][0]
+    assert first_button.text == "✅ Отправить"
+    assert first_button.payload == BROADCAST_CONFIRM_SEND_PAYLOAD
+
+
 def test_no_non_self_confirm_without_preview_guard():
     import inspect
     from max_barbershop_bot.flows import broadcasts
 
     confirm_source = inspect.getsource(broadcasts.handle_confirm_send)
-    assert "BROADCAST_ONE_TIME_CONFIRM_SCREEN" in confirm_source
+    assert "BROADCAST_ONE_TIME_PREVIEW_SCREEN" in confirm_source
+    assert "BROADCAST_ONE_TIME_CONFIRM_SCREEN" not in confirm_source
     assert "_BROADCAST_PREVIEW_TOKEN_KEY" in confirm_source
     assert "await _show_stale_broadcast(context)" in confirm_source
 
@@ -143,9 +152,8 @@ def test_preview_next_requires_valid_preview_state():
     from max_barbershop_bot.flows import broadcasts
 
     source = inspect.getsource(broadcasts.handle_preview_next)
-    assert "BROADCAST_ONE_TIME_PREVIEW_SCREEN" in source
-    assert "_BROADCAST_PREVIEW_TOKEN_KEY" in source
-    assert "await _show_stale_broadcast(context)" in source
+    assert "await handle_confirm_send(context)" in source
+    assert "BROADCAST_ONE_TIME_CONFIRM_SCREEN" not in source
 
 
 def test_cancel_back_home_safety_clears_or_steps_back():

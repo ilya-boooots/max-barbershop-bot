@@ -817,7 +817,7 @@ def broadcast_preview_keyboard(*, has_attachment: bool = False) -> MaxInlineKeyb
     """Build broadcast preview action buttons."""
 
     rows = [
-        [MaxButton(text="✅ Отправить", payload=BROADCAST_PREVIEW_NEXT_PAYLOAD)],
+        [MaxButton(text="✅ Отправить", payload=BROADCAST_CONFIRM_SEND_PAYLOAD)],
         [MaxButton(text="✏️ Изменить текст", payload=BROADCAST_PREVIEW_EDIT_PAYLOAD)],
     ]
     rows.append([MaxButton(text="📷 Изменить фото" if has_attachment else "📷 Добавить фото", payload=BROADCAST_PREVIEW_EDIT_ATTACHMENT_PAYLOAD)])
