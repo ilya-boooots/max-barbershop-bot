@@ -87,3 +87,115 @@ def test_confirm_send_uses_omnichannel_for_all_non_self_audiences():
     source = inspect.getsource(broadcasts.handle_confirm_send)
     assert "if is_omnichannel:" in source
     assert "if audience.key == AUDIENCE_SOURCE_YCLIENTS_ALL" not in source
+
+
+def test_broadcast_empty_and_whitespace_text_rejected_like_telegram():
+    from max_barbershop_bot.services.broadcasts import validate_broadcast_text
+
+    for value in ("", "   ", "\n\t"):
+        validation = validate_broadcast_text(value)
+        assert not validation.ok
+        assert validation.error == "⚠️ Текст рассылки не может быть пустым. Введите сообщение."
+
+
+def test_broadcast_too_long_text_rejected_like_telegram():
+    from max_barbershop_bot.services.broadcasts import MAX_BROADCAST_TEXT_LENGTH, validate_broadcast_text
+
+    validation = validate_broadcast_text("а" * (MAX_BROADCAST_TEXT_LENGTH + 1))
+    assert not validation.ok
+    assert validation.error == f"⚠️ Слишком длинный текст. Максимум {MAX_BROADCAST_TEXT_LENGTH} символов."
+
+
+def test_preview_and_confirm_buttons_match_telegram_labels():
+    from max_barbershop_bot.ui.buttons import broadcast_confirm_keyboard, broadcast_preview_keyboard
+
+    assert _button_texts(broadcast_preview_keyboard()) == [
+        "✅ Отправить",
+        "✏️ Изменить текст",
+        "📷 Добавить фото",
+        "⬅️ Назад",
+        "🏠 Главное меню",
+    ]
+    assert _button_texts(broadcast_confirm_keyboard()) == [
+        "✅ Отправить",
+        "✏️ Изменить текст",
+        "⬅️ Назад",
+        "🏠 Главное меню",
+    ]
+
+
+def test_preview_send_label_sends_without_intermediate_confirm_screen():
+    from max_barbershop_bot.ui.buttons import BROADCAST_CONFIRM_SEND_PAYLOAD, broadcast_preview_keyboard
+
+    first_button = broadcast_preview_keyboard().rows[0][0]
+    assert first_button.text == "✅ Отправить"
+    assert first_button.payload == BROADCAST_CONFIRM_SEND_PAYLOAD
+
+
+def test_no_non_self_confirm_without_preview_guard():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+
+    confirm_source = inspect.getsource(broadcasts.handle_confirm_send)
+    assert "BROADCAST_ONE_TIME_PREVIEW_SCREEN" in confirm_source
+    assert "BROADCAST_ONE_TIME_CONFIRM_SCREEN" not in confirm_source
+    assert "_BROADCAST_PREVIEW_TOKEN_KEY" in confirm_source
+    assert "await _show_stale_broadcast(context)" in confirm_source
+
+    audience_source = inspect.getsource(broadcasts._select_audience)
+    assert "await _show_preview(context)" in audience_source
+    assert "_format_omnichannel_confirm(estimate)" not in audience_source
+
+
+def test_preview_next_requires_valid_preview_state():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+
+    source = inspect.getsource(broadcasts.handle_preview_next)
+    assert "await handle_confirm_send(context)" in source
+    assert "BROADCAST_ONE_TIME_CONFIRM_SCREEN" not in source
+
+
+def test_cancel_back_home_safety_clears_or_steps_back():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+
+    back_source = inspect.getsource(broadcasts.handle_broadcast_back)
+    home_source = inspect.getsource(broadcasts.handle_broadcast_home)
+    assert "BROADCAST_ONE_TIME_PREVIEW_SCREEN" in back_source
+    assert "BROADCAST_ONE_TIME_TEXT_SCREEN" in back_source
+    assert "_BROADCAST_PREVIEW_TOKEN_KEY" in back_source
+    assert "_clear_broadcast_state(context)" in home_source
+
+
+def test_duplicate_confirm_guard_reuses_pr004_lock_and_token():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+
+    source = inspect.getsource(broadcasts.handle_confirm_send)
+    assert "is_action_locked(_BROADCAST_SEND_LOCK_KEY)" in source
+    assert "acquire_action_lock(_BROADCAST_SEND_LOCK_KEY" in source
+    assert "_BROADCAST_SEND_TOKEN_KEY" in source
+    assert "Эта рассылка уже отправляется или была отправлена" in source
+
+
+def test_media_photo_preview_closest_max_equivalent_documented_in_code():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+    from max_barbershop_bot.ui.buttons import broadcast_preview_keyboard
+
+    assert "📷 Добавить фото" in _button_texts(broadcast_preview_keyboard())
+    source = inspect.getsource(broadcasts.handle_text_input)
+    assert "Этот тип вложения пока не поддерживается в MAX 🙏" in source
+    assert "extract_broadcast_attachment" in source
+
+
+def test_self_test_flow_still_uses_preview_and_confirm_guard():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+
+    text_source = inspect.getsource(broadcasts.handle_text_input)
+    select_source = inspect.getsource(broadcasts._select_audience)
+    assert "SELF_AUDIENCE" in text_source
+    assert "await _select_audience(context, SELF_AUDIENCE)" in text_source
+    assert "await _show_preview(context)" in select_source
