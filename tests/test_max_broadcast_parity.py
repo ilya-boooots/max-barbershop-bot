@@ -199,3 +199,50 @@ def test_self_test_flow_still_uses_preview_and_confirm_guard():
     assert "SELF_AUDIENCE" in text_source
     assert "await _select_audience(context, SELF_AUDIENCE)" in text_source
     assert "await _show_preview(context)" in select_source
+
+
+def test_self_test_preview_does_not_load_yclients_or_client_audiences():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+
+    show_preview_source = inspect.getsource(broadcasts._show_preview)
+    self_fast_path = show_preview_source.split("return", 1)[0]
+    assert "_broadcast_audience(context).key == SELF_AUDIENCE.key" in self_fast_path
+    assert "_fetch_yclients_clients_for_audience" not in self_fast_path
+    assert "_omnichannel_service" not in self_fast_path
+
+
+def test_self_test_resolves_only_current_actor_and_uses_self_audience_source():
+    import inspect
+    from max_barbershop_bot.flows import broadcasts
+    from max_barbershop_bot.services.broadcasts import BROADCAST_SELF_AUDIENCE, SELF_AUDIENCE
+
+    resolve_source = inspect.getsource(broadcasts._resolve_audience_recipients)
+    self_branch = resolve_source.split("else:", 1)[0]
+    assert SELF_AUDIENCE.key == "send_to_self"
+    assert BROADCAST_SELF_AUDIENCE == "send_to_self"
+    assert "find_by_platform_user_id(str(_user_id(context) or \"\"), platform=PLATFORM_MAX)" in self_branch
+    assert "list_users_for_broadcast_audience" not in self_branch
+
+
+def test_broadcast_report_contains_metrics_without_raw_secrets_payload_or_phone():
+    from max_barbershop_bot.services.broadcasts import BroadcastSendReport, format_broadcast_report
+
+    text = format_broadcast_report(
+        BroadcastSendReport(
+            total=1,
+            sent=1,
+            failed=0,
+            blocked=0,
+            stopped=0,
+            skipped_notifications_disabled=0,
+            skipped_missing_recipient_id=0,
+            rate_limited=0,
+            broadcast_id="secret-token-79990000001",
+        )
+    )
+    assert "Всего клиентов: 1" in text
+    assert "Отправлено: 1" in text
+    assert "secret-token" not in text
+    assert "payload" not in text.lower()
+    assert "79990000001" not in text
