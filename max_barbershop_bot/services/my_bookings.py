@@ -1173,6 +1173,9 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
 
     if isinstance(booking, MyBookingItem):
         booking_datetime = booking.booking_datetime.astimezone(_zoneinfo(timezone_name))
+        status = format_booking_status(booking.raw_status) if booking.raw_status else None
+        if status is None and booking.status and booking.status != "Неизвестен":
+            status = booking.status
         return {
             "yclients_record_id": booking.yclients_record_id,
             "service_name": booking.service_name,
@@ -1182,7 +1185,7 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
             "date": booking_datetime.strftime("%d.%m.%Y"),
             "time": booking_datetime.strftime("%H:%M"),
             "raw_status": booking.raw_status,
-            "status": format_booking_status(booking.raw_status or booking.status),
+            "status": status,
             "duration_minutes": str(booking.duration_minutes) if booking.duration_minutes else None,
             "price": booking.price,
             "address": booking.address,
@@ -1205,7 +1208,7 @@ def booking_display_data(booking: MyBookingItem | dict[str, Any], *, timezone_na
         "date": booking_date or "—",
         "time": booking_time or "—",
         "raw_status": _clean_text(booking.get("raw_status")) or None,
-        "status": format_booking_status(booking.get("raw_status") or booking.get("status")),
+        "status": format_booking_status(booking.get("raw_status") or booking.get("status")) if _clean_text(booking.get("raw_status") or booking.get("status")) else None,
         "duration_minutes": _clean_text(booking.get("duration_minutes")) or None,
         "price": _clean_text(booking.get("price")) or None,
         "address": _clean_text(booking.get("address")) or None,
@@ -1581,14 +1584,11 @@ def _status_diagnostics(rows: list[dict[str, Any]]) -> dict[str, str]:
 def _extract_service_name(item: dict[str, Any]) -> str:
     services = item.get("services")
     if isinstance(services, list) and services:
-        names = []
         for service in services:
             if isinstance(service, dict):
                 name = _clean_text(service.get("title") or service.get("name"))
                 if name:
-                    names.append(name)
-        if names:
-            return ", ".join(names)
+                    return name
     service = item.get("service")
     if isinstance(service, dict):
         name = _clean_text(service.get("title") or service.get("name"))
