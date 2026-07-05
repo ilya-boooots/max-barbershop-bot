@@ -1295,9 +1295,9 @@ def my_bookings_history_keyboard(*, page: int = 0, has_next: bool = False, inclu
 def my_bookings_empty_keyboard(*, show_history: bool = False) -> MaxInlineKeyboard:
     """Build Telegram-reference empty active bookings actions."""
 
-    rows: list[list[MaxButton]] = [[MaxButton(text="🔁 Повторить запись", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)]]
+    rows: list[list[MaxButton]] = [[MaxButton(text="🔂 Повторить запись", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)]]
     rows.append([MaxButton(text="🕘 История визитов", payload=f"{MY_BOOKINGS_HISTORY_PAYLOAD_PREFIX}0")])
-    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_HOME_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 

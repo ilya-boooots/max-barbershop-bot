@@ -135,7 +135,7 @@ def test_active_empty_state_text_and_buttons_match_telegram_root() -> None:
 
     assert mb.MY_BOOKINGS_EMPTY_TEXT == "📭 У вас пока нет активных записей."
     assert [[button.text for button in row] for row in keyboard.rows] == [
-        ["🔁 Повторить запись"],
+        ["🔂 Повторить запись"],
         ["🕘 История визитов"],
         ["⬅️ Назад"],
         ["🏠 Главное меню"],
@@ -143,7 +143,7 @@ def test_active_empty_state_text_and_buttons_match_telegram_root() -> None:
     assert [[button.payload for button in row] for row in keyboard.rows] == [
         [buttons.MY_BOOKINGS_REPEAT_START_PAYLOAD],
         [f"{buttons.MY_BOOKINGS_HISTORY_PAYLOAD_PREFIX}0"],
-        [buttons.NAV_BACK_PAYLOAD],
+        [buttons.NAV_HOME_PAYLOAD],
         [buttons.NAV_HOME_PAYLOAD],
     ]
 
