@@ -170,7 +170,7 @@ def test_active_one_future_booking_root_card_matches_telegram_format() -> None:
     assert [[button.text for button in row] for row in keyboard.rows] == [
         ["🔁 Перенести запись"],
         ["❌ Отменить запись"],
-        ["🔁 Повторить запись"],
+        ["🔂 Повторить запись"],
         ["🕘 История визитов"],
         ["⬅️ Назад"],
         ["🏠 Главное меню"],
@@ -183,7 +183,7 @@ def test_active_multiple_future_bookings_show_all_button_matches_telegram_order(
     assert [[button.text for button in row] for row in keyboard.rows] == [
         ["🔁 Перенести запись"],
         ["❌ Отменить запись"],
-        ["🔁 Повторить запись"],
+        ["🔂 Повторить запись"],
         ["📋 Показать все активные записи"],
         ["🕘 История визитов"],
         ["⬅️ Назад"],
@@ -246,7 +246,127 @@ def test_active_carousel_pagination_buttons_match_telegram() -> None:
     assert [[button.text for button in row] for row in middle.rows[1:]] == [
         ["🔁 Перенести"],
         ["❌ Отменить"],
-        ["🔁 Повторить"],
+        ["🔂 Повторить"],
         ["⬅️ Назад"],
         ["🏠 Главное меню"],
     ]
+
+
+def test_detail_future_card_field_order_and_formatting_matches_telegram() -> None:
+    bookings, _ = visible([
+        base_record(
+            status="approved",
+            duration=5400,
+            services=[{"id": "s1", "title": "Стрижка", "price": 1200}, {"id": "s2", "title": "Борода", "price": 800}],
+        )
+    ])
+
+    text = mb.format_booking_details_text(bookings[0], timezone_name=TZ, title="📋 Активная запись")
+
+    assert text.splitlines() == [
+        "📋 Активная запись",
+        "",
+        "✂️ Услуга: Стрижка",
+        "👤 Мастер: Максим",
+        "📅 Дата: 04.07.2026",
+        "🕒 Время: 12:00",
+        "⏳ Длительность: 90 мин",
+        "💰 Цена: 2000 ₽",
+        "📍 Адрес: —",
+        "📞 Контакты: —",
+        "🧾 Статус: Подтверждена",
+    ]
+
+
+def test_detail_master_price_address_and_missing_status_fallbacks_match_telegram() -> None:
+    bookings, _ = visible([base_record(status=None, staff=None, duration=None, services=[{"id": "s1", "title": "Стрижка"}])])
+
+    text = mb.format_booking_details_text(bookings[0], timezone_name=TZ, title="📋 Активная запись")
+
+    assert text.splitlines() == [
+        "📋 Активная запись",
+        "",
+        "✂️ Услуга: Стрижка",
+        "👤 Мастер: Любой мастер",
+        "📅 Дата: 04.07.2026",
+        "🕒 Время: 12:00",
+        "⏳ Длительность: —",
+        "💰 Цена: —",
+        "📍 Адрес: —",
+        "📞 Контакты: —",
+    ]
+
+
+def test_detail_unknown_status_is_displayed_raw_like_telegram() -> None:
+    bookings, _ = visible([base_record(status="mystery")])
+
+    assert "🧾 Статус: mystery" in mb.format_booking_details_text(bookings[0], timezone_name=TZ)
+
+
+def test_detail_future_buttons_visibility_and_order_match_telegram() -> None:
+    keyboard = buttons.my_booking_details_keyboard(is_active=True)
+
+    assert [[button.text for button in row] for row in keyboard.rows] == [
+        ["🔁 Перенести запись"],
+        ["❌ Отменить запись"],
+        ["🔂 Повторить запись"],
+        ["⬅️ Назад"],
+        ["🏠 Главное меню"],
+    ]
+    assert [[button.payload for button in row] for row in keyboard.rows] == [
+        [buttons.MY_BOOKINGS_RESCHEDULE_START_PAYLOAD],
+        [buttons.MY_BOOKINGS_CANCEL_START_PAYLOAD],
+        [buttons.MY_BOOKINGS_REPEAT_START_PAYLOAD],
+        [buttons.MY_BOOKINGS_BACK_PAYLOAD],
+        [buttons.NAV_HOME_PAYLOAD],
+    ]
+
+
+def test_detail_active_carousel_buttons_match_telegram_labels() -> None:
+    keyboard = buttons.my_booking_active_card_keyboard(index=0, total=1)
+
+    assert [[button.text for button in row] for row in keyboard.rows] == [
+        ["1/1"],
+        ["🔁 Перенести"],
+        ["❌ Отменить"],
+        ["🔂 Повторить"],
+        ["⬅️ Назад"],
+        ["🏠 Главное меню"],
+    ]
+
+
+def test_detail_past_and_cancelled_records_are_not_accessible_from_active_detail_like_telegram() -> None:
+    rows, counts = mb._filter_owned_active_rows(
+        [base_record(id="past", datetime=past_iso(), status="done"), base_record(id="cancelled", status="cancelled")],
+        yclients_client_id="123",
+        attributed_record_ids=[],
+        known_phones={"79198332692"},
+        timezone_name=TZ,
+        now=NOW,
+    )
+    past = mb._booking_from_payload(base_record(id="past", datetime=past_iso(), status="done"), timezone_name=TZ)
+    cancelled = mb._booking_from_payload(base_record(id="cancelled", status="cancelled"), timezone_name=TZ)
+
+    assert rows == []
+    assert counts["hidden_cancelled_count"] >= 1
+    assert past is not None and not mb.is_future_booking(past, timezone_name=TZ, now=NOW)
+    assert cancelled is not None and not mb.is_visible_my_booking(cancelled, timezone_name=TZ, now=NOW)
+
+
+def test_detail_stale_missing_and_other_user_records_are_hidden_by_helpers() -> None:
+    own = base_record(id="own")
+    other = base_record(id="other", client={"id": "999", "phone": "+70000000002"})
+
+    assert mb._booking_from_payload({"id": "missing_datetime"}, timezone_name=TZ) is None
+    assert mb.ownership_source_for_record(own, yclients_client_id="123", attributed_record_ids=set(), known_phones=set()) == "client_id"
+    assert mb.ownership_source_for_record(other, yclients_client_id="123", attributed_record_ids=set(), known_phones={"79198332692"}) == "none"
+
+
+def test_detail_buttons_do_not_call_action_implementations() -> None:
+    keyboard = buttons.my_booking_details_keyboard(is_active=True)
+
+    payloads = [button.payload for row in keyboard.rows for button in row]
+    assert buttons.MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD not in payloads
+    assert buttons.MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD not in payloads
+    assert all(not payload.startswith(buttons.MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX) for payload in payloads)
+    assert all(not payload.startswith(buttons.MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX) for payload in payloads)
