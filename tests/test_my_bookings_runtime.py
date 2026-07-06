@@ -370,3 +370,97 @@ def test_detail_buttons_do_not_call_action_implementations() -> None:
     assert buttons.MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD not in payloads
     assert all(not payload.startswith(buttons.MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX) for payload in payloads)
     assert all(not payload.startswith(buttons.MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX) for payload in payloads)
+
+
+def test_cancel_start_opens_telegram_confirmation_screen_text() -> None:
+    bookings, _ = visible([base_record()])
+
+    assert mb.format_cancel_confirmation_text(bookings[0], timezone_name=TZ) == "❗️Вы уверены, что хотите отменить запись?"
+
+
+def test_cancel_confirmation_buttons_and_order_match_telegram() -> None:
+    keyboard = buttons.my_booking_cancel_confirmation_keyboard()
+
+    assert [[button.text for button in row] for row in keyboard.rows] == [
+        ["✅ Да, отменить"],
+        ["⬅️ Назад"],
+        ["🏠 Главное меню"],
+    ]
+    assert [[button.payload for button in row] for row in keyboard.rows] == [
+        [buttons.MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD],
+        [buttons.MY_BOOKINGS_BACK_PAYLOAD],
+        [buttons.NAV_HOME_PAYLOAD],
+    ]
+
+
+def test_cancel_back_and_home_payloads_do_not_confirm_cancellation() -> None:
+    keyboard = buttons.my_booking_cancel_confirmation_keyboard()
+    payloads_by_text = {button.text: button.payload for row in keyboard.rows for button in row}
+
+    assert payloads_by_text["⬅️ Назад"] != buttons.MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD
+    assert payloads_by_text["🏠 Главное меню"] != buttons.MY_BOOKINGS_CANCEL_CONFIRM_PAYLOAD
+
+
+def test_cancel_success_text_and_result_buttons_match_telegram_meaning() -> None:
+    bookings, _ = visible([base_record()])
+    keyboard = buttons.my_booking_cancel_result_keyboard()
+
+    assert mb.format_cancel_success_text(bookings[0], timezone_name=TZ) == "✅ Запись отменена."
+    assert [[button.text for button in row] for row in keyboard.rows] == [
+        ["📅 Мои записи"],
+        ["🏠 Главное меню"],
+    ]
+
+
+def test_cancel_in_progress_and_stale_texts_are_friendly_and_masked() -> None:
+    user_texts = [
+        mb.MY_BOOKING_CANCEL_IN_PROGRESS_TEXT,
+        mb.MY_BOOKING_NOT_FOUND_TEXT,
+        mb.MY_BOOKING_CANCEL_ALREADY_TEXT,
+        mb.MY_BOOKING_CANCEL_NOT_ALLOWED_TEXT,
+        mb.MY_BOOKING_CANCEL_ERROR_TEXT,
+    ]
+
+    assert mb.MY_BOOKING_CANCEL_IN_PROGRESS_TEXT == "⏳ Уже выполняем действие, секундочку 🙂"
+    assert mb.MY_BOOKING_CANCEL_ALREADY_TEXT == "Эта запись уже отменена."
+    assert mb.MY_BOOKING_NOT_FOUND_TEXT.startswith("Эта запись уже неактуальна")
+    for text in user_texts:
+        lowered = text.lower()
+        assert "token" not in lowered
+        assert "payload" not in lowered
+        assert "+79198332692" not in text
+        assert "79198332692" not in text
+
+
+def test_already_cancelled_missing_other_user_and_not_cancelable_are_blocked_by_helpers() -> None:
+    own = mb._booking_from_payload(base_record(), timezone_name=TZ)
+    already_cancelled = mb._booking_from_payload(base_record(status="cancelled"), timezone_name=TZ)
+    soon = mb._booking_from_payload(base_record(datetime=(NOW + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")), timezone_name=TZ)
+    other = base_record(client={"id": "999", "phone": "+70000000002"})
+
+    assert own is not None and mb.is_booking_cancelable(own, timezone_name=TZ, now=NOW)
+    assert already_cancelled is not None and not mb.is_booking_cancelable(already_cancelled, timezone_name=TZ, now=NOW)
+    assert soon is not None and not mb.is_booking_cancelable(soon, timezone_name=TZ, now=NOW)
+    assert mb._booking_from_payload({"id": "missing_datetime"}, timezone_name=TZ) is None
+    assert mb.ownership_source_for_record(other, yclients_client_id="123", attributed_record_ids=set(), known_phones={"79198332692"}) == "none"
+
+
+def test_cancel_marker_is_max_equivalent_to_telegram_without_telegram_wording() -> None:
+    from max_barbershop_bot.flows import my_bookings as flow
+
+    marker = flow._build_cancellation_marker(TZ)
+
+    assert marker.startswith("Клиент отменил запись из MAX бота")
+    assert "Telegram" not in marker
+    assert "Телеграм" not in marker
+    assert "booking_cancel" not in marker
+
+
+def test_reschedule_and_repeat_payloads_are_not_changed_by_cancel_confirmation() -> None:
+    keyboard = buttons.my_booking_cancel_confirmation_keyboard()
+    payloads = [button.payload for row in keyboard.rows for button in row]
+
+    assert buttons.MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD not in payloads
+    assert buttons.MY_BOOKINGS_REPEAT_START_PAYLOAD not in payloads
+    assert all(not payload.startswith(buttons.MY_BOOKINGS_RESCHEDULE_DATE_PAYLOAD_PREFIX) for payload in payloads)
+    assert all(not payload.startswith(buttons.MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX) for payload in payloads)
