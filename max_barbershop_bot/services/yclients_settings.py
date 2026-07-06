@@ -78,7 +78,7 @@ async def check_yclients_connection(settings: YClientsSettings) -> YClientsHealt
     except YClientsError as exc:
         logger.warning(
             "YClients settings check failed: operation=check_yclients_connection company_id=%s error_class=%s status_code=%s",
-            settings.company_id,
+            mask_secret(settings.company_id),
             type(exc).__name__,
             exc.status_code,
         )
@@ -91,7 +91,7 @@ async def check_yclients_connection(settings: YClientsSettings) -> YClientsHealt
     except Exception as exc:  # noqa: BLE001 - keep raw technical details away from users.
         logger.warning(
             "YClients settings check failed: operation=check_yclients_connection company_id=%s error_class=%s",
-            settings.company_id,
+            mask_secret(settings.company_id),
             type(exc).__name__,
         )
         return YClientsHealthCheckResult(

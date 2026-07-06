@@ -384,14 +384,14 @@ async def handle_connection_check(context: RouterContext) -> None:
     if result.ok:
         _log_health_audit(context, success=True, settings=settings, category=None)
         await context.send_text(
-            YCLIENTS_CHECK_SUCCESS_TEXT.format(branch_title_or_company_id=_branch_title_or_company_id(settings)),
+            "✅ Подключение к YClients работает!",
             keyboard=yclients_settings_keyboard(can_manage=_can_manage(context)),
         )
         return
 
     logger.warning(
         "YClients settings check failed: operation=check_yclients_connection company_id=%s error_class=%s status_code=%s",
-        settings.company_id if settings else None,
+        mask_secret(settings.company_id if settings else None),
         result.short_message,
         result.status_code,
     )
@@ -541,8 +541,8 @@ def _friendly_check_reason(category: str | None) -> str:
     if category == YCLIENTS_ERROR_SERVER:
         return YCLIENTS_CHECK_SERVER_TEXT
     if category == YCLIENTS_ERROR_TRANSPORT:
-        return YCLIENTS_CHECK_TRANSPORT_TEXT
-    return YCLIENTS_CHECK_UNAVAILABLE_TEXT
+        return "🌐 Не удалось связаться с YClients. Проверьте URL и интернет-соединение."
+    return "🌐 Не удалось связаться с YClients. Проверьте URL и интернет-соединение."
 
 
 def _log_audit(context: RouterContext, action: str, metadata: dict[str, object] | None = None) -> None:
@@ -567,7 +567,7 @@ def _log_health_audit(
         context,
         "yclients_settings_health_check_success" if success else "yclients_settings_health_check_failed",
         {
-            "company_id": settings.company_id if settings else None,
+            "company_id": mask_secret(settings.company_id if settings else None),
             "branch_title": settings.branch_title if settings else None,
             "branch_timezone": settings.branch_timezone if settings else None,
             "partner_token_present": bool(settings and settings.partner_token),
