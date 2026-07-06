@@ -171,6 +171,9 @@ CLIENTS_DIRECTORY_RESULT_PAYLOAD_PREFIX = "clients:result:"
 
 YCLIENTS_SETUP_PAYLOAD = "yclients:setup"
 YCLIENTS_CHECK_PAYLOAD = "yclients:check"
+YCLIENTS_RESET_PAYLOAD = "yclients:reset"
+YCLIENTS_RESET_YES_PAYLOAD = "yclients:reset:yes"
+YCLIENTS_RESET_NO_PAYLOAD = "yclients:reset:no"
 YCLIENTS_SAVE_PAYLOAD = "yclients:save"
 YCLIENTS_SKIP_BRANCH_TITLE_PAYLOAD = "yclients:branch_title:skip"
 YCLIENTS_BACK_PAYLOAD = "yclients:back"
@@ -690,13 +693,33 @@ def notification_history_detail_keyboard() -> MaxInlineKeyboard:
     )
 
 
-def yclients_settings_keyboard() -> MaxInlineKeyboard:
+def yclients_settings_keyboard(*, can_manage: bool = True) -> MaxInlineKeyboard:
     """Build YClients integration settings menu buttons."""
+
+    rows: list[list[MaxButton]] = []
+    if can_manage:
+        rows.append([MaxButton(text="🧩 Настроить / Изменить", payload=YCLIENTS_SETUP_PAYLOAD)])
+    rows.append([MaxButton(text="🔌 Проверить подключение", payload=YCLIENTS_CHECK_PAYLOAD)])
+    if can_manage:
+        rows.append([MaxButton(text="🧹 Сбросить настройки", payload=YCLIENTS_RESET_PAYLOAD)])
+    rows.extend(
+        [
+            [MaxButton(text="⬅️ Назад", payload=YCLIENTS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=YCLIENTS_HOME_PAYLOAD)],
+        ]
+    )
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def yclients_reset_confirm_keyboard() -> MaxInlineKeyboard:
+    """Build YClients reset confirmation buttons."""
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="🧩 Настроить / Изменить", payload=YCLIENTS_SETUP_PAYLOAD)],
-            [MaxButton(text="🔌 Проверить подключение", payload=YCLIENTS_CHECK_PAYLOAD)],
+            [
+                MaxButton(text="✅ Да", payload=YCLIENTS_RESET_YES_PAYLOAD),
+                MaxButton(text="❌ Нет", payload=YCLIENTS_RESET_NO_PAYLOAD),
+            ],
             [MaxButton(text="⬅️ Назад", payload=YCLIENTS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=YCLIENTS_HOME_PAYLOAD)],
         ]

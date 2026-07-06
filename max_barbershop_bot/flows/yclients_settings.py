@@ -7,7 +7,13 @@ from os import getenv
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
-from max_barbershop_bot.core.permissions import ROLE_USER, can_view_yclients
+from max_barbershop_bot.core.permissions import (
+    ROLE_ADMIN,
+    ROLE_DEVELOPER,
+    ROLE_MANAGER,
+    ROLE_USER,
+    normalize_role,
+)
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX
@@ -35,10 +41,14 @@ from max_barbershop_bot.ui.buttons import (
     YCLIENTS_BACK_PAYLOAD,
     YCLIENTS_CHECK_PAYLOAD,
     YCLIENTS_HOME_PAYLOAD,
+    YCLIENTS_RESET_NO_PAYLOAD,
+    YCLIENTS_RESET_PAYLOAD,
+    YCLIENTS_RESET_YES_PAYLOAD,
     YCLIENTS_SAVE_PAYLOAD,
     YCLIENTS_SETUP_PAYLOAD,
     YCLIENTS_SKIP_BRANCH_TITLE_PAYLOAD,
     yclients_confirm_keyboard,
+    yclients_reset_confirm_keyboard,
     yclients_settings_keyboard,
     yclients_setup_navigation_keyboard,
 )
@@ -88,6 +98,9 @@ def register_yclients_settings_routes(router: Router) -> None:
     router.on_callback(ADMIN_YCLIENTS_PAYLOAD, handle_yclients_menu)
     router.on_callback(YCLIENTS_SETUP_PAYLOAD, handle_setup_start)
     router.on_callback(YCLIENTS_CHECK_PAYLOAD, handle_connection_check)
+    router.on_callback(YCLIENTS_RESET_PAYLOAD, handle_reset_request)
+    router.on_callback(YCLIENTS_RESET_YES_PAYLOAD, handle_reset_confirm)
+    router.on_callback(YCLIENTS_RESET_NO_PAYLOAD, handle_reset_cancel)
     router.on_callback(YCLIENTS_SAVE_PAYLOAD, handle_save_settings)
     router.on_callback(YCLIENTS_SKIP_BRANCH_TITLE_PAYLOAD, handle_skip_branch_title)
     router.on_callback(YCLIENTS_BACK_PAYLOAD, handle_yclients_back)
@@ -264,7 +277,10 @@ async def handle_save_settings(context: RouterContext) -> None:
         await _answer_callback_if_needed(context)
         state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
         _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
-        await context.send_text("Не хватает данных подключения 🙏\n\nНачните настройку заново.", keyboard=yclients_settings_keyboard())
+        await context.send_text(
+            "Не хватает данных подключения 🙏\n\nНачните настройку заново.",
+            keyboard=yclients_settings_keyboard(can_manage=_can_manage(context)),
+        )
         return
 
     existed_before = _settings_repository().get_active() is not None
@@ -302,6 +318,55 @@ async def handle_save_settings(context: RouterContext) -> None:
     await _show_settings_menu(context, push=False)
 
 
+async def handle_reset_request(context: RouterContext) -> None:
+    """Ask for confirmation before resetting YClients settings."""
+
+    if not _can_manage(context):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    await context.send_text("❗️Точно сбросить настройки YClients?", keyboard=yclients_reset_confirm_keyboard())
+
+
+async def handle_reset_confirm(context: RouterContext) -> None:
+    """Reset saved YClients credentials after explicit confirmation."""
+
+    if not _can_manage(context):
+        await _send_no_access(context)
+        return
+    repository = _settings_repository()
+    active = repository.get_active()
+    if active is not None and active.id is not None:
+        repository.update_settings(
+            active.id,
+            company_id=None,
+            partner_token=None,
+            user_token=None,
+            branch_title=None,
+        )
+    _log_audit(
+        context,
+        "yclients_settings_reset",
+        {"settings_id": active.id if active else None},
+    )
+    state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
+    _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
+    await _answer_callback_if_needed(context)
+    await context.send_text("🧹 Настройки YClients сброшены.", keyboard=yclients_settings_keyboard(can_manage=True))
+
+
+async def handle_reset_cancel(context: RouterContext) -> None:
+    """Cancel YClients settings reset and return to entry buttons."""
+
+    if not _can_manage(context):
+        await _send_no_access(context)
+        return
+    state.clear_state_data(context.event.platform_user_id, _state_chat_id(context))
+    _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
+    await _answer_callback_if_needed(context)
+    await context.send_text("👌 Сброс отменён.", keyboard=yclients_settings_keyboard(can_manage=True))
+
+
 async def handle_connection_check(context: RouterContext) -> None:
     """Run a safe read-only YClients connection check."""
 
@@ -312,7 +377,7 @@ async def handle_connection_check(context: RouterContext) -> None:
     settings = load_active_yclients_settings(_settings_repository(), operation="check_yclients_connection")
     if not is_configured(settings):
         _log_health_audit(context, success=False, settings=settings, category=YCLIENTS_ERROR_CREDENTIALS)
-        await context.send_text(YCLIENTS_CHECK_FAILURE_TEXT.format(reason=YCLIENTS_CHECK_CREDENTIALS_TEXT), keyboard=yclients_settings_keyboard())
+        await context.send_text(YCLIENTS_CHECK_FAILURE_TEXT.format(reason=YCLIENTS_CHECK_CREDENTIALS_TEXT), keyboard=yclients_settings_keyboard(can_manage=_can_manage(context)))
         return
 
     result = await check_yclients_connection(settings)
@@ -320,7 +385,7 @@ async def handle_connection_check(context: RouterContext) -> None:
         _log_health_audit(context, success=True, settings=settings, category=None)
         await context.send_text(
             YCLIENTS_CHECK_SUCCESS_TEXT.format(branch_title_or_company_id=_branch_title_or_company_id(settings)),
-            keyboard=yclients_settings_keyboard(),
+            keyboard=yclients_settings_keyboard(can_manage=_can_manage(context)),
         )
         return
 
@@ -334,7 +399,7 @@ async def handle_connection_check(context: RouterContext) -> None:
     _log_health_audit(context, success=False, settings=settings, category=category, status_code=result.status_code)
     await context.send_text(
         YCLIENTS_CHECK_FAILURE_TEXT.format(reason=_friendly_check_reason(category)),
-        keyboard=yclients_settings_keyboard(),
+        keyboard=yclients_settings_keyboard(can_manage=_can_manage(context)),
     )
 
 
@@ -377,7 +442,7 @@ async def _show_settings_menu(context: RouterContext, *, push: bool = False) -> 
     else:
         _set_screen(context, state.YCLIENTS_SETTINGS_MENU_SCREEN)
     settings = load_active_yclients_settings(_settings_repository(), operation="show_yclients_status")
-    await context.send_text(_settings_status_text(settings), keyboard=yclients_settings_keyboard())
+    await context.send_text(_settings_status_text(settings), keyboard=yclients_settings_keyboard(can_manage=_can_manage(context)))
 
 
 async def _show_setup_step(context: RouterContext, screen_id: str) -> None:
@@ -445,17 +510,14 @@ def _state_text(context: RouterContext, key: str) -> str | None:
 
 
 def _settings_status_text(settings: YClientsSettings | None) -> str:
-    if not is_configured(settings):
-        return "🧩 YClients\n\nСтатус подключения: не настроено\n\nВыберите действие:"
+    status = "✅ Подключено" if is_configured(settings) else "❌ Не подключено"
     return (
-        "🧩 YClients\n\n"
-        "Статус подключения: настроено ✅\n"
-        f"Филиал: {_branch_title_or_company_id(settings)}\n"
-        f"🏢 Company ID: {mask_secret(settings.company_id)}\n"
-        f"🔐 Partner token: {mask_secret(settings.partner_token)}\n"
-        f"👤 User token: {mask_secret(settings.user_token)}\n"
-        f"🕒 Часовой пояс: {settings.branch_timezone or DEFAULT_BRANCH_TIMEZONE}\n\n"
-        "Токены сохранены и скрыты 🔐"
+        "⚙️ Интеграция YClients\n\n"
+        f"Статус: {status}\n"
+        f"🏢 Company ID: {mask_secret(settings.company_id if settings else None)}\n"
+        f"🔐 Partner token: {mask_secret(settings.partner_token if settings else None)}\n"
+        f"👤 User token: {mask_secret(settings.user_token if settings else None)}\n"
+        "🌐 Base URL: по умолчанию"
     )
 
 
@@ -523,7 +585,11 @@ def _branch_title_or_company_id(settings: YClientsSettings | None) -> str:
 
 
 def _can_access(context: RouterContext) -> bool:
-    return can_view_yclients(_actor_role(context))
+    return normalize_role(_actor_role(context)) in {ROLE_DEVELOPER, ROLE_ADMIN, ROLE_MANAGER}
+
+
+def _can_manage(context: RouterContext) -> bool:
+    return normalize_role(_actor_role(context)) in {ROLE_DEVELOPER, ROLE_MANAGER}
 
 
 def _actor_role(context: RouterContext) -> str:
