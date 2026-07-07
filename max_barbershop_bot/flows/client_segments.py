@@ -21,7 +21,6 @@ from max_barbershop_bot.services.client_segments import (
     ClientSegmentsLoadError,
     ClientSegmentsNotConfiguredError,
     format_segment_summary,
-    format_segments_overview,
 )
 from max_barbershop_bot.services.navigation import show_home
 from max_barbershop_bot.ui.buttons import (
@@ -48,8 +47,13 @@ from max_barbershop_bot.ui.buttons import (
 )
 from max_barbershop_bot.ui.texts import (
     BROADCAST_MENU_TEXT,
-    BROADCAST_NO_ACCESS_TEXT,
+    CLIENT_SEGMENTS_ACCESS_DENIED_TEXT,
     CLIENT_SEGMENTS_BROADCAST_LIMIT_TEXT,
+    CLIENT_SEGMENTS_MENU_TEXT,
+    CLIENT_SEGMENTS_REFRESH_ERROR_TEXT,
+    CLIENT_SEGMENTS_REFRESH_SUCCESS_TEXT,
+    CLIENT_SEGMENTS_REFRESHING_TEXT,
+    CLIENT_SEGMENTS_STALE_TEXT,
     CLIENT_SEGMENTS_LOAD_ERROR_TEXT,
     YCLIENTS_NOT_CONFIGURED_TEXT,
 )
@@ -73,7 +77,6 @@ _SEGMENT_CALLBACKS = {
     SEGMENTS_BY_SERVICE_PAYLOAD,
     SEGMENTS_BY_SERVICE_PREFIX,
     SEGMENTS_BIRTHDAY_SOON_PAYLOAD,
-    SEGMENTS_REFRESH_PAYLOAD,
 }
 
 
@@ -83,7 +86,7 @@ def register_client_segment_routes(router: Router) -> None:
     router.on_callback(BROADCAST_SEGMENTS_PAYLOAD, handle_segments_menu)
     for payload in _SEGMENT_CALLBACKS:
         router.on_callback(payload, handle_segment_selected)
-    router.on_callback(SEGMENTS_REFRESH_PAYLOAD, handle_segments_menu)
+    router.on_callback(SEGMENTS_REFRESH_PAYLOAD, handle_segments_refresh)
     router.on_callback_prefix(SEGMENTS_BY_MASTER_PREFIX, handle_segment_selected)
     router.on_callback_prefix(SEGMENTS_BY_SERVICE_PREFIX, handle_segment_selected)
     router.on_callback(SEGMENTS_BROADCAST_PAYLOAD, handle_segment_broadcast)
@@ -117,8 +120,27 @@ async def handle_segment_selected(context: RouterContext) -> None:
         await _show_service_picker(context)
         return
     if not payload or (payload not in _SEGMENT_CALLBACKS and not payload.startswith((SEGMENTS_BY_MASTER_PREFIX, SEGMENTS_BY_SERVICE_PREFIX))):
+        await _answer_callback(context)
+        await context.send_text(CLIENT_SEGMENTS_STALE_TEXT, keyboard=client_segments_menu_keyboard())
         return
     await _show_segment(context, payload)
+
+
+async def handle_segments_refresh(context: RouterContext) -> None:
+    """Refresh segment overview caches and return to the root segment keyboard."""
+
+    if not _can_open_segments(context):
+        await _send_no_access(context)
+        return
+    await _answer_callback(context)
+    await context.send_text(CLIENT_SEGMENTS_REFRESHING_TEXT)
+    try:
+        await ClientSegmentService(_yclients_settings_repository()).get_core_segments_overview()
+    except Exception:
+        logger.exception("MAX segment refresh failed")
+        await context.send_text(CLIENT_SEGMENTS_REFRESH_ERROR_TEXT, keyboard=client_segments_menu_keyboard())
+        return
+    await context.send_text(CLIENT_SEGMENTS_REFRESH_SUCCESS_TEXT, keyboard=client_segments_menu_keyboard())
 
 
 async def handle_segment_broadcast(context: RouterContext) -> None:
@@ -172,16 +194,7 @@ async def handle_segments_home(context: RouterContext) -> None:
 
 
 async def _show_segments_overview(context: RouterContext) -> None:
-    try:
-        await context.send_text("⏳ Считаю сегменты по YClients...")
-        overview = await ClientSegmentService(_yclients_settings_repository()).get_core_segments_overview()
-    except ClientSegmentsNotConfiguredError:
-        await context.send_text(YCLIENTS_NOT_CONFIGURED_TEXT, keyboard=client_segments_menu_keyboard())
-        return
-    except ClientSegmentsLoadError:
-        await context.send_text(CLIENT_SEGMENTS_LOAD_ERROR_TEXT, keyboard=client_segments_menu_keyboard())
-        return
-    await context.send_text(format_segments_overview(overview), keyboard=client_segments_menu_keyboard())
+    await context.send_text(CLIENT_SEGMENTS_MENU_TEXT, keyboard=client_segments_menu_keyboard())
 
 async def _show_master_picker(context: RouterContext) -> None:
     await _answer_callback(context)
@@ -330,8 +343,8 @@ def _actor_role(context: RouterContext) -> str:
 
 
 async def _send_no_access(context: RouterContext) -> None:
-    await _answer_callback(context, BROADCAST_NO_ACCESS_TEXT)
-    await context.send_text(BROADCAST_NO_ACCESS_TEXT)
+    await _answer_callback(context, CLIENT_SEGMENTS_ACCESS_DENIED_TEXT)
+    await context.send_text(CLIENT_SEGMENTS_ACCESS_DENIED_TEXT)
 
 
 async def _answer_callback(context: RouterContext, notification: str | None = None) -> None:
