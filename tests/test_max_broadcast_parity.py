@@ -438,170 +438,154 @@ def test_lost_segment_detail_format_matches_telegram_count_detail():
     assert "😌 В этом сегменте пока нет клиентов." in text
     assert "телефон" not in text
 
-class _FakeNoFutureSegmentService(segments.ClientSegmentService):
-    def __init__(self, clients, records):
-        super().__init__(settings_repository=None)  # type: ignore[arg-type]
-        self.clients = clients
-        self.records = records
-        self.last_date_range = None
 
-    def _require_settings(self):
-        return YClientsSettings(company_id="1", partner_token="p", user_token="u", branch_timezone="UTC")
+def _create_cancellation_events_db(tmp_path):
+    import sqlite3
 
-    async def _fetch_clients(self, settings):
-        return self.clients
-
-    async def _fetch_records(self, settings, *, date_from: str, date_to: str):
-        self.last_date_range = (date_from, date_to)
-        return self.records
-
-
-def _client(client_id: str, phone: str | None = None, name: str | None = None):
-    return {"id": client_id, "phone": phone or f"+79990000{int(client_id):03d}", "name": name or f"Клиент {client_id}"}
-
-
-def test_no_future_segment_button_callback_matches_telegram_meaning():
-    from max_barbershop_bot.ui.buttons import SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD
-
-    keyboard = client_segments_menu_keyboard()
-    buttons = [button for row in keyboard.rows for button in row if button.text == "📅 Без будущей записи"]
-
-    assert buttons
-    assert buttons[0].payload == SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD
-    assert SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD == "segments:no_future_bookings"
+    db_path = tmp_path / "cancelled_segment.sqlite3"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE cancellation_recovery_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            platform_user_id TEXT NOT NULL,
+            yclients_record_id TEXT NOT NULL,
+            yclients_client_id TEXT,
+            max_user_id TEXT,
+            chat_id TEXT,
+            scheduled_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            sent_at TEXT,
+            skipped_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.commit()
+    connection.close()
+    return db_path
 
 
-def test_no_future_clients_with_future_active_booking_are_excluded_and_without_future_included():
-    async def run():
-        service = _FakeNoFutureSegmentService(
-            [_client("101"), _client("102"), _client("103")],
-            [_future_record("101", 5, attendance=0), _future_record("103", 7, attendance=2)],
+def _insert_cancellation_event(db_path, *, platform_user_id, created_at, scheduled_at, record_id):
+    import sqlite3
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO cancellation_recovery_events (
+                platform, platform_user_id, yclients_record_id, yclients_client_id,
+                scheduled_at, status, created_at, updated_at
+            ) VALUES ('max', ?, ?, ?, ?, 'pending', ?, ?)
+            """,
+            (platform_user_id, record_id, f"yc-{platform_user_id}", scheduled_at, created_at, created_at),
         )
 
-        result = await service.get_clients_without_future_bookings()
 
-        assert result.segment_type == "no_future_bookings"
-        assert {member.yclients_client_id for member in result.members} == {"102"}
-        assert result.diagnostics["excluded_future_booking_count"] == 2
+def test_cancelled_segment_uses_local_recovery_events_not_yclients(monkeypatch, tmp_path):
+    db_path = _create_cancellation_events_db(tmp_path)
+    now = datetime.now(timezone.utc)
+    inside = (now - timedelta(days=1)).isoformat()
+    old = (now - timedelta(days=31)).isoformat()
+    future_schedule = (now + timedelta(days=10)).isoformat()
+    _insert_cancellation_event(db_path, platform_user_id="u1", created_at=inside, scheduled_at=future_schedule, record_id="r1")
+    _insert_cancellation_event(db_path, platform_user_id="u1", created_at=inside, scheduled_at=future_schedule, record_id="r2")
+    _insert_cancellation_event(db_path, platform_user_id="u2", created_at=old, scheduled_at=future_schedule, record_id="r3")
+    _insert_cancellation_event(db_path, platform_user_id="u3", created_at=inside, scheduled_at=old, record_id="r4")
 
-    asyncio.run(run())
+    service = segments.ClientSegmentService(settings_repository=None, database_path=str(db_path))  # type: ignore[arg-type]
+
+    async def fail_fetch_records(*args, **kwargs):
+        raise AssertionError("cancelled segment must not fetch live YClients records")
+
+    monkeypatch.setattr(service, "_fetch_records", fail_fetch_records)
+
+    result = asyncio.run(service.get_cancelled_clients(30))
+
+    assert result.segment_type == "cancelled"
+    assert result.count == 2
+    assert result.diagnostics["source_table"] == "cancellation_recovery_events"
+    assert result.diagnostics["timestamp_column"] == "created_at"
+    assert result.diagnostics["scheduled_at_used"] is False
+    assert result.diagnostics["is_test_column_present"] is False
 
 
-def test_no_future_deleted_future_booking_does_not_exclude_like_telegram():
-    async def run():
-        record = _future_record("101", 5, attendance=0)
-        record["deleted"] = True
-        service = _FakeNoFutureSegmentService([_client("101")], [record])
+def test_cancelled_segment_excludes_test_events_when_column_exists(tmp_path):
+    import sqlite3
 
-        result = await service.get_clients_without_future_bookings()
-
-        assert [member.yclients_client_id for member in result.members] == ["101"]
-
-    asyncio.run(run())
-
-
-def test_no_future_cancelled_and_no_show_future_booking_do_not_exclude_like_telegram():
-    async def run():
-        service = _FakeNoFutureSegmentService(
-            [_client("101"), _client("102"), _client("103")],
-            [_future_record("101", 5, attendance=-1), _future_record("102", 5, attendance=1), _future_record("103", 5, attendance="no_show")],
+    db_path = tmp_path / "cancelled_segment_is_test.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE cancellation_recovery_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_user_id TEXT NOT NULL,
+                yclients_record_id TEXT NOT NULL,
+                yclients_client_id TEXT,
+                scheduled_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                is_test INTEGER NOT NULL DEFAULT 0
+            )
+            """
         )
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute("INSERT INTO cancellation_recovery_events (platform_user_id, yclients_record_id, scheduled_at, status, created_at, updated_at, is_test) VALUES ('real', 'r1', ?, 'pending', ?, ?, 0)", (now, now, now))
+        connection.execute("INSERT INTO cancellation_recovery_events (platform_user_id, yclients_record_id, scheduled_at, status, created_at, updated_at, is_test) VALUES ('test', 'r2', ?, 'pending', ?, ?, 1)", (now, now, now))
 
-        result = await service.get_clients_without_future_bookings()
+    service = segments.ClientSegmentService(settings_repository=None, database_path=str(db_path))  # type: ignore[arg-type]
+    result = asyncio.run(service.get_cancelled_clients(30))
 
-        assert {member.yclients_client_id for member in result.members} == {"101", "102", "103"}
-
-    asyncio.run(run())
-
-
-def test_no_future_duplicate_clients_count_once():
-    async def run():
-        service = _FakeNoFutureSegmentService([_client("101"), _client("101", name="Дубль")], [])
-
-        result = await service.get_clients_without_future_bookings()
-
-        assert result.count == 1
-        assert [member.yclients_client_id for member in result.members] == ["101"]
-
-    asyncio.run(run())
+    assert result.count == 1
+    assert result.diagnostics["is_test_column_present"] is True
 
 
-def test_no_future_date_boundary_timezone_matches_telegram_today_to_365_days():
-    async def run():
-        service = _FakeNoFutureSegmentService([_client("101")], [])
-
-        await service.get_clients_without_future_bookings()
-
-        assert service.last_date_range is not None
-        date_from, date_to = service.last_date_range
-        assert date_from == datetime.now(timezone.utc).date().isoformat()
-        assert date_to == (datetime.now(timezone.utc) + timedelta(days=365)).date().isoformat()
-
-    asyncio.run(run())
-
-
-def test_no_future_count_detail_formatting_matches_telegram_summary_only():
+def test_cancelled_segment_formatting_matches_telegram_summary_and_empty_state():
     result = segments.ClientSegmentResult(
-        segment_type="no_future_bookings",
-        title="📅 Без будущей записи",
-        description="Клиенты, у которых сейчас нет будущей записи.",
-        members=[segments.ClientSegmentMember(yclients_client_id="101", name="Анна", phone="+79990000001")],
-        branch_timezone="UTC",
-        calculated_at="2026-07-07T12:00:00+00:00",
-        diagnostics={"telegram_recipients_count": 0},
-    )
-
-    text = segments.format_segment_summary(result)
-
-    assert text == (
-        "📅 Без будущей записи\n\n"
-        "Клиенты, у которых сейчас нет будущей записи.\n\n"
-        "Клиентов в YClients: 1\n"
-        "Получателей в Telegram: 0\n"
-        "Обновлено: 07.07.2026 12:00\n\n"
-        "ℹ️ YClients показывает бизнес-аудиторию, а Telegram — только клиентов, связанных с ботом для отправки."
-    )
-    assert "Анна" not in text
-    assert "+7999" not in text
-
-
-def test_no_future_empty_state_matches_telegram():
-    result = segments.ClientSegmentResult(
-        segment_type="no_future_bookings",
-        title="📅 Без будущей записи",
-        description="Клиенты, у которых сейчас нет будущей записи.",
+        segment_type="cancelled",
+        title="❌ Отменили запись",
+        description="Клиенты, которые отменяли запись и могут вернуться через мягкое напоминание.",
         members=[],
         branch_timezone="UTC",
         calculated_at="2026-07-07T12:00:00+00:00",
-        diagnostics={"telegram_recipients_count": 0},
+        diagnostics={},
     )
 
-    assert segments.format_segment_summary(result).endswith("😌 В этом сегменте пока нет клиентов.")
+    assert segments.format_segment_summary(result) == (
+        "❌ Отменили запись\n\n"
+        "Клиенты, которые отменяли запись и могут вернуться через мягкое напоминание.\n\n"
+        "Количество клиентов: 0\n"
+        "Обновлено: 07.07.2026 12:00\n\n"
+        "😌 В этом сегменте пока нет клиентов."
+    )
 
 
-def test_no_future_stale_unknown_callback_is_friendly():
+def test_cancelled_segment_handoff_uses_cancelled_recent_and_preview_text_flow():
     from max_barbershop_bot.flows import client_segments
 
-    source = inspect.getsource(client_segments.handle_segment_selected)
-    assert "segments:no_future" in source
-    assert client_segments.SEGMENT_STALE_TEXT == "⚠️ Данные устарели. Откройте раздел заново."
-
-
-def test_no_future_broadcast_handoff_goes_to_text_preview_flow_only_not_send():
-    from max_barbershop_bot.flows import client_segments
-
+    assert client_segments._audience_key_from_segment_payload("segments:cancelled", "cancelled") == "cancelled_recent"
     source = inspect.getsource(client_segments.handle_segment_broadcast)
     assert "open_segment_broadcast_text" in source
-    assert "handle_confirm_send" not in source
-    assert client_segments._audience_key_from_segment_payload("segments:no_future_bookings", "no_future_bookings") == "no_future_booking"
+    assert "send_confirmed" not in source
 
 
-def test_no_future_pr_does_not_change_other_segment_payload_mappings():
-    from max_barbershop_bot.flows import client_segments
+def test_broadcast_flow_accepts_cancelled_recent_alias(monkeypatch):
+    from max_barbershop_bot.flows import broadcasts
 
-    assert client_segments._audience_key_from_segment_payload("segments:active_30", "active_30") == "active_30"
-    assert client_segments._audience_key_from_segment_payload("segments:lost_30", "lost_30") == "lost_30"
-    assert client_segments._audience_key_from_segment_payload("segments:lost_60", "lost_60") == "lost_60"
-    assert client_segments._audience_key_from_segment_payload("segments:lost_90", "lost_90") == "lost_90"
-    assert client_segments._audience_key_from_segment_payload("segments:cancelled", "cancelled") == "cancelled_30"
-    assert client_segments._audience_key_from_segment_payload("segments:birthday_soon", "birthday_soon") == "birthday_soon"
+    calls = []
+
+    class FakeService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def get_cancelled_clients(self, days):
+            calls.append(days)
+            return segments.ClientSegmentResult(segment_type="cancelled", title="❌ Отменили запись", members=[])
+
+    monkeypatch.setattr(broadcasts, "ClientSegmentService", FakeService)
+
+    asyncio.run(broadcasts._fetch_yclients_clients_for_audience(context=None, audience_key="cancelled_recent"))  # type: ignore[arg-type]
+
+    assert calls == [30]
