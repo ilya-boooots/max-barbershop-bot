@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
+from os import getenv
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
 from max_barbershop_bot.integrations.yclients.endpoints import get_service_categories, get_services, get_staff, list_bookings_by_date_range, list_clients
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
@@ -125,7 +129,7 @@ SEGMENT_DESCRIPTIONS = {
     ClientSegmentType.LOST_30: "Клиенты, которые не были 30 дней и не имеют будущей записи.",
     ClientSegmentType.LOST_60: "Клиенты, которые не были 60 дней и не имеют будущей записи.",
     ClientSegmentType.LOST_90: "Клиенты, которые не были 90 дней и не имеют будущей записи.",
-    ClientSegmentType.CANCELLED: "Клиенты с отменённой записью в истории YClients.",
+    ClientSegmentType.CANCELLED: "Клиенты, которые отменяли запись и могут вернуться через мягкое напоминание.",
     ClientSegmentType.BY_MASTER: "Выбор клиентов по мастеру из истории YClients.",
     ClientSegmentType.BY_SERVICE: "Выбор клиентов по услуге из истории YClients.",
     ClientSegmentType.BIRTHDAY_SOON: "Клиенты, у которых скоро день рождения.",
@@ -136,8 +140,9 @@ SEGMENT_DESCRIPTIONS = {
 class ClientSegmentService:
     """Calculate client segments from YClients records and clients only."""
 
-    def __init__(self, settings_repository: YClientsSettingsRepository) -> None:
+    def __init__(self, settings_repository: YClientsSettingsRepository, database_path: str | None = None) -> None:
         self._settings_repository = settings_repository
+        self._database_path = database_path or getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH
 
     async def get_core_segments_overview(self) -> ClientSegmentsOverview:
         """Return all/active 7/30/90 counts from YClients with one clients fetch and one 90-day records fetch."""
@@ -322,33 +327,48 @@ class ClientSegmentService:
         return result
 
     async def get_cancelled_clients(self, days: int = 30) -> ClientSegmentResult:
-        settings = self._require_settings()
-        tz = _zoneinfo(settings.branch_timezone)
-        now_local = datetime.now(tz)
-        date_from = (now_local - timedelta(days=days)).date().isoformat()
-        date_to = now_local.date().isoformat()
+        """Return Telegram-parity cancelled segment from local recovery events.
+
+        Telegram counts distinct cancellation recovery event users over the recent window.
+        MAX has no cancellation_detected_at_utc/is_test columns today, so created_at is the
+        read-only detection timestamp fallback and no test-event predicate is invented.
+        scheduled_at is intentionally not used because it is recovery delivery timing.
+        """
+
         started = time.perf_counter()
+        tz_name = self._branch_timezone_or_default()
+        tz = _zoneinfo(tz_name)
+        now_local = datetime.now(tz)
+        cutoff_utc = (now_local - timedelta(days=days)).astimezone(timezone.utc)
         try:
-            records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
-        except YClientsError as exc:
-            logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", ClientSegmentType.CANCELLED.value, type(exc).__name__)
-            raise ClientSegmentsLoadError("segment_yclients_error") from exc
+            rows, diagnostics = self._fetch_cancelled_event_rows(cutoff_utc)
+        except sqlite3.Error as exc:
+            logger.warning("client_segment_local_events_error segment_type=%s error_class=%s", ClientSegmentType.CANCELLED.value, type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_local_events_error") from exc
+
         members: dict[str, _MemberAccumulator] = {}
-        for record in records:
-            if _record_is_deleted(record) or not _record_is_cancelled(record):
+        for row in rows:
+            platform_user_id = _normalize_id(row.get("platform_user_id"))
+            if not platform_user_id:
                 continue
-            identity = _record_client_identity(record)
-            key = _business_client_key(identity)
-            if not key:
-                continue
-            accumulator = members.setdefault(key, _MemberAccumulator.from_identity(identity))
-            accumulator.add_visit(_record_datetime_utc(record) or _record_created_at_utc(record))
-        return self._build_result(
-            ClientSegmentType.CANCELLED,
-            members.values(),
-            settings.branch_timezone,
-            {"date_from": date_from, "date_to": date_to, "records_count": len(records), "duration_ms": int((time.perf_counter() - started) * 1000)},
-        )
+            accumulator = members.setdefault(
+                platform_user_id,
+                _MemberAccumulator(
+                    yclients_client_id=_normalize_id(row.get("yclients_client_id")) or None,
+                    name=None,
+                    phone=None,
+                ),
+            )
+            accumulator.add_visit(_parse_raw_datetime(row.get(diagnostics["timestamp_column"])))
+
+        diagnostics.update({
+            "date_from": cutoff_utc.isoformat(),
+            "date_to": now_local.astimezone(timezone.utc).isoformat(),
+            "events_count": len(rows),
+            "distinct_platform_user_id_count": len(members),
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        })
+        return self._build_result(ClientSegmentType.CANCELLED, members.values(), tz_name, diagnostics)
 
     async def list_masters(self) -> list[dict[str, str]]:
         settings = self._require_settings()
@@ -452,6 +472,38 @@ class ClientSegmentService:
             raise ClientSegmentsNotConfiguredError("yclients_settings_missing")
         return settings
 
+
+    def _branch_timezone_or_default(self) -> str:
+        try:
+            return self._require_settings().branch_timezone
+        except Exception:
+            return DEFAULT_BRANCH_TIMEZONE
+
+    def _fetch_cancelled_event_rows(self, cutoff_utc: datetime) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        with closing(sqlite3.connect(self._database_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(cancellation_recovery_events)").fetchall()}
+            if not columns:
+                raise sqlite3.OperationalError("cancellation_recovery_events table is missing")
+            timestamp_column = "cancellation_detected_at_utc" if "cancellation_detected_at_utc" in columns else "created_at"
+            selected_columns = ["platform_user_id", "yclients_client_id", timestamp_column]
+            sql = f"SELECT {', '.join(selected_columns)} FROM cancellation_recovery_events WHERE platform_user_id IS NOT NULL"
+            if "is_test" in columns:
+                sql += " AND COALESCE(is_test, 0) = 0"
+            fetched = [dict(row) for row in connection.execute(sql).fetchall()]
+        rows = []
+        for row in fetched:
+            event_dt = _parse_raw_datetime(row.get(timestamp_column))
+            if event_dt is None or event_dt < cutoff_utc:
+                continue
+            rows.append(row)
+        return rows, {
+            "source_table": "cancellation_recovery_events",
+            "timestamp_column": timestamp_column,
+            "is_test_column_present": "is_test" in columns,
+            "scheduled_at_used": False,
+        }
+
     async def _fetch_clients(self, settings: YClientsSettings) -> list[dict[str, Any]]:
         async with _build_client(settings) as client:
             rows: list[dict[str, Any]] = []
@@ -548,6 +600,7 @@ def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_
         ClientSegmentType.LOST_30.value,
         ClientSegmentType.LOST_60.value,
         ClientSegmentType.LOST_90.value,
+        ClientSegmentType.CANCELLED.value,
     }:
         updated = _format_local_datetime(result.calculated_at, result.branch_timezone)
         lines = [

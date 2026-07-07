@@ -745,7 +745,7 @@ async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_
         audience_key = "lost_30"
     if audience_key in {AUDIENCE_SOURCE_YCLIENTS_ALL, ALL_USERS_AUDIENCE.key}:
         return await _fetch_yclients_clients(context)
-    service = ClientSegmentService(YClientsSettingsRepository(_database_path()))
+    service = ClientSegmentService(YClientsSettingsRepository(_database_path()), database_path=_database_path())
     if audience_key == "active_30":
         result = await service.get_active_clients(30)
     elif audience_key == "lost_30":
@@ -756,7 +756,7 @@ async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_
         result = await service.get_lost_clients(90)
     elif audience_key == "no_future_bookings":
         result = await service.get_clients_without_future_bookings()
-    elif audience_key == "cancelled_30":
+    elif audience_key in {"cancelled_30", "cancelled_recent"}:
         result = await service.get_cancelled_clients(30)
     elif audience_key == "birthday_soon":
         result = await service.get_birthday_soon_clients()

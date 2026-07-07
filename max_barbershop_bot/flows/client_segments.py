@@ -260,7 +260,7 @@ async def _show_segment(context: RouterContext, payload: str, *, notification: s
 
 
 async def _load_segment(payload: str) -> ClientSegmentResult:
-    service = ClientSegmentService(_yclients_settings_repository())
+    service = ClientSegmentService(_yclients_settings_repository(), database_path=_database_path())
     if payload == SEGMENTS_ALL_CLIENTS_PAYLOAD:
         return await service.get_all_clients()
     if payload == SEGMENTS_ACTIVE_30_PAYLOAD:
@@ -297,7 +297,7 @@ def _audience_key_from_segment_payload(payload: str, segment_type: str) -> str:
         "lost_60": "lost_60",
         "lost_90": "lost_90",
         "no_future_bookings": "no_future_bookings",
-        "cancelled": "cancelled_30",
+        "cancelled": "cancelled_recent",
         "birthday_soon": "birthday_soon",
     }
     return mapping.get(segment_type, segment_type)
