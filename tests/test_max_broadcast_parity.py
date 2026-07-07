@@ -331,3 +331,109 @@ def test_broadcast_report_contains_metrics_without_raw_secrets_payload_or_phone(
     assert "secret-token" not in text
     assert "payload" not in text.lower()
     assert "79990000001" not in text
+
+class _FakeLostSegmentService(segments.ClientSegmentService):
+    def __init__(self, records):
+        self.records = records
+        self.last_date_range = None
+
+    def _require_settings(self):
+        from max_barbershop_bot.repositories.yclients_settings import YClientsSettings
+        return YClientsSettings(company_id="1", partner_token="p", user_token="u", branch_timezone="UTC")
+
+    async def _fetch_records(self, settings, *, date_from: str, date_to: str):
+        self.last_date_range = (date_from, date_to)
+        return self.records
+
+
+def _lost_record(client_id: str, days_ago: int, *, attendance=1, deleted=False):
+    now = datetime.now(timezone.utc)
+    return {
+        "datetime": (now - timedelta(days=days_ago)).isoformat(),
+        "client": {"id": client_id, "phone": f"+79990000{int(client_id):03d}", "name": f"Клиент {client_id}"},
+        "attendance": attendance,
+        "deleted": deleted,
+    }
+
+
+def _future_record(client_id: str, days_ahead: int, *, attendance=0):
+    now = datetime.now(timezone.utc)
+    return {
+        "datetime": (now + timedelta(days=days_ahead)).isoformat(),
+        "client": {"id": client_id, "phone": f"+79990000{int(client_id):03d}", "name": f"Клиент {client_id}"},
+        "attendance": attendance,
+    }
+
+
+def test_lost_30_60_90_counts_match_telegram_attendance_and_thresholds():
+    import asyncio
+
+    async def run():
+        service = _FakeLostSegmentService([
+            _lost_record("101", 30),
+            _lost_record("102", 60),
+            _lost_record("103", 90),
+            _lost_record("104", 29),
+            _lost_record("105", 120, attendance=-1),
+            _lost_record("106", 120, deleted=True),
+        ])
+
+        result_30 = await service.get_lost_clients(30)
+        result_60 = await service.get_lost_clients(60)
+        result_90 = await service.get_lost_clients(90)
+
+        assert {member.yclients_client_id for member in result_30.members} == {"101", "102", "103"}
+        assert {member.yclients_client_id for member in result_60.members} == {"102", "103"}
+        assert {member.yclients_client_id for member in result_90.members} == {"103"}
+
+    asyncio.run(run())
+
+
+def test_lost_segments_use_telegram_past_records_window_not_future_lookahead():
+    import asyncio
+
+    async def run():
+        service = _FakeLostSegmentService([_lost_record("101", 45)])
+
+        await service.get_lost_clients(30)
+
+        assert service.last_date_range is not None
+        assert service.last_date_range[1] == datetime.now(timezone.utc).date().isoformat()
+
+    asyncio.run(run())
+
+
+def test_lost_duplicate_client_counts_once_and_future_row_excludes_if_present():
+    import asyncio
+
+    async def run():
+        service = _FakeLostSegmentService([
+            _lost_record("101", 45),
+            _lost_record("101", 75),
+            _lost_record("102", 75),
+            _future_record("102", 5, attendance=0),
+        ])
+
+        result = await service.get_lost_clients(30)
+
+        assert [member.yclients_client_id for member in result.members] == ["101"]
+
+    asyncio.run(run())
+
+
+def test_lost_segment_detail_format_matches_telegram_count_detail():
+    result = segments.ClientSegmentResult(
+        segment_type="lost_30",
+        title="😴 Не были 30 дней",
+        description="Клиенты, которые не были 30 дней и не имеют будущей записи.",
+        members=[],
+        branch_timezone="UTC",
+        calculated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    text = segments.format_segment_summary(result)
+
+    assert text.startswith("😴 Не были 30 дней\n\nКлиенты, которые не были 30 дней")
+    assert "Количество клиентов: 0" in text
+    assert "😌 В этом сегменте пока нет клиентов." in text
+    assert "телефон" not in text
