@@ -56,6 +56,8 @@ from max_barbershop_bot.ui.texts import (
 
 logger = logging.getLogger(__name__)
 
+SEGMENT_STALE_TEXT = "⚠️ Данные устарели. Откройте раздел заново."
+
 _SELECTED_SEGMENT_PAYLOAD_KEY = "selected_segment_payload"
 _SELECTED_SEGMENT_RESULT_KEY = "selected_segment_result"
 _SELECTED_SEGMENT_RECIPIENTS_KEY = "selected_segment_recipients"
@@ -117,6 +119,9 @@ async def handle_segment_selected(context: RouterContext) -> None:
         await _show_service_picker(context)
         return
     if not payload or (payload not in _SEGMENT_CALLBACKS and not payload.startswith((SEGMENTS_BY_MASTER_PREFIX, SEGMENTS_BY_SERVICE_PREFIX))):
+        if str(payload or "").startswith("segments:active:"):
+            await _answer_callback(context)
+            await context.send_text(SEGMENT_STALE_TEXT, keyboard=client_segments_menu_keyboard())
         return
     await _show_segment(context, payload)
 
