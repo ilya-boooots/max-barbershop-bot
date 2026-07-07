@@ -815,7 +815,7 @@ def client_segment_result_keyboard(*, can_broadcast: bool = False) -> MaxInlineK
 
     rows: list[list[MaxButton]] = []
     if can_broadcast:
-        rows.append([MaxButton(text="📣 Сделать рассылку", payload=SEGMENTS_BROADCAST_PAYLOAD)])
+        rows.append([MaxButton(text="📣 Использовать для рассылки", payload=SEGMENTS_BROADCAST_PAYLOAD)])
     rows.extend(
         [
             [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
