@@ -122,7 +122,8 @@ async def handle_segment_selected(context: RouterContext) -> None:
         await _show_service_picker(context)
         return
     if not payload or (payload not in _SEGMENT_CALLBACKS and not payload.startswith((SEGMENTS_BY_MASTER_PREFIX, SEGMENTS_BY_SERVICE_PREFIX))):
-        if str(payload or "").startswith("segments:active:"):
+        stale_prefixes = ("segments:active:", "segments:no_future")
+        if str(payload or "").startswith(stale_prefixes):
             await _answer_callback(context)
             await context.send_text(SEGMENT_STALE_TEXT, keyboard=client_segments_menu_keyboard())
         return
