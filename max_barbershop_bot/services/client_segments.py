@@ -119,7 +119,7 @@ SEGMENT_TITLES = {
 SEGMENT_DESCRIPTIONS = {
     ClientSegmentType.ALL_CLIENTS: "Все клиенты, которых бот может идентифицировать и которым потенциально можно отправлять уведомления.",
     ClientSegmentType.ACTIVE_7: "Клиенты, которые были активны за последние 7 дней.",
-    ClientSegmentType.ACTIVE_30: "Клиенты с любой реальной неотменённой активностью за последние 30 дней.",
+    ClientSegmentType.ACTIVE_30: "Клиенты, которые были активны за последние 30 дней.",
     ClientSegmentType.ACTIVE_90: "Клиенты, которые были активны за последние 90 дней.",
     ClientSegmentType.LOST: "Клиенты с последним визитом 30+ дней назад и без будущей записи.",
     ClientSegmentType.LOST_30: "Клиенты, которые не были 30 дней и не имеют будущей записи.",
@@ -212,34 +212,39 @@ class ClientSegmentService:
         settings = self._require_settings()
         tz = _zoneinfo(settings.branch_timezone)
         now_local = datetime.now(tz)
-        date_from = (now_local - timedelta(days=90)).date().isoformat()
-        date_to = (now_local + timedelta(days=90)).date().isoformat()
+        date_from = (now_local - timedelta(days=days)).date().isoformat()
+        date_to = now_local.date().isoformat()
         started = time.perf_counter()
         try:
-            client_rows = await self._fetch_clients(settings)
             records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
         except YClientsError as exc:
             logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", segment_type.value, type(exc).__name__)
             raise ClientSegmentsLoadError("segment_yclients_error") from exc
 
-        client_members = _dedupe_client_rows(client_rows)
-        active_keys, active_diagnostics = _active_keys_by_window(records, now_local, allowed_keys=set(client_members))
+        now_utc = now_local.astimezone(timezone.utc)
         members: dict[str, _MemberAccumulator] = {}
         for record in records:
-            if _record_is_deleted(record) or _record_is_cancelled(record):
+            if _record_is_deleted(record):
+                continue
+            event_dt = _record_datetime_utc(record)
+            if event_dt and event_dt > now_utc:
                 continue
             identity = _record_client_identity(record)
             key = _business_client_key(identity)
-            if not key or key not in active_keys[days]:
+            if not key:
                 continue
-            accumulator = members.setdefault(key, client_members.get(key) or _MemberAccumulator.from_identity(identity))
-            activity_dt = _activity_datetime_for_window(record, now_local, days)
-            if activity_dt and activity_dt > now_local.astimezone(timezone.utc):
-                accumulator.add_future_booking(activity_dt)
-            else:
-                accumulator.add_visit(activity_dt)
+            accumulator = members.setdefault(key, _MemberAccumulator.from_identity(identity))
+            accumulator.add_visit(event_dt)
 
-        diagnostics = {"date_from": date_from, "date_to": date_to, "date_range_from": date_from, "date_range_to": date_to, "clients_count": len(client_rows), "records_count": len(records), "raw_records_count": len(records), "duration_ms": int((time.perf_counter() - started) * 1000), **active_diagnostics}
+        diagnostics = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "date_range_from": date_from,
+            "date_range_to": date_to,
+            "records_count": len(records),
+            "raw_records_count": len(records),
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        }
         result = self._build_result(segment_type, members.values(), settings.branch_timezone, diagnostics)
         logger.info("client_segment_loaded segment_type=%s segment_count=%s records_count=%s", segment_type.value, result.count, len(records))
         return result
@@ -251,7 +256,7 @@ class ClientSegmentService:
         tz = _zoneinfo(settings.branch_timezone)
         now_local = datetime.now(tz)
         date_from = (now_local - timedelta(days=LOOKBACK_DAYS)).date().isoformat()
-        date_to = (now_local + timedelta(days=FUTURE_LOOKAHEAD_DAYS)).date().isoformat()
+        date_to = now_local.date().isoformat()
         try:
             records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
         except YClientsError as exc:
@@ -538,6 +543,25 @@ class _MemberAccumulator:
 def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_LIST_LIMIT) -> str:
     """Build user-facing segment summary with masked phones."""
 
+    if result.segment_type in {
+        ClientSegmentType.ACTIVE_30.value,
+        ClientSegmentType.LOST_30.value,
+        ClientSegmentType.LOST_60.value,
+        ClientSegmentType.LOST_90.value,
+    }:
+        updated = _format_local_datetime(result.calculated_at, result.branch_timezone)
+        lines = [
+            result.title,
+            "",
+            result.description,
+            "",
+            f"Количество клиентов: {result.count}",
+            f"Обновлено: {updated or '—'}",
+        ]
+        if not result.members:
+            lines.extend(["", "😌 В этом сегменте пока нет клиентов."])
+        return "\n".join(lines)
+
     lines = [f"🎯 Сегмент: {_plain_segment_title(result.title)}", f"Клиентов: {result.count}", "Источник: YClients"]
     if not result.members:
         lines.extend(["", "В этом сегменте пока нет клиентов 🙏"])
@@ -562,6 +586,20 @@ def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_
     return "\n".join(lines).rstrip()
 
 
+def _format_lost_segment_detail(result: ClientSegmentResult) -> str:
+    """Format lost segment details like the Telegram segment detail screen."""
+
+    text = (
+        f"{result.title}\n\n"
+        f"{result.description}\n\n"
+        f"Количество клиентов: {result.count}\n"
+        f"Обновлено: {_format_local_date(result.calculated_at, result.branch_timezone) if result.calculated_at else '—'}"
+    )
+    if not result.count:
+        text += "\n\n😌 В этом сегменте пока нет клиентов."
+    return text
+
+
 def mask_phone(phone: str | None) -> str:
     """Mask a phone number for safe segment screens."""
 
@@ -580,19 +618,21 @@ def _build_client(settings: YClientsSettings) -> YClientsClient:
 
 
 def _is_valid_past_visit(record: dict[str, Any], now_utc: datetime) -> bool:
-    if _record_is_deleted(record) or _record_is_cancelled(record):
+    if _record_is_deleted(record):
         return False
     event_dt = _record_datetime_utc(record)
     if event_dt and event_dt > now_utc:
         return False
-    return True
+    return record.get("attendance") == 1
 
 
 def _is_active_future_booking(record: dict[str, Any], now_utc: datetime) -> bool:
-    if _record_is_deleted(record) or _record_is_cancelled(record):
+    if _record_is_deleted(record):
         return False
     event_dt = _record_datetime_utc(record)
-    return bool(event_dt and event_dt > now_utc)
+    if not event_dt or event_dt <= now_utc:
+        return False
+    return record.get("attendance") in (None, 0, 2)
 
 
 def _record_datetime_utc(record: dict[str, Any]) -> datetime | None:
@@ -728,6 +768,13 @@ def _zoneinfo(tz_name: str | None) -> ZoneInfo:
 def _format_local_date(value: str, tz_name: str) -> str:
     try:
         return _parse_datetime(value).astimezone(_zoneinfo(tz_name)).strftime("%d.%m.%Y")
+    except Exception:
+        return value
+
+
+def _format_local_datetime(value: str, tz_name: str) -> str:
+    try:
+        return _parse_datetime(value).astimezone(_zoneinfo(tz_name)).strftime("%d.%m.%Y %H:%M")
     except Exception:
         return value
 

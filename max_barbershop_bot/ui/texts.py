@@ -191,6 +191,7 @@ BROADCAST_MENU_TEXT = """📣 Рассылка
 BROADCAST_TEXT_INPUT_TEXT = "Введите текст рассылки:"
 BROADCAST_EMPTY_TEXT = "Текст рассылки не может быть пустым 🙏"
 BROADCAST_NO_ACCESS_TEXT = "⛔️ Недостаточно прав."
+CLIENT_SEGMENTS_ACCESS_DENIED_TEXT = "⛔ Раздел недоступен."
 BROADCAST_NO_RECIPIENTS_TEXT = "😌 В этой аудитории пока нет клиентов для рассылки."
 BROADCAST_SENDING_TEXT = "🚀 Отправляю рассылку..."
 BROADCAST_ALREADY_SENDING_TEXT = """Рассылка уже выполняется 🙏
@@ -211,6 +212,10 @@ STATISTICS_LOAD_ERROR_TEXT = """Не удалось загрузить стат�
 CLIENT_SEGMENTS_MENU_TEXT = """🎯 Сегменты клиентов
 
 Бот автоматически распределяет клиентов по группам на основе визитов, записей и данных из YClients."""
+CLIENT_SEGMENTS_REFRESHING_TEXT = "🔄 Обновляю сегменты клиентов..."
+CLIENT_SEGMENTS_REFRESH_SUCCESS_TEXT = "✅ Сегменты обновлены."
+CLIENT_SEGMENTS_REFRESH_ERROR_TEXT = "⚠️ Не удалось обновить сегменты. Попробуйте позже."
+CLIENT_SEGMENTS_STALE_TEXT = "⚠️ Данные устарели. Откройте раздел заново."
 CLIENT_SEGMENTS_EMPTY_TEXT = "В этом сегменте пока нет клиентов 🙏"
 CLIENT_SEGMENTS_LOAD_ERROR_TEXT = """Не удалось загрузить сегмент клиентов 🙏
 
