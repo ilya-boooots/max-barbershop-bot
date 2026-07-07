@@ -543,13 +543,28 @@ class _MemberAccumulator:
 def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_LIST_LIMIT) -> str:
     """Build user-facing segment summary with masked phones."""
 
-    if result.segment_type in {
-        ClientSegmentType.ACTIVE_30.value,
-        ClientSegmentType.LOST_30.value,
-        ClientSegmentType.LOST_60.value,
-        ClientSegmentType.LOST_90.value,
-    }:
+    if result.segment_type in {ClientSegmentType.ACTIVE_30.value, ClientSegmentType.NO_FUTURE_BOOKINGS.value}:
         updated = _format_local_datetime(result.calculated_at, result.branch_timezone)
+        if result.segment_type == ClientSegmentType.NO_FUTURE_BOOKINGS.value:
+            yclients_count = result.count
+            telegram_count = result.diagnostics.get("telegram_recipients_count")
+            if telegram_count is None:
+                telegram_count = result.diagnostics.get("telegram_count", 0)
+            lines = [
+                result.title,
+                "",
+                result.description,
+                "",
+                f"Клиентов в YClients: {yclients_count}",
+                f"Получателей в Telegram: {max(0, int(telegram_count or 0))}",
+                f"Обновлено: {updated or '—'}",
+            ]
+            if yclients_count != int(telegram_count or 0):
+                lines.extend(["", "ℹ️ YClients показывает бизнес-аудиторию, а Telegram — только клиентов, связанных с ботом для отправки."])
+            if not result.members:
+                lines.extend(["", "😌 В этом сегменте пока нет клиентов."])
+            return "\n".join(lines)
+
         lines = [
             result.title,
             "",
@@ -627,9 +642,11 @@ def _is_valid_past_visit(record: dict[str, Any], now_utc: datetime) -> bool:
 
 
 def _is_active_future_booking(record: dict[str, Any], now_utc: datetime) -> bool:
-    if _record_is_deleted(record):
+    """Return Telegram-parity future active booking predicate for YClients records."""
+
+    if bool(record.get("deleted")):
         return False
-    event_dt = _record_datetime_utc(record)
+    event_dt = _record_date_field_utc(record, ("datetime", "date"))
     if not event_dt or event_dt <= now_utc:
         return False
     return record.get("attendance") in (None, 0, 2)
