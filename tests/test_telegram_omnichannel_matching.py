@@ -202,3 +202,149 @@ def test_required_case_intersection_selects_unless_rejected():
     assert diagnostics["phone_key_intersection_count"] > 0
     assert diagnostics["telegram_matched_by_phone_count"] > 0
     assert diagnostics["telegram_matching_resolver_invariant_failed"] is False
+
+
+def test_all_audience_estimate_distinguishes_total_yclients_from_eligible_max():
+    svc = service([], [max_user(yclients_client_id="1")])
+    estimate = svc.estimate([
+        YClientsNormalizedClient(id="1", phones=("+79990000001",)),
+        YClientsNormalizedClient(id="2", phones=("+79990000002",)),
+    ])
+
+    assert estimate.total_yclients_clients == 2
+    assert estimate.max_selected == 1
+    assert estimate.unreachable == 1
+    assert estimate.total_deliveries == 1
+
+
+def test_unmapped_yclients_client_is_missing_not_sent():
+    svc = service([], [])
+    target = svc.resolve_delivery_target_for_yclients_client(YClientsNormalizedClient(id="missing", phones=("+79990000003",)))
+
+    assert target.platform is None
+    assert target.reason == "skipped_unreachable"
+
+
+def test_duplicate_yclients_clients_mapped_to_same_max_user_are_deduped():
+    svc = service([], [max_user(phone="+79990000001")])
+    estimate = svc.estimate([
+        YClientsNormalizedClient(id="1", phones=("+79990000001",)),
+        YClientsNormalizedClient(id="2", phones=("89990000001",)),
+    ])
+
+    assert estimate.max_selected == 1
+    assert estimate.duplicates_excluded == 1
+    assert estimate.telegram_matching_diagnostics["duplicate_recipient_skipped_count"] == 1
+
+
+def test_manual_all_audience_disabled_notifications_match_telegram_and_still_sendable():
+    svc = service([], [max_user(phone="+79990000001", notifications_enabled=False)])
+    estimate = svc.estimate([YClientsNormalizedClient(id="1", phones=("+79990000001",))])
+
+    assert estimate.max_selected == 1
+    assert estimate.telegram_matching_diagnostics["rejected_notifications_disabled_count"] == 0
+
+
+class FakeOmniHistoryRepo:
+    def __init__(self):
+        self.broadcasts = []
+        self.deliveries = []
+        self.statuses = []
+
+    def upsert_broadcast(self, **kwargs):
+        self.broadcasts.append(kwargs)
+
+    def mark_status(self, broadcast_id, status, **kwargs):
+        self.statuses.append({"broadcast_id": broadcast_id, "status": status, **kwargs})
+
+    def add_delivery(self, **kwargs):
+        self.deliveries.append(kwargs)
+
+
+class FakeAdapter:
+    platform = PLATFORM_MAX
+
+    def __init__(self, outcomes=None):
+        self.outcomes = outcomes or {}
+        self.sent = []
+
+    def can_send(self, target):
+        return True
+
+    async def send_text(self, target, text):
+        self.sent.append((target.platform_user_id, text))
+        return self.outcomes.get(target.platform_user_id, (True, None))
+
+    async def send_media(self, target, text, attachment):
+        return await self.send_text(target, text)
+
+    def format_error(self, error):
+        return type(error).__name__
+
+
+def service_with_history(max_users, adapter):
+    history = FakeOmniHistoryRepo()
+    svc = OmnichannelBroadcastService(
+        users_repository=FakeUsersRepo(max_users),
+        telegram_users_repository=FakeTelegramRepo([]),
+        attribution_repository=FakeAttributionRepo(),
+        history_repository=history,
+        adapters={PLATFORM_MAX: adapter},
+    )
+    return svc, history
+
+
+def test_confirm_send_creates_one_run_and_delivery_per_eligible_or_skipped_outcome():
+    import asyncio
+
+    adapter = FakeAdapter(outcomes={"max1": (True, None)})
+    svc, history = service_with_history([max_user(yclients_client_id="1")], adapter)
+
+    report = asyncio.run(svc.send(
+        clients=[YClientsNormalizedClient(id="1"), YClientsNormalizedClient(id="2")],
+        text="Тестовая рассылка",
+        origin_platform=PLATFORM_MAX,
+        created_by_user_id="owner",
+        broadcast_id="bid-test",
+        sleep_seconds=0,
+    ))
+
+    assert len(history.broadcasts) == 1
+    assert len(history.deliveries) == 2
+    assert [d["delivery_status"] for d in history.deliveries] == ["sent", "skipped_unreachable"]
+    assert report.max_sent == 1
+    assert report.skipped_unreachable == 1
+
+
+def test_send_report_counts_sent_skipped_failed_blocked_and_dedup():
+    import asyncio
+
+    adapter = FakeAdapter(outcomes={"max1": (True, None), "max2": (False, "skipped_blocked"), "max3": (False, "boom")})
+    users = [
+        User(1, PLATFORM_MAX, "max1", "max1", "chat1", None, None, None, None, "+79990000001", None, "user", "1", True),
+        User(2, PLATFORM_MAX, "max2", "max2", "chat2", None, None, None, None, "+79990000002", None, "user", "2", True),
+        User(3, PLATFORM_MAX, "max3", "max3", "chat3", None, None, None, None, "+79990000003", None, "user", "3", True),
+    ]
+    svc, history = service_with_history(users, adapter)
+
+    report = asyncio.run(svc.send(
+        clients=[
+            YClientsNormalizedClient(id="1", phones=("+79990000001",)),
+            YClientsNormalizedClient(id="2", phones=("+79990000002",)),
+            YClientsNormalizedClient(id="3", phones=("+79990000003",)),
+            YClientsNormalizedClient(id="4", phones=("+79990000001",)),
+            YClientsNormalizedClient(id="5", phones=("+79990000005",)),
+        ],
+        text="Отчёт без телефона 79990000001 и token",
+        origin_platform=PLATFORM_MAX,
+        created_by_user_id="owner",
+        broadcast_id="bid-report",
+        sleep_seconds=0,
+    ))
+
+    assert report.max_sent == 1
+    assert report.skipped_blocked == 1
+    assert report.failed == 1
+    assert report.skipped_duplicate == 1
+    assert report.skipped_unreachable == 1
+    assert [d["delivery_status"] for d in history.deliveries] == ["sent", "skipped_blocked", "failed", "skipped_duplicate", "skipped_unreachable"]
