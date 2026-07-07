@@ -543,7 +543,12 @@ class _MemberAccumulator:
 def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_LIST_LIMIT) -> str:
     """Build user-facing segment summary with masked phones."""
 
-    if result.segment_type == ClientSegmentType.ACTIVE_30.value:
+    if result.segment_type in {
+        ClientSegmentType.ACTIVE_30.value,
+        ClientSegmentType.LOST_30.value,
+        ClientSegmentType.LOST_60.value,
+        ClientSegmentType.LOST_90.value,
+    }:
         updated = _format_local_datetime(result.calculated_at, result.branch_timezone)
         lines = [
             result.title,
