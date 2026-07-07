@@ -386,6 +386,12 @@ def _build_identity_indexes(users: list[Any]) -> _IdentityIndexes:
     return _IdentityIndexes(by_client_id=by_client_id, by_phone_key=by_phone_key)
 
 
+def _delivery_route_key(platform: str, platform_user_id: str | None, max_user_id: str | None, chat_id: str | None) -> tuple[str, str]:
+    """Return a safe business key used to avoid duplicate one-time delivery."""
+
+    return (platform, str(platform_user_id or max_user_id or chat_id or ""))
+
+
 class OmnichannelBroadcastService:
     """Resolve YClients clients to one best platform target and send once."""
 
@@ -403,6 +409,7 @@ class OmnichannelBroadcastService:
         telegram_candidates = int(matching_diagnostics.get("telegram_matches_before_deliverable_count") or 0)
         max_candidates = sum(1 for client in clients if self._candidate(client, PLATFORM_MAX) is not None)
         both = sum(1 for t in targets if t.priority_decision == "telegram_priority_max_duplicate_skipped")
+        duplicate_recipients = int(matching_diagnostics.get("duplicate_recipient_skipped_count") or 0)
         logger.info(
             "MAX Telegram broadcast diagnostic: yclients_clients_count=%s telegram_candidates_count=%s max_candidates_count=%s both_platforms_count=%s telegram_selected_count=%s max_selected_count=%s",
             len(clients), telegram_candidates, max_candidates, both, sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM), sum(1 for t in targets if t.platform == PLATFORM_MAX),
@@ -411,8 +418,8 @@ class OmnichannelBroadcastService:
         return AudienceEstimate(
             total_yclients_clients=len(clients), telegram_candidates=telegram_candidates, max_candidates=max_candidates,
             both_platforms=both, telegram_selected=sum(1 for t in targets if t.platform == PLATFORM_TELEGRAM),
-            max_selected=sum(1 for t in targets if t.platform == PLATFORM_MAX), unreachable=sum(1 for t in targets if t.platform is None),
-            duplicates_excluded=both, media_cross_platform_supported=media_supported,
+            max_selected=sum(1 for t in targets if t.platform == PLATFORM_MAX), unreachable=sum(1 for t in targets if t.platform is None and t.priority_decision != "duplicate_recipient_skipped"),
+            duplicates_excluded=both + duplicate_recipients, media_cross_platform_supported=media_supported,
             media_warning=("⚠️ Telegram-отправитель или медиа для Telegram недоступны: такие получатели будут отмечены как недоставленные." if attachment and attachment.type and not media_supported else None),
             telegram_matching_diagnostics=matching_diagnostics,
         )
@@ -435,8 +442,12 @@ class OmnichannelBroadcastService:
         logger.info("MAX omnichannel broadcast diagnostic: send_started broadcast_id=%s origin_platform=%s yclients_clients_count=%s attachment_type=%s", bid, origin_platform, len(clients), attachment.type if attachment else None)
         for client, target in zip(clients, targets):
             if target.platform is None:
-                report.skipped_unreachable += 1
-                self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=None, platform_user_id=None, delivery_status="skipped_unreachable", reason="skipped_unreachable", origin_platform=origin_platform, priority_decision=target.priority_decision)
+                if target.priority_decision == "duplicate_recipient_skipped":
+                    report.skipped_duplicate += 1
+                    self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=None, platform_user_id=None, delivery_status="skipped_duplicate", reason="skipped_duplicate", origin_platform=origin_platform, priority_decision=target.priority_decision)
+                else:
+                    report.skipped_unreachable += 1
+                    self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=None, platform_user_id=None, delivery_status="skipped_unreachable", reason="skipped_unreachable", origin_platform=origin_platform, priority_decision=target.priority_decision)
                 continue
             if target.priority_decision == "telegram_priority_max_duplicate_skipped":
                 report.skipped_duplicate += 1
@@ -495,6 +506,8 @@ class OmnichannelBroadcastService:
         rejected_blocked = 0
         rejected_stopped = 0
         duplicate_priority = 0
+        duplicate_recipient_skipped = 0
+        seen_delivery_routes: set[tuple[str, str]] = set()
 
         for client in clients:
             cid_keys = _client_id_keys(client.id)
@@ -532,6 +545,12 @@ class OmnichannelBroadcastService:
                     max_duplicate = self._candidate_from_indexes(cid_keys, phone_keys, max_index, PLATFORM_MAX) is not None or self._candidate(client, PLATFORM_MAX) is not None
                     if max_duplicate:
                         duplicate_priority += 1
+                    route_key = _delivery_route_key(PLATFORM_TELEGRAM, telegram.platform_user_id, telegram.max_user_id, telegram.chat_id)
+                    if route_key in seen_delivery_routes:
+                        duplicate_recipient_skipped += 1
+                        targets.append(DeliveryTarget(client.id, None, None, priority_decision="duplicate_recipient_skipped", reason="skipped_duplicate"))
+                        continue
+                    seen_delivery_routes.add(route_key)
                     targets.append(DeliveryTarget(client.id, PLATFORM_TELEGRAM, telegram.platform_user_id, telegram.max_user_id, telegram.chat_id, "telegram_priority_max_duplicate_skipped" if max_duplicate else "telegram_priority", "telegram_selected"))
                     continue
                 telegram_matched_but_not_deliverable = True
@@ -544,7 +563,13 @@ class OmnichannelBroadcastService:
             max_user = self._candidate_from_indexes(cid_keys, phone_keys, max_index, PLATFORM_MAX) or self._candidate(client, PLATFORM_MAX)
             if max_user and self._is_deliverable_for_manual_broadcast(max_user, PLATFORM_MAX):
                 reason = "max_selected_telegram_not_deliverable" if telegram_matched_but_not_deliverable else "max_selected_after_telegram_absent"
-                targets.append(DeliveryTarget(client.id, PLATFORM_MAX, max_user.platform_user_id, max_user.max_user_id, max_user.chat_id, reason, reason))
+                route_key = _delivery_route_key(PLATFORM_MAX, max_user.platform_user_id, max_user.max_user_id, max_user.chat_id)
+                if route_key in seen_delivery_routes:
+                    duplicate_recipient_skipped += 1
+                    targets.append(DeliveryTarget(client.id, None, None, priority_decision="duplicate_recipient_skipped", reason="skipped_duplicate"))
+                else:
+                    seen_delivery_routes.add(route_key)
+                    targets.append(DeliveryTarget(client.id, PLATFORM_MAX, max_user.platform_user_id, max_user.max_user_id, max_user.chat_id, reason, reason))
             else:
                 targets.append(DeliveryTarget(client.id, None, None, priority_decision="unreachable", reason="skipped_unreachable"))
 
@@ -584,6 +609,7 @@ class OmnichannelBroadcastService:
             "rejected_blocked_count": rejected_blocked,
             "rejected_stopped_count": rejected_stopped,
             "telegram_priority_duplicate_skipped_count": duplicate_priority,
+            "duplicate_recipient_skipped_count": duplicate_recipient_skipped,
             "telegram_matching_resolver_invariant_failed": invariant_failed,
             "telegram_unmatched_reason": reason,
             "yclients_phone_key_samples_masked": [mask_phone(k) for k in sorted(yc_phone_keys)[:5]],
