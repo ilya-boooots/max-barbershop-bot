@@ -251,7 +251,7 @@ class ClientSegmentService:
         tz = _zoneinfo(settings.branch_timezone)
         now_local = datetime.now(tz)
         date_from = (now_local - timedelta(days=LOOKBACK_DAYS)).date().isoformat()
-        date_to = (now_local + timedelta(days=FUTURE_LOOKAHEAD_DAYS)).date().isoformat()
+        date_to = now_local.date().isoformat()
         try:
             records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
         except YClientsError as exc:
@@ -538,6 +538,9 @@ class _MemberAccumulator:
 def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_LIST_LIMIT) -> str:
     """Build user-facing segment summary with masked phones."""
 
+    if result.segment_type in {ClientSegmentType.LOST_30.value, ClientSegmentType.LOST_60.value, ClientSegmentType.LOST_90.value}:
+        return _format_lost_segment_detail(result)
+
     lines = [f"🎯 Сегмент: {_plain_segment_title(result.title)}", f"Клиентов: {result.count}", "Источник: YClients"]
     if not result.members:
         lines.extend(["", "В этом сегменте пока нет клиентов 🙏"])
@@ -562,6 +565,20 @@ def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_
     return "\n".join(lines).rstrip()
 
 
+def _format_lost_segment_detail(result: ClientSegmentResult) -> str:
+    """Format lost segment details like the Telegram segment detail screen."""
+
+    text = (
+        f"{result.title}\n\n"
+        f"{result.description}\n\n"
+        f"Количество клиентов: {result.count}\n"
+        f"Обновлено: {_format_local_date(result.calculated_at, result.branch_timezone) if result.calculated_at else '—'}"
+    )
+    if not result.count:
+        text += "\n\n😌 В этом сегменте пока нет клиентов."
+    return text
+
+
 def mask_phone(phone: str | None) -> str:
     """Mask a phone number for safe segment screens."""
 
@@ -580,19 +597,21 @@ def _build_client(settings: YClientsSettings) -> YClientsClient:
 
 
 def _is_valid_past_visit(record: dict[str, Any], now_utc: datetime) -> bool:
-    if _record_is_deleted(record) or _record_is_cancelled(record):
+    if _record_is_deleted(record):
         return False
     event_dt = _record_datetime_utc(record)
     if event_dt and event_dt > now_utc:
         return False
-    return True
+    return record.get("attendance") == 1
 
 
 def _is_active_future_booking(record: dict[str, Any], now_utc: datetime) -> bool:
-    if _record_is_deleted(record) or _record_is_cancelled(record):
+    if _record_is_deleted(record):
         return False
     event_dt = _record_datetime_utc(record)
-    return bool(event_dt and event_dt > now_utc)
+    if not event_dt or event_dt <= now_utc:
+        return False
+    return record.get("attendance") in (None, 0, 2)
 
 
 def _record_datetime_utc(record: dict[str, Any]) -> datetime | None:

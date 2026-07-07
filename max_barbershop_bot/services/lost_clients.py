@@ -82,7 +82,7 @@ class LostClientsService:
         tz = _zoneinfo(settings.branch_timezone)
         now_local = datetime.now(tz)
         date_from = (now_local - timedelta(days=LOOKBACK_DAYS)).date().isoformat()
-        date_to = (now_local + timedelta(days=FUTURE_LOOKAHEAD_DAYS)).date().isoformat()
+        date_to = now_local.date().isoformat()
         try:
             records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
         except YClientsError as exc:
@@ -322,13 +322,7 @@ def _is_valid_past_visit(record: dict[str, Any], now_utc: datetime) -> bool:
     event_dt = _record_datetime_utc(record)
     if event_dt and event_dt > now_utc:
         return False
-    attendance = record.get("attendance")
-    if attendance is None:
-        attendance = record.get("visit_attendance")
-    if attendance is not None:
-        return str(attendance).strip() == "1"
-    status = str(record.get("status") or "").strip().lower()
-    return status in {"visit", "done", "paid", "completed", "show"}
+    return record.get("attendance") == 1
 
 
 def _is_active_future_booking(record: dict[str, Any], now_utc: datetime) -> bool:
@@ -337,13 +331,7 @@ def _is_active_future_booking(record: dict[str, Any], now_utc: datetime) -> bool
     event_dt = _record_datetime_utc(record)
     if not event_dt or event_dt <= now_utc:
         return False
-    attendance = record.get("attendance")
-    if attendance is None:
-        attendance = record.get("visit_attendance")
-    if attendance is None:
-        status = str(record.get("status") or "").strip().lower()
-        return status not in {"cancelled", "canceled", "deleted", "no_show", "noshow"}
-    return str(attendance).strip() in {"0", "2"}
+    return record.get("attendance") in (None, 0, 2)
 
 
 def _record_datetime_utc(record: dict[str, Any]) -> datetime | None:
