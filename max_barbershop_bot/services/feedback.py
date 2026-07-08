@@ -10,7 +10,7 @@ from typing import Any
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
-from max_barbershop_bot.repositories.feedback import FeedbackRepository, FeedbackRequest, FeedbackResponse
+from max_barbershop_bot.repositories.feedback import FeedbackAdminReply, FeedbackRepository, FeedbackRequest, FeedbackResponse
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, User, UsersRepository
@@ -44,14 +44,14 @@ NEGATIVE_COMMENT_PROMPT = FEEDBACK_NEGATIVE_COMMENT_PROMPT_TEXT
 NEGATIVE_THANKS_TEXT = FEEDBACK_NEGATIVE_THANKS_TEXT
 STALE_TEXT = "Спасибо, мы уже получили вашу оценку 🙏"
 NON_TEXT_COMMENT_TEXT = "Пожалуйста, отправьте комментарий текстом."
-INVALID_RATING_TEXT = FEEDBACK_INVALID_RATING_TEXT
-COMMENT_TOO_SHORT_TEXT = FEEDBACK_COMMENT_TOO_SHORT_TEXT
-COMMENT_TOO_LONG_TEXT = FEEDBACK_COMMENT_TOO_LONG_TEXT
-RATING_MISSING_TEXT = FEEDBACK_RATING_MISSING_TEXT
-MIN_COMMENT_LENGTH = 5
-MAX_COMMENT_LENGTH = 1000
-DEFAULT_YANDEX_REVIEW_URL = "https://yandex.ru/maps"
-DEFAULT_TWO_GIS_REVIEW_URL = "https://2gis.ru"
+FEEDBACK_ADMIN_NO_ACCESS_TEXT = "⛔ Нет доступа"
+FEEDBACK_ADMIN_STALE_TEXT = "⚠️ Событие устарело."
+FEEDBACK_ADMIN_REPLY_PROMPT = "Введите ответ клиенту:"
+FEEDBACK_ADMIN_REPLY_CONFIRM_TEXT = "Отправить клиенту такой ответ?\n\n{text}"
+FEEDBACK_ADMIN_REPLY_CLIENT_TEXT = "💬 Ответ от команды барбершопа:\n\n{text}"
+FEEDBACK_ADMIN_REPLY_SUCCESS_TEXT = "✅ Ответ отправлен клиенту."
+FEEDBACK_ADMIN_REPLY_TEST_SUCCESS_TEXT = "✅ Тестовый ответ отправлен."
+FEEDBACK_ADMIN_REPLY_CANCELLED_TEXT = "Отменено"
 
 @dataclass(frozen=True)
 class DueFeedback:
@@ -159,8 +159,11 @@ def save_negative_comment(database_path: str, *, platform_user_id: str, comment:
     return repo.save_comment(platform_user_id=platform_user_id, yclients_record_id=request.yclients_record_id, comment=comment)
 
 async def notify_negative_feedback(sender: MaxMessageSender, *, database_path: str, response: FeedbackResponse) -> None:
-    if response.admin_notified_at:
+    repo = FeedbackRepository(database_path)
+    fresh_response = repo.get_response_by_id(response.id)
+    if fresh_response is None or fresh_response.admin_notified_at:
         return
+    response = fresh_response
     targets = []
     users = UsersRepository(database_path)
     for staff in StaffRolesRepository(database_path).list_staff():
@@ -168,21 +171,102 @@ async def notify_negative_feedback(sender: MaxMessageSender, *, database_path: s
             user = users.find_by_platform_user_id(staff.platform_user_id, platform=staff.platform)
             if user is not None and user.notifications_enabled:
                 targets.append(user)
-    text = _render_admin_alert(response)
+    text = render_post_visit_admin_alert(database_path=database_path, response=response)
+    keyboard = feedback_admin_keyboard(response.id, is_test=is_test_feedback_response(database_path=database_path, response=response))
     sent_any = False
     for user in {u.platform_user_id: u for u in targets}.values():
         recipient_type, recipient_id = _recipient(user)
         if recipient_id is None:
             continue
-        history = await send_business_notification(sender, database_path=database_path, platform=PLATFORM_MAX, platform_user_id=user.platform_user_id, max_user_id=user.max_user_id, chat_id=user.chat_id, yclients_record_id=response.yclients_record_id, notification_type=POST_VISIT_FEEDBACK_NEGATIVE_ALERT, text=text, recipient_type=recipient_type, recipient_id=recipient_id, metadata={"rating": response.rating})
-        sent_any = sent_any or history is not None
+        if recipient_type == "chat":
+            result = await sender.send_to_chat(recipient_id, text, keyboard=keyboard, metadata={"rating": response.rating, "feedback_response_id": response.id})
+        else:
+            result = await sender.send_to_user(recipient_id, text, keyboard=keyboard, metadata={"rating": response.rating, "feedback_response_id": response.id})
+        sent_any = sent_any or result.ok
     if sent_any:
-        FeedbackRepository(database_path).mark_admin_notified(platform_user_id=response.platform_user_id, yclients_record_id=response.yclients_record_id)
+        repo.mark_admin_notified(platform_user_id=response.platform_user_id, yclients_record_id=response.yclients_record_id)
     _log_feedback_diagnostic(platform_user_id=response.platform_user_id, yclients_record_id=response.yclients_record_id, rating=response.rating, negative=True, admin_alert_sent=sent_any)
 
-def _render_admin_alert(response: FeedbackResponse) -> str:
+def feedback_admin_keyboard(response_id: int, *, is_test: bool = False) -> MaxInlineKeyboard:
+    back_payload = "broadcast:dev_tests:root" if is_test else "broadcast:history:root"
+    return MaxInlineKeyboard.from_rows([
+        [MaxButton(text="💬 Ответить клиенту", payload=f"feedback_admin_reply:{response_id}")],
+        [MaxButton(text="⬅️ Назад", payload=back_payload)],
+        [MaxButton(text="🏠 Главное меню", payload="nav:home")],
+    ])
+
+def feedback_admin_reply_confirm_keyboard() -> MaxInlineKeyboard:
+    return MaxInlineKeyboard.from_rows([
+        [MaxButton(text="✅ Отправить", payload="feedback_admin_reply_confirm:send")],
+        [MaxButton(text="✏️ Изменить", payload="feedback_admin_reply_confirm:edit")],
+        [MaxButton(text="⬅️ Назад", payload="feedback_admin_reply_confirm:back")],
+        [MaxButton(text="🏠 Главное меню", payload="nav:home")],
+    ])
+
+def render_post_visit_admin_alert(*, database_path: str, response: FeedbackResponse) -> str:
+    context = FeedbackRepository(database_path).get_response_context(response.id)
     comment = response.comment or "—"
-    return f"🚨 Низкая оценка после визита\n\nОценка: {response.rating}/5\nКомментарий: {comment}"
+    if is_test_feedback_response(database_path=database_path, response=response):
+        return (
+            f"🚨 Тестовая негативная оценка\n\n"
+            f"Оценка: {response.rating}/5\n"
+            f"Клиент: Тестовый клиент\n"
+            f"Телефон: {_mask_phone('+7 999 000-00-00')}\n"
+            f"Услуга: Тестовая стрижка\n"
+            f"Мастер: Тестовый мастер\n"
+            f"Дата визита: тестовый визит\n\n"
+            f"Комментарий клиента:\n{comment}\n\n"
+            f"🧪 Это тестовое событие. Реальные клиенты и записи не затронуты."
+        )
+    return (
+        f"🚨 Низкая оценка после визита\n\nОценка: {response.rating}/5\n"
+        f"Клиент: {_client_name(context)}\nТелефон: {_mask_phone(str(context.get('phone') or ''))}\n"
+        f"Услуга: {context.get('service_name') or '—'}\nМастер: {context.get('staff_name') or '—'}\n"
+        f"Дата визита: {_visit_datetime(context)}\n\nКомментарий клиента:\n{comment}"
+    )
+
+def is_test_feedback_response(*, database_path: str, response: FeedbackResponse) -> bool:
+    context = FeedbackRepository(database_path).get_response_context(response.id)
+    return bool(context.get("is_test") and context.get("source") == "dev_test")
+
+def is_feedback_admin(database_path: str, platform_user_id: str | None) -> bool:
+    if not platform_user_id:
+        return False
+    return StaffRolesRepository(database_path).get_highest_role(platform_user_id) in {"developer", "admin", "manager"}
+
+def get_feedback_response(database_path: str, response_id: int) -> FeedbackResponse | None:
+    response = FeedbackRepository(database_path).get_response_by_id(response_id)
+    if response is None or response.status not in {"open", "negative_comment_received"}:
+        return None
+    return response
+
+def save_feedback_admin_reply(database_path: str, *, response_id: int, admin_platform_user_id: str, text: str) -> FeedbackAdminReply | None:
+    return FeedbackRepository(database_path).save_admin_reply(response_id=response_id, admin_platform_user_id=admin_platform_user_id, text=text)
+
+def close_feedback_response(database_path: str, *, response_id: int, admin_platform_user_id: str) -> FeedbackResponse | None:
+    return FeedbackRepository(database_path).close_response(response_id=response_id, admin_platform_user_id=admin_platform_user_id)
+
+def client_recipient(database_path: str, response: FeedbackResponse) -> tuple[str, str | None]:
+    user = UsersRepository(database_path).find_by_platform_user_id(response.platform_user_id, platform=response.platform)
+    if user is None:
+        return "user", response.platform_user_id
+    return _recipient(user)
+
+def _client_name(context: dict[str, Any]) -> str:
+    parts = [str(context.get("first_name") or "").strip(), str(context.get("last_name") or "").strip()]
+    full_name = " ".join(part for part in parts if part).strip()
+    return str(context.get("display_name") or full_name or context.get("username") or "—")
+
+def _visit_datetime(context: dict[str, Any]) -> str:
+    return str(context.get("scheduled_for") or context.get("completed_at") or context.get("requested_at") or "—")
+
+def _mask_phone(phone: str) -> str:
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if not digits:
+        return "—"
+    if len(digits) <= 4:
+        return "*" * len(digits)
+    return f"+{'*' * max(0, len(digits) - 4)}{digits[-4:]}"
 
 def _recipient(user: User) -> tuple[str, str | None]:
     if user.chat_id: return "chat", user.chat_id
