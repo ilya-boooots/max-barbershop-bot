@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -17,6 +18,17 @@ from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRe
 from max_barbershop_bot.services.company_time import normalize_branch_timezone, zoneinfo_or_default
 from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials, load_active_yclients_settings
 from max_barbershop_bot.services.notifications import PLATFORM_MAX as NOTIFICATION_PLATFORM_MAX, send_business_notification
+from max_barbershop_bot.ui.buttons import feedback_public_review_links_keyboard
+from max_barbershop_bot.ui.texts import (
+    FEEDBACK_COMMENT_TOO_LONG_TEXT,
+    FEEDBACK_COMMENT_TOO_SHORT_TEXT,
+    FEEDBACK_INVALID_RATING_TEXT,
+    FEEDBACK_NEGATIVE_COMMENT_PROMPT_TEXT,
+    FEEDBACK_NEGATIVE_THANKS_TEXT,
+    FEEDBACK_POSITIVE_TEXT,
+    FEEDBACK_RATING_MISSING_TEXT,
+    FEEDBACK_REQUEST_TEXT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +38,20 @@ _COMPLETED = {"done", "completed", "visit", "paid", "show"}
 _NEGATIVE_THRESHOLD = 3
 _DELAY = timedelta(hours=2)
 
-REQUEST_TEXT = "Оцените, пожалуйста, ваш визит ⭐️"
-POSITIVE_TEXT = "Спасибо за высокую оценку 😊\n\nСсылки на отзывы пока не настроены."
-NEGATIVE_COMMENT_PROMPT = "Спасибо, что честно рассказали 🙏\n\nНапишите, пожалуйста, что пошло не так."
-NEGATIVE_THANKS_TEXT = "Спасибо. Мы получили ваш комментарий и постараемся разобраться 🙏"
+REQUEST_TEXT = FEEDBACK_REQUEST_TEXT
+POSITIVE_TEXT = FEEDBACK_POSITIVE_TEXT
+NEGATIVE_COMMENT_PROMPT = FEEDBACK_NEGATIVE_COMMENT_PROMPT_TEXT
+NEGATIVE_THANKS_TEXT = FEEDBACK_NEGATIVE_THANKS_TEXT
 STALE_TEXT = "Спасибо, мы уже получили вашу оценку 🙏"
 NON_TEXT_COMMENT_TEXT = "Пожалуйста, отправьте комментарий текстом."
+INVALID_RATING_TEXT = FEEDBACK_INVALID_RATING_TEXT
+COMMENT_TOO_SHORT_TEXT = FEEDBACK_COMMENT_TOO_SHORT_TEXT
+COMMENT_TOO_LONG_TEXT = FEEDBACK_COMMENT_TOO_LONG_TEXT
+RATING_MISSING_TEXT = FEEDBACK_RATING_MISSING_TEXT
+MIN_COMMENT_LENGTH = 5
+MAX_COMMENT_LENGTH = 1000
+DEFAULT_YANDEX_REVIEW_URL = "https://yandex.ru/maps"
+DEFAULT_TWO_GIS_REVIEW_URL = "https://2gis.ru"
 
 @dataclass(frozen=True)
 class DueFeedback:
@@ -43,12 +63,18 @@ class DueFeedback:
 
 def feedback_rating_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows([
-        [MaxButton(text="⭐⭐⭐⭐⭐", payload="feedback:rate:5")],
-        [MaxButton(text="⭐⭐⭐⭐", payload="feedback:rate:4")],
-        [MaxButton(text="⭐⭐⭐", payload="feedback:rate:3")],
-        [MaxButton(text="⭐⭐", payload="feedback:rate:2")],
-        [MaxButton(text="⭐", payload="feedback:rate:1")],
+        [MaxButton(text="⭐⭐⭐⭐⭐", payload="fb:rate:5")],
+        [MaxButton(text="⭐⭐⭐⭐", payload="fb:rate:4")],
+        [MaxButton(text="⭐⭐⭐", payload="fb:rate:3")],
+        [MaxButton(text="⭐⭐", payload="fb:rate:2")],
+        [MaxButton(text="⭐", payload="fb:rate:1")],
     ])
+
+def feedback_review_links_keyboard() -> MaxInlineKeyboard:
+    return feedback_public_review_links_keyboard(
+        yandex_url=(os.getenv("YANDEX_REVIEW_URL") or DEFAULT_YANDEX_REVIEW_URL).strip(),
+        two_gis_url=(os.getenv("TWO_GIS_REVIEW_URL") or DEFAULT_TWO_GIS_REVIEW_URL).strip(),
+    )
 
 async def send_due_feedback_requests(sender: MaxMessageSender, *, database_path: str, now: datetime | None = None, timezone_name: str | None = None) -> int:
     sent = 0
