@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 PLATFORM_MAX = "max"
 
@@ -31,6 +32,17 @@ class FeedbackResponse:
     comment: str | None
     is_negative: bool
     admin_notified_at: str | None
+    status: str = "open"
+    closed_by_platform_user_id: str | None = None
+    closed_at: str | None = None
+
+@dataclass(frozen=True)
+class FeedbackAdminReply:
+    id: int
+    feedback_response_id: int
+    created_at: str
+    admin_platform_user_id: str
+    text: str
 
 class FeedbackRepository:
     def __init__(self, database_path: str) -> None:
@@ -84,13 +96,21 @@ class FeedbackRepository:
             ).fetchone()
         return _response(row)
 
+    def get_response_by_id(self, response_id: int) -> FeedbackResponse | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM feedback_responses WHERE id=? LIMIT 1",
+                (int(response_id),),
+            ).fetchone()
+        return _response(row)
+
     def save_rating_once(self, *, platform_user_id: str, yclients_record_id: str, rating: int, is_negative: bool, platform: str = PLATFORM_MAX) -> FeedbackResponse | None:
         with closing(self._connect()) as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO feedback_responses (
-                    platform, platform_user_id, yclients_record_id, rating, is_negative, created_at
-                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    platform, platform_user_id, yclients_record_id, rating, is_negative, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
                 """,
                 (platform, platform_user_id, yclients_record_id, int(rating), int(is_negative)),
             )
@@ -116,6 +136,66 @@ class FeedbackRepository:
             connection.commit()
         return self.get_response(platform_user_id=platform_user_id, yclients_record_id=yclients_record_id, platform=platform)
 
+    def close_response(self, *, response_id: int, admin_platform_user_id: str) -> FeedbackResponse | None:
+        now = _now()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE feedback_responses
+                SET status='closed', closed_by_platform_user_id=?, closed_at=?
+                WHERE id=?
+                """,
+                (_required_text(admin_platform_user_id, "admin_platform_user_id"), now, int(response_id)),
+            )
+            connection.commit()
+        return self.get_response_by_id(response_id)
+
+    def save_admin_reply(self, *, response_id: int, admin_platform_user_id: str, text: str) -> FeedbackAdminReply | None:
+        now = _now()
+        with closing(self._connect()) as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO feedback_admin_replies (
+                    feedback_response_id, created_at, admin_platform_user_id, text
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (int(response_id), now, _required_text(admin_platform_user_id, "admin_platform_user_id"), _required_text(text, "text")),
+            )
+            connection.execute(
+                "UPDATE feedback_responses SET status='admin_replied' WHERE id=?",
+                (int(response_id),),
+            )
+            connection.commit()
+            row = connection.execute("SELECT * FROM feedback_admin_replies WHERE id=?", (cursor.lastrowid,)).fetchone()
+        return _reply(row)
+
+    def get_response_context(self, response_id: int) -> dict[str, Any]:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    r.id AS response_id, r.platform, r.platform_user_id, r.yclients_record_id,
+                    r.rating, r.comment, r.is_negative, r.admin_notified_at, r.status,
+                    u.display_name, u.first_name, u.last_name, u.username, u.phone, u.max_user_id, u.chat_id,
+                    req.yclients_client_id, req.requested_at, req.completed_at,
+                    nh.scheduled_for
+                FROM feedback_responses r
+                LEFT JOIN users u ON u.platform = r.platform AND u.platform_user_id = r.platform_user_id
+                LEFT JOIN feedback_requests req ON req.platform = r.platform
+                    AND req.platform_user_id = r.platform_user_id
+                    AND req.yclients_record_id = r.yclients_record_id
+                LEFT JOIN notification_history nh ON nh.platform = r.platform
+                    AND nh.platform_user_id = r.platform_user_id
+                    AND nh.yclients_record_id = r.yclients_record_id
+                    AND nh.notification_type = 'post_visit_feedback_request'
+                WHERE r.id=?
+                ORDER BY nh.id DESC
+                LIMIT 1
+                """,
+                (int(response_id),),
+            ).fetchone()
+        return dict(row) if row else {}
+
     def mark_admin_notified(self, *, platform_user_id: str, yclients_record_id: str, platform: str = PLATFORM_MAX) -> None:
         with closing(self._connect()) as connection:
             connection.execute(
@@ -138,4 +218,27 @@ def _request(row: sqlite3.Row | None) -> FeedbackRequest | None:
 
 def _response(row: sqlite3.Row | None) -> FeedbackResponse | None:
     if row is None: return None
-    return FeedbackResponse(int(row['id']), row['platform'], row['platform_user_id'], row['yclients_record_id'], int(row['rating']), row['comment'], bool(row['is_negative']), row['admin_notified_at'])
+    keys = set(row.keys())
+    return FeedbackResponse(
+        int(row['id']),
+        row['platform'],
+        row['platform_user_id'],
+        row['yclients_record_id'],
+        int(row['rating']),
+        row['comment'],
+        bool(row['is_negative']),
+        row['admin_notified_at'],
+        row['status'] if 'status' in keys else 'open',
+        row['closed_by_platform_user_id'] if 'closed_by_platform_user_id' in keys else None,
+        row['closed_at'] if 'closed_at' in keys else None,
+    )
+
+def _reply(row: sqlite3.Row | None) -> FeedbackAdminReply | None:
+    if row is None: return None
+    return FeedbackAdminReply(int(row['id']), int(row['feedback_response_id']), row['created_at'], row['admin_platform_user_id'], row['text'])
+
+def _required_text(value: str | None, field_name: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        raise ValueError(f"{field_name} is required")
+    return text

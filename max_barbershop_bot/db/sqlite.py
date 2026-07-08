@@ -318,8 +318,19 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             comment TEXT,
             is_negative INTEGER NOT NULL DEFAULT 0,
             admin_notified_at TEXT,
+            status TEXT NOT NULL DEFAULT 'open',
+            closed_by_platform_user_id TEXT,
+            closed_at TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(platform, platform_user_id, yclients_record_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS feedback_admin_replies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            feedback_response_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            admin_platform_user_id TEXT NOT NULL,
+            text TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS notification_history (
@@ -568,6 +579,20 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "feedback_responses", "comment", "TEXT")
     _ensure_column(connection, "feedback_responses", "is_negative", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "feedback_responses", "admin_notified_at", "TEXT")
+    _ensure_column(connection, "feedback_responses", "status", "TEXT NOT NULL DEFAULT 'open'")
+    _ensure_column(connection, "feedback_responses", "closed_by_platform_user_id", "TEXT")
+    _ensure_column(connection, "feedback_responses", "closed_at", "TEXT")
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feedback_admin_replies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            feedback_response_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            admin_platform_user_id TEXT NOT NULL,
+            text TEXT NOT NULL
+        )
+        """
+    )
     _ensure_column(connection, "notification_history", "max_user_id", "TEXT")
     _ensure_column(connection, "notification_history", "chat_id", "TEXT")
     _ensure_column(connection, "notification_history", "yclients_client_id", "TEXT")
