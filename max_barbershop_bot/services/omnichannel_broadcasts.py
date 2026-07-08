@@ -226,9 +226,8 @@ class TelegramBotApiBroadcastAdapter:
                             "MAX Telegram broadcast diagnostic: telegram_method=%s http_status=%s retry_after_present=%s",
                             method, response.status, retry_after is not None,
                         )
-                        if retry_once and retry_after is not None and retry_after <= 5:
-                            await asyncio.sleep(float(retry_after))
-                            return await self._request(method, payload, retry_once=False, use_get=use_get)
+                        # Telegram reference only waits after RetryAfter and records the recipient as failed;
+                        # it does not retry/resend the same recipient.
                     ok = bool(isinstance(data, dict) and data.get("ok"))
                     if ok:
                         self.sent_count += 1
@@ -315,13 +314,34 @@ def _retry_after(data: dict[str, Any] | None) -> int | None:
 def _telegram_error_reason(http_status: int, data: dict[str, Any] | None) -> str:
     description = str(data.get("description") if isinstance(data, dict) else "").lower()
     if http_status == 403 or "blocked" in description or "forbidden" in description:
-        return "skipped_blocked"
+        return "blocked"
     if http_status == 400 and ("chat not found" in description or "user not found" in description or "invalid" in description):
-        return "skipped_unreachable"
+        return "skipped_invalid"
     if http_status == 429:
-        return "failed_rate_limited"
+        return "retry_after"
     code = data.get("error_code") if isinstance(data, dict) else http_status
     return f"failed_telegram_{code}"
+
+
+
+def _safe_delivery_reason(error: str | None) -> str:
+    """Return a user/report-safe Telegram-parity failure summary."""
+
+    if not error:
+        return "failed"
+    normalized = str(error).strip().lower()
+    if normalized in {"timeout", "timeouterror", "clientconnectorerror", "clientresponseerror", "server_error"}:
+        return "failed"
+    if normalized.startswith("failed_telegram_"):
+        return normalized[:120]
+    if normalized in {"retry_after", "failed_rate_limited", "rate_limited"}:
+        return "retry_after"
+    if normalized in {"bad_request", "skipped_invalid", "skipped_unreachable"}:
+        return "bad_request"
+    if normalized in {"forbidden", "blocked", "skipped_blocked", "stopped"}:
+        return "forbidden"
+    return "failed"
+
 
 @dataclass(frozen=True)
 class _DeliverabilityResult:
@@ -447,7 +467,7 @@ class OmnichannelBroadcastService:
                     self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=None, platform_user_id=None, delivery_status="skipped_duplicate", reason="skipped_duplicate", origin_platform=origin_platform, priority_decision=target.priority_decision)
                 else:
                     report.skipped_unreachable += 1
-                    self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=None, platform_user_id=None, delivery_status="skipped_unreachable", reason="skipped_unreachable", origin_platform=origin_platform, priority_decision=target.priority_decision)
+                    self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=None, platform_user_id=None, delivery_status="skipped_no_tg_id", reason="нет Telegram ID", origin_platform=origin_platform, priority_decision=target.priority_decision)
                 continue
             if target.priority_decision == "telegram_priority_max_duplicate_skipped":
                 report.skipped_duplicate += 1
@@ -467,17 +487,22 @@ class OmnichannelBroadcastService:
                     report.max_sent += 1
                 status = "sent"; reason = None
             else:
+                safe_error = _safe_delivery_reason(error)
                 if error in {"skipped_blocked", "blocked", "stopped"}:
-                    report.skipped_blocked += 1; status = "skipped_blocked"; reason = error
+                    report.skipped_blocked += 1; report.failed += 1; status = "blocked"; reason = "forbidden"
+                elif error in {"skipped_invalid", "bad_request"}:
+                    report.failed += 1; status = "skipped_invalid"; reason = "bad_request"; report.errors.append(reason)
+                elif error in {"retry_after", "failed_rate_limited", "rate_limited"}:
+                    report.failed += 1; status = "failed"; reason = "retry_after"; report.errors.append(reason)
                 elif error == "skipped_media_unsupported":
                     report.skipped_media_unsupported += 1; status = error; reason = error
                 elif error == "telegram_sender_unavailable":
-                    report.skipped_sender_unavailable += 1; status = "skipped_sender_unavailable"; reason = error
+                    report.skipped_sender_unavailable += 1; status = "skipped_no_tg_id"; reason = "нет Telegram ID"
                 else:
-                    report.failed += 1; status = "failed"; reason = error or "failed"; report.errors.append(str(reason)[:120])
+                    report.failed += 1; status = "failed"; reason = safe_error; report.errors.append(reason)
                 if target.platform == PLATFORM_TELEGRAM and error:
-                    report.last_telegram_error_code = str(error).split(":", 1)[0][:120]
-                    report.last_telegram_error_short = str(error)[:120]
+                    report.last_telegram_error_code = reason
+                    report.last_telegram_error_short = reason
             self.history.add_delivery(broadcast_id=bid, yclients_client_id=client.id, selected_platform=target.platform, platform_user_id=target.platform_user_id, delivery_status=status, reason=reason, origin_platform=origin_platform, priority_decision=target.priority_decision, error_short=reason, sent=ok)
             if sleep_seconds > 0:
                 await asyncio.sleep(sleep_seconds)

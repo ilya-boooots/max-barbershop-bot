@@ -111,8 +111,8 @@ class OmnichannelBroadcastRepository:
                 """
                 SELECT b.*,
                        SUM(CASE WHEN d.delivery_status = 'sent' THEN 1 ELSE 0 END) AS sent_count,
-                       SUM(CASE WHEN d.delivery_status LIKE 'skipped%' THEN 1 ELSE 0 END) AS skipped_count,
-                       SUM(CASE WHEN d.delivery_status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                       SUM(CASE WHEN d.delivery_status IN ('skipped_no_tg_id', 'skipped_unsubscribed', 'skipped_media_unsupported', 'skipped_sender_unavailable') THEN 1 ELSE 0 END) AS skipped_count,
+                       SUM(CASE WHEN d.delivery_status IN ('failed', 'blocked', 'skipped_invalid') THEN 1 ELSE 0 END) AS failed_count,
                        COUNT(d.id) AS delivery_count
                 FROM omnichannel_broadcasts b
                 LEFT JOIN omnichannel_broadcast_delivery d ON d.broadcast_id = b.broadcast_id

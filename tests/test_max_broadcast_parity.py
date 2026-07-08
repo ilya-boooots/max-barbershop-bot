@@ -711,3 +711,32 @@ def test_broadcast_flow_accepts_cancelled_recent_alias(monkeypatch):
     asyncio.run(broadcasts._fetch_yclients_clients_for_audience(context=None, audience_key="cancelled_recent"))  # type: ignore[arg-type]
 
     assert calls == [30]
+
+
+def test_omnichannel_report_uses_telegram_count_labels_and_masks_raw_errors():
+    from max_barbershop_bot.flows.broadcasts import _format_omnichannel_report
+    from max_barbershop_bot.services.omnichannel_broadcasts import OmnichannelBroadcastReport
+
+    report = OmnichannelBroadcastReport(
+        broadcast_id="bid",
+        total_yclients_clients=4,
+        telegram_sent=1,
+        max_sent=1,
+        failed=2,
+        skipped_unreachable=1,
+        skipped_blocked=1,
+        skipped_sender_unavailable=1,
+    )
+    report.last_telegram_error_short = "token=secret phone=+79990000001 payload raw"
+    text = _format_omnichannel_report(report)
+
+    assert "Отправлено: 2" in text
+    assert "Ошибок: 2" in text
+    assert "Заблокировали бота: 1" in text
+    assert "Пропущено: 2" in text
+    assert "Причины:" in text
+    assert "token=secret" not in text
+    assert "+79990000001" not in text
+    assert "payload raw" not in text
+    assert "Дубликатов исключено" not in text
+    assert "Telegram connection" not in text

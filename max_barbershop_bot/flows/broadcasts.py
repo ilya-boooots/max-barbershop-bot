@@ -947,24 +947,33 @@ def _format_omnichannel_confirm(estimate) -> str:
 
 
 def _format_omnichannel_report(report) -> str:
-    telegram_reason = _telegram_report_reason(report)
-    reason_line = f"\nПричина Telegram: {telegram_reason}" if telegram_reason else ""
-    diagnostics_line = _format_telegram_admin_diagnostics(getattr(report, "telegram_diagnostics", {}))
+    sent = int(getattr(report, "telegram_sent", 0) or 0) + int(getattr(report, "max_sent", 0) or 0)
+    skipped = (
+        int(getattr(report, "skipped_unreachable", 0) or 0)
+        + int(getattr(report, "skipped_opted_out", 0) or 0)
+        + int(getattr(report, "skipped_sender_unavailable", 0) or 0)
+        + int(getattr(report, "skipped_media_unsupported", 0) or 0)
+    )
+    reasons = []
+    if int(getattr(report, "skipped_unreachable", 0) or 0) or int(getattr(report, "skipped_sender_unavailable", 0) or 0):
+        reasons.append(("нет Telegram ID", int(getattr(report, "skipped_unreachable", 0) or 0) + int(getattr(report, "skipped_sender_unavailable", 0) or 0)))
+    if int(getattr(report, "skipped_opted_out", 0) or 0):
+        reasons.append(("отписались от акций", int(getattr(report, "skipped_opted_out", 0) or 0)))
+    if int(getattr(report, "skipped_media_unsupported", 0) or 0):
+        reasons.append(("медиа не поддержано", int(getattr(report, "skipped_media_unsupported", 0) or 0)))
+    reasons_text = ""
+    if reasons:
+        reason_lines = "\n".join(f"— {label}: {count}" for label, count in sorted(reasons, key=lambda item: item[0]))
+        reasons_text = f"\nПричины:\n{reason_lines}"
     return (
         "✅ Рассылка завершена\n\n"
-        f"Клиентов в YClients: {report.total_yclients_clients}\n"
-        f"Выбрано в Telegram: {getattr(report, 'telegram_selected', 0)}\n"
-        f"Выбрано в MAX: {getattr(report, 'max_selected', 0)}\n"
-        f"Telegram: {report.telegram_sent} отправлено\n"
-        f"MAX: {report.max_sent} отправлено\n"
-        f"Не доставлено: {report.not_delivered}\n"
+        "Аудитория: база YClients\n"
+        f"Всего клиентов: {report.total_yclients_clients}\n"
+        f"Отправлено: {sent}\n"
         f"Ошибок: {report.failed}\n"
-        f"Дубликатов исключено: {report.skipped_duplicate}\n"
-        f"Telegram недоступен: {report.skipped_sender_unavailable}\n"
         f"Заблокировали бота: {report.skipped_blocked}\n"
-        f"Медиа не поддержано: {report.skipped_media_unsupported}"
-        f"\n\n{diagnostics_line}"
-        f"{reason_line}"
+        f"Пропущено: {skipped}"
+        f"{reasons_text}"
     )
 
 
