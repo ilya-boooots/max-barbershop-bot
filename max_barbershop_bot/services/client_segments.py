@@ -6,7 +6,7 @@ import logging
 import sqlite3
 import time
 from contextlib import closing
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from os import getenv
@@ -413,7 +413,23 @@ class ClientSegmentService:
         return deduped
 
     async def get_clients_by_master(self, master_id: str) -> ClientSegmentResult:
-        return await self._get_clients_by_record_filter(ClientSegmentType.BY_MASTER, lambda record: _record_master_id(record) == str(master_id).strip(), {"master_id": str(master_id).strip()})
+        selected_master_id = str(master_id).strip()
+        if not selected_master_id:
+            raise ClientSegmentsLoadError("segment_stale_master_id")
+        result = await self._get_clients_by_record_filter(
+            ClientSegmentType.BY_MASTER,
+            lambda record: _record_master_id(record) == selected_master_id,
+            {"master_id": selected_master_id},
+        )
+        master_name = await self._resolve_master_name(selected_master_id)
+        return replace(result, title=_master_segment_title(master_name))
+
+    async def _resolve_master_name(self, master_id: str) -> str | None:
+        selected_master_id = str(master_id).strip()
+        for item in await self.list_masters():
+            if str(item.get("id", "")).strip() == selected_master_id:
+                return str(item.get("title", "")).strip() or None
+        return None
 
     async def get_clients_by_service_category(self, category_id: str) -> ClientSegmentResult:
         cid = str(category_id).strip()
@@ -985,6 +1001,14 @@ def _format_local_datetime(value: str, tz_name: str) -> str:
 
 def _plain_segment_title(title: str) -> str:
     return title.replace("👥 ", "").replace("🔥 ", "").replace("📆 ", "").replace("🗓 ", "").strip()
+
+
+def _master_segment_title(master_name: str | None = None) -> str:
+    name = (master_name or "").strip()
+    if name:
+        return f"💈 Клиенты мастера: {name}"
+    return "💈 Клиенты выбранного мастера"
+
 
 def format_segments_overview(overview: ClientSegmentsOverview) -> str:
     return (
