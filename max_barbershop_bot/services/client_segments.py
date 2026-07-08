@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
-from max_barbershop_bot.integrations.yclients.endpoints import get_service_categories, get_services, get_staff, list_bookings_by_date_range, list_clients
+from max_barbershop_bot.integrations.yclients.endpoints import get_service_categories, get_services, get_staff, list_bookings_by_date_range, list_clients, search_clients
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettings, YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE
@@ -402,41 +402,120 @@ class ClientSegmentService:
             raise ClientSegmentsLoadError("segment_yclients_error") from exc
         items: list[dict[str, str]] = []
         for row in rows:
-            item_id = _normalize_id(row.get("id") or row.get("category_id"))
-            if not item_id:
+            raw_id = _normalize_id(row.get("id") or row.get("category_id"))
+            title = _normalize_id(row.get("title") or row.get("name")) or (f"Категория {raw_id}" if raw_id else "")
+            if not raw_id or not title:
                 continue
-            items.append({"id": item_id, "title": _normalize_id(row.get("title") or row.get("name")) or f"Категория {item_id}"})
-        return list({item["id"]: item for item in items}.values())
+            item_id = _safe_service_category_callback_id(raw_id, title)
+            items.append({"id": item_id, "title": title})
+        deduped = list({item["id"]: item for item in items}.values())
+        deduped.sort(key=lambda item: item["title"].casefold())
+        return deduped
 
     async def get_clients_by_master(self, master_id: str) -> ClientSegmentResult:
         return await self._get_clients_by_record_filter(ClientSegmentType.BY_MASTER, lambda record: _record_master_id(record) == str(master_id).strip(), {"master_id": str(master_id).strip()})
 
     async def get_clients_by_service_category(self, category_id: str) -> ClientSegmentResult:
         cid = str(category_id).strip()
-        return await self._get_clients_by_record_filter(ClientSegmentType.BY_SERVICE, lambda record: cid in _record_service_category_ids(record), {"category_id": cid})
+        if not cid or cid == "picker":
+            raise ClientSegmentsLoadError("segment_stale_callback")
+        settings = self._require_settings()
+        tz = _zoneinfo(settings.branch_timezone)
+        now_local = datetime.now(tz)
+        date_from = (now_local - timedelta(days=LOOKBACK_DAYS)).date().isoformat()
+        date_to = now_local.date().isoformat()
+        started = time.perf_counter()
+        try:
+            services = await self._fetch_services(settings)
+            service_ids: set[str] = set()
+            category_name = ""
+            for service in services:
+                sid = _normalize_id(service.get("id") or service.get("service_id"))
+                raw_cid, raw_name = _service_category_fields(service)
+                if _service_category_callback_id_matches(cid, raw_cid, raw_name):
+                    if sid:
+                        service_ids.add(sid)
+                    category_name = category_name or raw_name
+            records = await self._fetch_records(settings, date_from=date_from, date_to=date_to)
+        except YClientsError as exc:
+            logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", ClientSegmentType.BY_SERVICE.value, type(exc).__name__)
+            raise ClientSegmentsLoadError("segment_yclients_error") from exc
 
-    async def get_birthday_soon_clients(self, window_days: int = 14) -> ClientSegmentResult:
+        members: dict[str, _MemberAccumulator] = {}
+        records_count = 0
+        for record in records:
+            if _record_is_deleted(record) or _record_is_cancelled(record):
+                continue
+            if not _record_service_ids(record).intersection(service_ids):
+                continue
+            records_count += 1
+            identity = _record_client_identity(record)
+            key = _business_client_key(identity) or _record_name_phone_key(identity)
+            if not key:
+                continue
+            accumulator = members.setdefault(key, _MemberAccumulator.from_identity(identity))
+            accumulator.add_visit(_record_datetime_utc(record))
+
+        result = self._build_result(
+            ClientSegmentType.BY_SERVICE,
+            members.values(),
+            "Europe/Moscow",
+            {
+                "category_id": cid,
+                "category_name": category_name or f"Категория {cid}",
+                "service_ids": sorted(service_ids),
+                "records_count": records_count,
+                "date_from": date_from,
+                "date_to": date_to,
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+            },
+        )
+        return ClientSegmentResult(
+            segment_type=result.segment_type,
+            title=f"✂️ Клиенты категории: {category_name or f'Категория {cid}'}",
+            members=result.members,
+            description="Клиенты, которые пользовались услугами из выбранной категории.",
+            branch_timezone="Europe/Moscow",
+            calculated_at=result.calculated_at,
+            diagnostics=result.diagnostics,
+        )
+
+    async def get_birthday_soon_clients(self, window_days: int = 7) -> ClientSegmentResult:
         settings = self._require_settings()
         tz = _zoneinfo(settings.branch_timezone)
         today = datetime.now(tz).date()
         end = today + timedelta(days=window_days)
         try:
-            client_rows = await self._fetch_clients(settings)
+            client_rows = await self._search_clients(settings)
         except YClientsError as exc:
             logger.warning("client_segment_yclients_error segment_type=%s error_class=%s", ClientSegmentType.BIRTHDAY_SOON.value, type(exc).__name__)
             raise ClientSegmentsLoadError("segment_yclients_error") from exc
         members: dict[str, _MemberAccumulator] = {}
+        yclients_checked = 0
         for row in client_rows:
+            yclients_checked += 1
             if _client_is_deleted_or_archived(row):
                 continue
-            bday = _parse_birthday(row.get("birth_date") or row.get("birthday") or row.get("birthdate"))
+            bday = _parse_birthday(row.get("birth_date") or row.get("bdate"))
             if bday is None or not _is_birthday_soon(bday, today, end):
                 continue
             identity = _client_identity(row)
             key = _business_client_key(identity)
             if key:
                 members[key] = _MemberAccumulator.from_identity(identity)
-        return self._build_result(ClientSegmentType.BIRTHDAY_SOON, members.values(), settings.branch_timezone, {"clients_count": len(client_rows), "date_from": today.isoformat(), "date_to": end.isoformat()})
+        local_checked = self._merge_local_birthday_users(members, today=today, end=end)
+        return self._build_result(
+            ClientSegmentType.BIRTHDAY_SOON,
+            members.values(),
+            settings.branch_timezone,
+            {
+                "clients_count": yclients_checked,
+                "yclients_clients_checked": yclients_checked,
+                "local_clients_checked": local_checked,
+                "date_from": today.isoformat(),
+                "date_to": end.isoformat(),
+            },
+        )
 
     async def _get_clients_by_record_filter(self, segment_type: ClientSegmentType, predicate, extra: dict[str, Any]) -> ClientSegmentResult:
         settings = self._require_settings()
@@ -519,6 +598,25 @@ class ClientSegmentService:
                 page += 1
             return rows
 
+    async def _search_clients(self, settings: YClientsSettings) -> list[dict[str, Any]]:
+        async with _build_client(settings) as client:
+            rows: list[dict[str, Any]] = []
+            page = 1
+            while True:
+                payload = await search_clients(client, company_id=str(settings.company_id), query="", page=page, count=YCLIENTS_PAGE_SIZE)
+                data = _extract_rows(payload)
+                if not data:
+                    break
+                rows.extend(data)
+                if len(data) < YCLIENTS_PAGE_SIZE:
+                    break
+                page += 1
+            return rows
+
+    async def _fetch_services(self, settings: YClientsSettings) -> list[dict[str, Any]]:
+        async with _build_client(settings) as client:
+            return _extract_rows(await get_services(client, company_id=str(settings.company_id)))
+
     async def _fetch_records(self, settings: YClientsSettings, *, date_from: str, date_to: str) -> list[dict[str, Any]]:
         async with _build_client(settings) as client:
             records: list[dict[str, Any]] = []
@@ -546,6 +644,35 @@ class ClientSegmentService:
             calculated_at=datetime.now(_zoneinfo(branch_timezone)).isoformat(),
             diagnostics=diagnostics,
         )
+
+    def _merge_local_birthday_users(self, members: dict[str, "_MemberAccumulator"], *, today, end) -> int:
+        try:
+            with closing(sqlite3.connect(self._database_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+                if not columns or "is_registered" not in columns:
+                    return 0
+                selected = [name for name in ("user_id", "yclients_client_id", "phone", "birth_date", "first_name", "display_name") if name in columns]
+                rows = [dict(row) for row in connection.execute(f"SELECT {', '.join(selected)} FROM users WHERE user_id IS NOT NULL AND COALESCE(is_registered,0)=1 AND birth_date IS NOT NULL AND birth_date!=''").fetchall()]
+        except Exception:
+            logger.exception("birthday_segment_local_fallback_failed")
+            return 0
+        checked = 0
+        for row in rows:
+            checked += 1
+            parsed = _parse_birthday(row.get("birth_date"))
+            if parsed is None or not _is_birthday_soon(parsed, today, end):
+                continue
+            identity = {
+                "yclients_client_id": row.get("yclients_client_id"),
+                "phone": row.get("phone"),
+                "name": row.get("display_name") or row.get("first_name"),
+            }
+            user_id = _normalize_id(row.get("user_id"))
+            key = _business_client_key(identity) or (f"tg:{user_id}" if user_id else "")
+            if key and key not in members:
+                members[key] = _MemberAccumulator.from_identity(identity)
+        return checked
 
 
 @dataclass
@@ -601,6 +728,8 @@ def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_
         ClientSegmentType.LOST_60.value,
         ClientSegmentType.LOST_90.value,
         ClientSegmentType.CANCELLED.value,
+        ClientSegmentType.BY_SERVICE.value,
+        ClientSegmentType.BIRTHDAY_SOON.value,
     }:
         updated = _format_local_datetime(result.calculated_at, result.branch_timezone)
         if result.segment_type == ClientSegmentType.NO_FUTURE_BOOKINGS.value:
@@ -954,6 +1083,31 @@ def _record_service_category_ids(record: dict[str, Any]) -> set[str]:
     return ids
 
 
+def _record_service_ids(record: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    service = record.get("service") if isinstance(record.get("service"), dict) else {}
+    for value in (record.get("service_id"), service.get("id")):
+        clean = _normalize_id(value)
+        if clean:
+            ids.add(clean)
+    services = record.get("services") if isinstance(record.get("services"), list) else []
+    for item in services:
+        if isinstance(item, dict):
+            clean = _normalize_id(item.get("id") or item.get("service_id"))
+        else:
+            clean = _normalize_id(item)
+        if clean:
+            ids.add(clean)
+    return ids
+
+
+def _service_category_fields(service: dict[str, Any]) -> tuple[str, str]:
+    raw = service.get("category") if isinstance(service.get("category"), dict) else {}
+    category_id = _normalize_id(service.get("category_id") or raw.get("id"))
+    category_name = _normalize_id(raw.get("title") or raw.get("name") or service.get("category_title") or service.get("category_name"))
+    return category_id, category_name
+
+
 def _service_categories_from_services(services: list[dict[str, Any]]) -> list[dict[str, Any]]:
     categories: dict[str, dict[str, Any]] = {}
     for service in services:
@@ -964,11 +1118,62 @@ def _service_categories_from_services(services: list[dict[str, Any]]) -> list[di
     return list(categories.values())
 
 
+def _short_hash(value: Any) -> str:
+    import hashlib
+
+    return hashlib.sha1(str(value or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _safe_service_category_callback_id(category_id: str, category_name: str) -> str:
+    category_id = _normalize_id(category_id)
+    category_name = _normalize_id(category_name)
+    if category_id.startswith("name:"):
+        raw_name = category_id.removeprefix("name:") or category_name
+        candidate = f"name:{raw_name.casefold().strip()}"
+        if len(candidate.encode("utf-8")) <= 21:
+            return candidate
+        return f"namehash:{_short_hash(raw_name.casefold().strip())}"
+    if category_id and len(category_id.encode("utf-8")) <= 21:
+        return category_id
+    if category_id:
+        return f"cidhash:{_short_hash(category_id)}"
+    if category_name:
+        norm_name = category_name.casefold().strip()
+        candidate = f"name:{norm_name}"
+        if len(candidate.encode("utf-8")) <= 21:
+            return candidate
+        return f"namehash:{_short_hash(norm_name)}"
+    return "uncategorized"
+
+
+def _service_category_callback_id_matches(callback_id: str, raw_category_id: str, raw_category_name: str) -> bool:
+    callback_id = _normalize_id(callback_id)
+    raw_category_id = _normalize_id(raw_category_id)
+    norm_name = _normalize_id(raw_category_name).casefold().strip()
+    if callback_id == "uncategorized":
+        return not raw_category_id and not norm_name
+    if callback_id.startswith("namehash:"):
+        return bool(norm_name) and callback_id == f"namehash:{_short_hash(norm_name)}"
+    if callback_id.startswith("name:"):
+        return norm_name == callback_id.removeprefix("name:").casefold().strip()
+    if callback_id.startswith("cidhash:"):
+        return bool(raw_category_id) and callback_id == f"cidhash:{_short_hash(raw_category_id)}"
+    return raw_category_id == callback_id
+
+
+def _record_name_phone_key(identity: dict[str, Any]) -> str:
+    name = _normalize_id(identity.get("name"))
+    phone = _normalize_id(identity.get("phone"))
+    if name and phone:
+        return f"name_phone:{name}:{phone}"
+    return ""
+
+
 def _parse_birthday(raw: Any):
     text = _normalize_id(raw)
     if not text:
         return None
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m", "%m-%d"):
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m"):
         try:
             parsed = datetime.strptime(text[:10] if fmt == "%Y-%m-%d" else text, fmt).date()
             return parsed

@@ -23,6 +23,7 @@ from max_barbershop_bot.services.client_segments import (
     format_segment_summary,
 )
 from max_barbershop_bot.services.navigation import show_home
+from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.ui.buttons import (
     BROADCAST_SEGMENTS_PAYLOAD,
     SEGMENTS_ALL_CLIENTS_PAYLOAD,
@@ -45,6 +46,7 @@ from max_barbershop_bot.ui.buttons import (
     client_segment_result_keyboard,
     client_segments_menu_keyboard,
 )
+from max_barbershop_bot.ui.buttons import MaxButton
 from max_barbershop_bot.ui.texts import (
     BROADCAST_MENU_TEXT,
     CLIENT_SEGMENTS_ACCESS_DENIED_TEXT,
@@ -61,6 +63,8 @@ from max_barbershop_bot.ui.texts import (
 logger = logging.getLogger(__name__)
 
 SEGMENT_STALE_TEXT = "⚠️ Данные устарели. Откройте раздел заново."
+SERVICE_CATEGORIES_EMPTY_TEXT = "😌 В YClients пока нет категорий услуг."
+SERVICE_CATEGORIES_LOAD_ERROR_TEXT = "⚠️ Не удалось загрузить категории услуг из YClients. Попробуйте позже."
 
 _SELECTED_SEGMENT_PAYLOAD_KEY = "selected_segment_payload"
 _SELECTED_SEGMENT_RESULT_KEY = "selected_segment_result"
@@ -120,6 +124,10 @@ async def handle_segment_selected(context: RouterContext) -> None:
         return
     if payload == SEGMENTS_BY_SERVICE_PAYLOAD:
         await _show_service_picker(context)
+        return
+    if payload == SEGMENTS_BY_SERVICE_PREFIX or payload == f"{SEGMENTS_BY_SERVICE_PREFIX}picker":
+        await _answer_callback(context)
+        await context.send_text(SEGMENT_STALE_TEXT, keyboard=client_segments_menu_keyboard())
         return
     if not payload or (payload not in _SEGMENT_CALLBACKS and not payload.startswith((SEGMENTS_BY_MASTER_PREFIX, SEGMENTS_BY_SERVICE_PREFIX))):
         stale_prefixes = ("segments:active:", "segments:no_future")
@@ -219,10 +227,11 @@ async def _show_service_picker(context: RouterContext) -> None:
     try:
         categories = await ClientSegmentService(_yclients_settings_repository()).list_service_categories()
     except (ClientSegmentsNotConfiguredError, ClientSegmentsLoadError):
-        await context.send_text(CLIENT_SEGMENTS_LOAD_ERROR_TEXT, keyboard=client_segments_menu_keyboard())
+        await context.send_text(SERVICE_CATEGORIES_LOAD_ERROR_TEXT, keyboard=_service_category_nav_keyboard())
         return
-    from max_barbershop_bot.max_api.models import MaxInlineKeyboard
-    from max_barbershop_bot.ui.buttons import MaxButton
+    if not categories:
+        await context.send_text(SERVICE_CATEGORIES_EMPTY_TEXT, keyboard=_service_category_nav_keyboard())
+        return
     rows = [[MaxButton(text=item["title"][:80], payload=f"{SEGMENTS_BY_SERVICE_PREFIX}{item['id']}")] for item in categories[:30]]
     rows += [[MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)]]
     await context.send_text("✂️ Выберите категорию услуг", keyboard=MaxInlineKeyboard.from_rows(rows))
@@ -257,7 +266,8 @@ async def _show_segment(context: RouterContext, payload: str, *, notification: s
     state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENT_RESULT_SCREEN)
 
     text = format_segment_summary(result)
-    await context.send_text(text, keyboard=client_segment_result_keyboard(can_broadcast=True))
+    keyboard = _service_category_detail_keyboard(payload) if payload.startswith(SEGMENTS_BY_SERVICE_PREFIX) else client_segment_result_keyboard(can_broadcast=True)
+    await context.send_text(text, keyboard=keyboard)
 
 
 async def _load_segment(payload: str) -> ClientSegmentResult:
@@ -290,7 +300,7 @@ def _audience_key_from_segment_payload(payload: str, segment_type: str) -> str:
     if payload.startswith(SEGMENTS_BY_MASTER_PREFIX):
         return "by_master:" + payload.removeprefix(SEGMENTS_BY_MASTER_PREFIX)
     if payload.startswith(SEGMENTS_BY_SERVICE_PREFIX):
-        return "by_service:" + payload.removeprefix(SEGMENTS_BY_SERVICE_PREFIX)
+        return "by_service_category"
     mapping = {
         "all_clients": "yclients_all_clients",
         "active_30": "active_30",
@@ -302,6 +312,26 @@ def _audience_key_from_segment_payload(payload: str, segment_type: str) -> str:
         "birthday_soon": "birthday_soon",
     }
     return mapping.get(segment_type, segment_type)
+
+
+def _service_category_nav_keyboard() -> MaxInlineKeyboard:
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def _service_category_detail_keyboard(payload: str) -> MaxInlineKeyboard:
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="🔄 Обновить", payload=payload)],
+            [MaxButton(text="📣 Использовать для рассылки", payload=SEGMENTS_BROADCAST_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BY_SERVICE_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
+        ]
+    )
 
 def _map_members_to_recipients(members: list[ClientSegmentMember]) -> list[BroadcastRecipient]:
     users = _users_repository().list_broadcast_recipients(platform=PLATFORM_MAX, notifications_enabled=True)
