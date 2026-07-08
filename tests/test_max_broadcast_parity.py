@@ -571,6 +571,128 @@ def test_cancelled_segment_handoff_uses_cancelled_recent_and_preview_text_flow()
     assert "send_confirmed" not in source
 
 
+def test_service_category_picker_and_handoff_match_telegram_meaning():
+    from max_barbershop_bot.flows import client_segments
+
+    assert client_segments.SERVICE_CATEGORIES_EMPTY_TEXT == "😌 В YClients пока нет категорий услуг."
+    assert client_segments.SERVICE_CATEGORIES_LOAD_ERROR_TEXT == "⚠️ Не удалось загрузить категории услуг из YClients. Попробуйте позже."
+    assert client_segments._audience_key_from_segment_payload("segments:by_service:10", "by_service") == "by_service_category"
+    source = inspect.getsource(client_segments._show_service_picker)
+    assert "✂️ Выберите категорию услуг" in source
+    assert "list_service_categories" in source
+    assert "SERVICE_CATEGORIES_EMPTY_TEXT" in source
+    assert "SERVICE_CATEGORIES_LOAD_ERROR_TEXT" in source
+    assert "open_segment_broadcast_text" in inspect.getsource(client_segments.handle_segment_broadcast)
+
+
+def test_service_category_safe_callback_and_detail_formatting_match_telegram(monkeypatch):
+    now = datetime(2026, 7, 7, 12, 0, tzinfo=timezone.utc)
+    service = segments.ClientSegmentService(settings_repository=None)  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        service,
+        "_require_settings",
+        lambda: YClientsSettings(company_id="1", partner_token="partner", user_token="user", branch_timezone="UTC"),
+    )
+
+    async def fake_services(settings):
+        return [{"id": "501", "category_id": "cat-long-value-that-needs-hash", "category": {"name": "Стрижки"}}]
+
+    async def fake_records(settings, *, date_from: str, date_to: str):
+        return [
+            {"datetime": now.isoformat(), "client": {"id": "101", "phone": "+79990000001", "name": "Анна"}, "services": [{"id": "501"}]},
+            {"datetime": now.isoformat(), "client": {"id": "101", "phone": "+79990000001", "name": "Анна"}, "services": [{"id": "501"}]},
+            {"datetime": now.isoformat(), "client": {"id": "102", "phone": "+79990000002", "name": "Олег"}, "services": [{"id": "999"}]},
+        ]
+
+    callback_id = segments._safe_service_category_callback_id("cat-long-value-that-needs-hash", "Стрижки")
+    assert len(f"segments:by_service:{callback_id}".encode("utf-8")) <= 64
+    monkeypatch.setattr(service, "_fetch_services", fake_services)
+    monkeypatch.setattr(service, "_fetch_records", fake_records)
+
+    result = asyncio.run(service.get_clients_by_service_category(callback_id))
+
+    assert result.title == "✂️ Клиенты категории: Стрижки"
+    assert result.description == "Клиенты, которые пользовались услугами из выбранной категории."
+    assert result.count == 1
+    assert result.diagnostics["service_ids"] == ["501"]
+    assert "Количество клиентов: 1" in segments.format_segment_summary(result)
+    assert "Обновлено:" in segments.format_segment_summary(result)
+
+
+def test_empty_service_category_detail_matches_telegram(monkeypatch):
+    service = segments.ClientSegmentService(settings_repository=None)  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        service,
+        "_require_settings",
+        lambda: YClientsSettings(company_id="1", partner_token="partner", user_token="user", branch_timezone="UTC"),
+    )
+
+    async def fake_services(settings):
+        return [{"id": "501", "category_id": "10", "category": {"name": "Борода"}}]
+
+    async def fake_records(settings, *, date_from: str, date_to: str):
+        return []
+
+    monkeypatch.setattr(service, "_fetch_services", fake_services)
+    monkeypatch.setattr(service, "_fetch_records", fake_records)
+
+    result = asyncio.run(service.get_clients_by_service_category("10"))
+
+    assert segments.format_segment_summary(result).endswith("😌 В этом сегменте пока нет клиентов.")
+
+
+def test_birthday_soon_window_sources_local_fallback_and_dedupe(monkeypatch, tmp_path):
+    db_path = tmp_path / "bot.sqlite3"
+    import sqlite3
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE users (user_id TEXT, yclients_client_id TEXT, phone TEXT, birth_date TEXT, first_name TEXT, is_registered INTEGER)"
+        )
+        connection.execute(
+            "INSERT INTO users VALUES ('max-1', '101', '+79990000001', '10.07.1990', 'Анна MAX', 1)"
+        )
+        connection.execute(
+            "INSERT INTO users VALUES ('max-2', NULL, '+79990000003', '12.07', 'Мария MAX', 1)"
+        )
+    service = segments.ClientSegmentService(settings_repository=None, database_path=str(db_path))  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        service,
+        "_require_settings",
+        lambda: YClientsSettings(company_id="1", partner_token="partner", user_token="user", branch_timezone="UTC"),
+    )
+
+    async def fake_search(settings):
+        return [
+            {"id": "101", "phone": "+79990000001", "name": "Анна", "birth_date": "2026-07-10"},
+            {"id": "102", "phone": "+79990000002", "name": "Иван", "bdate": "20.07.1991"},
+        ]
+
+    monkeypatch.setattr(service, "_search_clients", fake_search)
+    monkeypatch.setattr(segments, "datetime", type("FixedDateTime", (datetime,), {"now": classmethod(lambda cls, tz=None: datetime(2026, 7, 8, 10, 0, tzinfo=tz))}))
+
+    result = asyncio.run(service.get_birthday_soon_clients())
+
+    assert result.segment_type == "birthday_soon"
+    assert result.diagnostics["date_from"] == "2026-07-08"
+    assert result.diagnostics["date_to"] == "2026-07-15"
+    assert result.diagnostics["yclients_clients_checked"] == 2
+    assert result.diagnostics["local_clients_checked"] == 2
+    assert result.count == 2
+    assert {member.yclients_client_id for member in result.members} == {"101", None}
+    assert "Количество клиентов: 2" in segments.format_segment_summary(result)
+
+
+def test_birthday_soon_handoff_and_boundaries_are_not_automation():
+    from max_barbershop_bot.flows import client_segments
+
+    assert client_segments._audience_key_from_segment_payload("segments:birthday_soon", "birthday_soon") == "birthday_soon"
+    source = inspect.getsource(client_segments.handle_segment_broadcast)
+    assert "open_segment_broadcast_text" in source
+    assert "birthday_funnel" not in source
+    assert "send_confirmed" not in source
+
+
 def test_broadcast_flow_accepts_cancelled_recent_alias(monkeypatch):
     from max_barbershop_bot.flows import broadcasts
 
