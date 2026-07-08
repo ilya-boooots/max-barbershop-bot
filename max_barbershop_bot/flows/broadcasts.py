@@ -289,8 +289,8 @@ async def handle_audience_segment(context: RouterContext) -> None:
         BROADCAST_AUDIENCE_LOST_30_PAYLOAD: BroadcastAudience("lost_30", "😴 Потерянные 30 дней"),
         BROADCAST_AUDIENCE_LOST_60_PAYLOAD: BroadcastAudience("lost_60", "😴 Потерянные 60 дней"),
         BROADCAST_AUDIENCE_LOST_90_PAYLOAD: BroadcastAudience("lost_90", "😴 Потерянные 90 дней"),
-        BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD: BroadcastAudience("no_future_bookings", "📅 Без будущей записи"),
-        BROADCAST_AUDIENCE_CANCELLED_PAYLOAD: BroadcastAudience("cancelled_30", "❌ Отменили запись"),
+        BROADCAST_AUDIENCE_NO_FUTURE_PAYLOAD: BroadcastAudience("no_future_booking", "📅 Без будущей записи"),
+        BROADCAST_AUDIENCE_CANCELLED_PAYLOAD: BroadcastAudience("cancelled_recent", "❌ Отменили запись"),
         BROADCAST_AUDIENCE_BIRTHDAY_PAYLOAD: BroadcastAudience("birthday_soon", "🎂 День рождения скоро"),
     }
     await _select_audience(context, mapping.get(payload, ALL_USERS_AUDIENCE))
@@ -506,17 +506,23 @@ async def open_segment_broadcast_text(
     audience_label: str,
     recipients: list[BroadcastRecipient],
     return_screen: str = state.CLIENT_SEGMENT_RESULT_SCREEN,
+    audience_count: int | None = None,
 ) -> None:
     """Start one-time broadcast wizard with a prepared segment audience."""
 
     _clear_broadcast_state(context)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_KEY, audience_key)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_AUDIENCE_LABEL_KEY, audience_label)
-    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENT_COUNT_KEY, len(recipients))
+    state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENT_COUNT_KEY, len(recipients) if audience_count is None else audience_count)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RECIPIENTS_KEY, recipients)
     state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_RETURN_SCREEN_KEY, return_screen)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
-    recipient_line = f"Получателей в MAX: {len(recipients)}\n" if recipients else "Аудитория будет рассчитана по YClients и omnichannel-доставке перед отправкой.\n"
+    if recipients:
+        recipient_line = f"Получателей в MAX: {len(recipients)}\n"
+    elif audience_count is not None:
+        recipient_line = f"Клиентов в сегменте: {audience_count}\nАудитория будет рассчитана по YClients и omnichannel-доставке перед отправкой.\n"
+    else:
+        recipient_line = "Аудитория будет рассчитана по YClients и omnichannel-доставке перед отправкой.\n"
     await context.send_text(
         f"📣 Рассылка по сегменту\n\nАудитория: {audience_label}\n{recipient_line}\nВведите текст рассылки 👇",
         keyboard=broadcast_text_keyboard(),
@@ -743,7 +749,7 @@ async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_
         audience_key = audience_key.removeprefix("segment:")
     if audience_key == "lost_clients":
         audience_key = "lost_30"
-    if audience_key in {AUDIENCE_SOURCE_YCLIENTS_ALL, ALL_USERS_AUDIENCE.key}:
+    if audience_key in {AUDIENCE_SOURCE_YCLIENTS_ALL, ALL_USERS_AUDIENCE.key, "all_clients"}:
         return await _fetch_yclients_clients(context)
     service = ClientSegmentService(YClientsSettingsRepository(_database_path()), database_path=_database_path())
     if audience_key == "active_30":
@@ -754,7 +760,7 @@ async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_
         result = await service.get_lost_clients(60)
     elif audience_key == "lost_90":
         result = await service.get_lost_clients(90)
-    elif audience_key == "no_future_bookings":
+    elif audience_key in {"no_future_booking", "no_future_bookings"}:
         result = await service.get_clients_without_future_bookings()
     elif audience_key in {"cancelled_30", "cancelled_recent"}:
         result = await service.get_cancelled_clients(30)
@@ -762,6 +768,8 @@ async def _fetch_yclients_clients_for_audience(context: RouterContext, audience_
         result = await service.get_birthday_soon_clients()
     elif audience_key.startswith("by_master:"):
         result = await service.get_clients_by_master(audience_key.split(":", 1)[1])
+    elif audience_key.startswith("by_service_category:"):
+        result = await service.get_clients_by_service_category(audience_key.split(":", 1)[1])
     elif audience_key.startswith("by_service:"):
         result = await service.get_clients_by_service_category(audience_key.split(":", 1)[1])
     else:

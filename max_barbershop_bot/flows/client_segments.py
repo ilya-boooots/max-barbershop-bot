@@ -64,6 +64,7 @@ from max_barbershop_bot.ui.texts import (
 logger = logging.getLogger(__name__)
 
 SEGMENT_STALE_TEXT = "⚠️ Данные устарели. Откройте раздел заново."
+SEGMENT_BROADCAST_UNSUPPORTED_TEXT = "⚠️ Этот сегмент пока нельзя использовать для разовой рассылки."
 SERVICE_CATEGORIES_EMPTY_TEXT = "😌 В YClients пока нет категорий услуг."
 SERVICE_CATEGORIES_LOAD_ERROR_TEXT = "⚠️ Не удалось загрузить категории услуг из YClients. Попробуйте позже."
 
@@ -164,24 +165,24 @@ async def handle_segment_broadcast(context: RouterContext) -> None:
         return
     result = _stored_segment_result(context)
     recipients = _stored_segment_recipients(context)
-    if result is None:
-        await handle_segments_menu(context)
-        return
     await _answer_callback(context)
-    if result.count > len(recipients):
-        await context.send_text(
-            f"{CLIENT_SEGMENTS_BROADCAST_LIMIT_TEXT}\n\nДоступно для рассылки: {len(recipients)} из {result.count}.",
-            keyboard=client_segment_result_keyboard(can_broadcast=bool(recipients)),
-        )
-        if not recipients:
-            return
-    payload = state.get_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SEGMENT_PAYLOAD_KEY) or result.segment_type
-    audience_key = _audience_key_from_segment_payload(str(payload), result.segment_type)
+    if result is None:
+        await context.send_text(SEGMENT_BROADCAST_UNSUPPORTED_TEXT, keyboard=client_segments_menu_keyboard())
+        return
+    payload = str(state.get_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SEGMENT_PAYLOAD_KEY) or result.segment_type)
+    audience_key = _audience_key_from_segment_payload(payload, result.segment_type)
+    if not audience_key:
+        await context.send_text(SEGMENT_BROADCAST_UNSUPPORTED_TEXT, keyboard=client_segment_result_keyboard(can_broadcast=True))
+        return
+    if result.count <= 0:
+        await context.send_text(_empty_segment_broadcast_text(result.segment_type, business_clients_count=0), keyboard=client_segment_result_keyboard(can_broadcast=True))
+        return
     await open_segment_broadcast_text(
         context,
         audience_key=audience_key,
         audience_label=f"{result.title} · YClients: {result.count}",
         recipients=[],
+        audience_count=result.count,
     )
 
 
@@ -307,22 +308,34 @@ async def _load_segment(payload: str) -> ClientSegmentResult:
 
 
 
-def _audience_key_from_segment_payload(payload: str, segment_type: str) -> str:
+def _audience_key_from_segment_payload(payload: str, segment_type: str) -> str | None:
     if payload.startswith(SEGMENTS_BY_MASTER_PREFIX):
-        return "by_master:" + payload.removeprefix(SEGMENTS_BY_MASTER_PREFIX)
+        master_id = payload.removeprefix(SEGMENTS_BY_MASTER_PREFIX).strip()
+        return f"by_master:{master_id}" if master_id else None
     if payload.startswith(SEGMENTS_BY_SERVICE_PREFIX):
-        return "by_service_category"
+        category_payload = payload.removeprefix(SEGMENTS_BY_SERVICE_PREFIX).strip()
+        return f"by_service_category:{category_payload}" if category_payload else None
+    if ":" in payload and not payload.startswith("segments:"):
+        return None
     mapping = {
-        "all_clients": "yclients_all_clients",
+        "all_clients": "all_clients",
         "active_30": "active_30",
         "lost_30": "lost_30",
         "lost_60": "lost_60",
         "lost_90": "lost_90",
-        "no_future_bookings": "no_future_bookings",
+        "no_future_bookings": "no_future_booking",
         "cancelled": "cancelled_recent",
         "birthday_soon": "birthday_soon",
     }
-    return mapping.get(segment_type, segment_type)
+    return mapping.get(segment_type)
+
+
+def _empty_segment_broadcast_text(segment_type: str, *, business_clients_count: int | None) -> str:
+    if segment_type == "birthday_soon":
+        return "😌 В этом сегменте пока нет клиентов." if not business_clients_count else "😌 В этом сегменте пока нет клиентов для рассылки в MAX."
+    if segment_type in {"by_master", "by_service"}:
+        return "😌 В этом сегменте пока нет клиентов для рассылки в MAX."
+    return "😌 В этой аудитории пока нет клиентов для рассылки."
 
 
 def _service_category_nav_keyboard() -> MaxInlineKeyboard:
