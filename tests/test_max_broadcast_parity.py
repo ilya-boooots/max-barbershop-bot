@@ -576,7 +576,7 @@ def test_service_category_picker_and_handoff_match_telegram_meaning():
 
     assert client_segments.SERVICE_CATEGORIES_EMPTY_TEXT == "😌 В YClients пока нет категорий услуг."
     assert client_segments.SERVICE_CATEGORIES_LOAD_ERROR_TEXT == "⚠️ Не удалось загрузить категории услуг из YClients. Попробуйте позже."
-    assert client_segments._audience_key_from_segment_payload("segments:by_service:10", "by_service") == "by_service_category"
+    assert client_segments._audience_key_from_segment_payload("segments:by_service:10", "by_service") == "by_service_category:10"
     source = inspect.getsource(client_segments._show_service_picker)
     assert "✂️ Выберите категорию услуг" in source
     assert "list_service_categories" in source

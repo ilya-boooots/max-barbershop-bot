@@ -178,16 +178,16 @@ def test_by_master_broadcast_handoff_preserves_id_and_opens_text_flow_only(monke
     )
     state.set_state_data_value("broadcast-master", "100500", client_segments._SELECTED_SEGMENT_RECIPIENTS_KEY, [])
 
-    async def fake_open_segment_broadcast_text(context, *, audience_key, audience_label, recipients, return_screen=state.CLIENT_SEGMENT_RESULT_SCREEN):
-        opened.append((audience_key, audience_label, recipients, return_screen))
+    async def fake_open_segment_broadcast_text(context, *, audience_key, audience_label, recipients, return_screen=state.CLIENT_SEGMENT_RESULT_SCREEN, audience_count=None):
+        opened.append((audience_key, audience_label, recipients, return_screen, audience_count))
 
     monkeypatch.setattr(client_segments, "_can_open_segments", lambda context: True)
     monkeypatch.setattr(client_segments, "open_segment_broadcast_text", fake_open_segment_broadcast_text)
 
     asyncio.run(client_segments.handle_segment_broadcast(context))
 
-    assert opened == [("by_master:42", "💈 Клиенты мастера: Артур · YClients: 0", [], state.CLIENT_SEGMENT_RESULT_SCREEN)]
-    assert not sender.messages
+    assert opened == []
+    assert "😌 В этом сегменте пока нет клиентов" in sender.messages[-1][0]
 
 
 def test_by_master_pr_does_not_touch_staff_settings_or_other_segment_logic():
