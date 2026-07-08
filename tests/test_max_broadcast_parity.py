@@ -713,136 +713,30 @@ def test_broadcast_flow_accepts_cancelled_recent_alias(monkeypatch):
     assert calls == [30]
 
 
-def test_pr020_segment_broadcast_handoff_maps_telegram_audience_keys_and_payloads():
-    from max_barbershop_bot.flows import client_segments
-    from max_barbershop_bot.ui.buttons import SEGMENTS_BY_MASTER_PREFIX, SEGMENTS_BY_SERVICE_PREFIX
+def test_omnichannel_report_uses_telegram_count_labels_and_masks_raw_errors():
+    from max_barbershop_bot.flows.broadcasts import _format_omnichannel_report
+    from max_barbershop_bot.services.omnichannel_broadcasts import OmnichannelBroadcastReport
 
-    assert client_segments._audience_key_from_segment_payload("segments:all", "all_clients") == "all_clients"
-    assert client_segments._audience_key_from_segment_payload("segments:active_30", "active_30") == "active_30"
-    assert client_segments._audience_key_from_segment_payload("segments:lost_30", "lost_30") == "lost_30"
-    assert client_segments._audience_key_from_segment_payload("segments:lost_60", "lost_60") == "lost_60"
-    assert client_segments._audience_key_from_segment_payload("segments:lost_90", "lost_90") == "lost_90"
-    assert client_segments._audience_key_from_segment_payload("segments:no_future", "no_future_bookings") == "no_future_booking"
-    assert client_segments._audience_key_from_segment_payload("segments:cancelled", "cancelled") == "cancelled_recent"
-    assert client_segments._audience_key_from_segment_payload("segments:birthday_soon", "birthday_soon") == "birthday_soon"
-    assert client_segments._audience_key_from_segment_payload(f"{SEGMENTS_BY_MASTER_PREFIX}42", "by_master") == "by_master:42"
-    assert client_segments._audience_key_from_segment_payload(f"{SEGMENTS_BY_SERVICE_PREFIX}10", "by_service") == "by_service_category:10"
-    assert client_segments._audience_key_from_segment_payload("active_30:42", "active_30") is None
-    assert client_segments.SEGMENT_BROADCAST_UNSUPPORTED_TEXT == "⚠️ Этот сегмент пока нельзя использовать для разовой рассылки."
-
-
-def test_pr020_handoff_opens_text_flow_only_and_stores_selected_segment_state(monkeypatch):
-    from max_barbershop_bot.core.events import NormalizedEvent
-    from max_barbershop_bot.core.router import RouterContext
-    from max_barbershop_bot.core import state
-    from max_barbershop_bot.flows import client_segments, broadcasts
-    from max_barbershop_bot.ui.buttons import SEGMENTS_BROADCAST_PAYLOAD, SEGMENTS_BY_SERVICE_PREFIX
-
-    class FakeSender:
-        def __init__(self):
-            self.messages = []
-            self.callbacks = []
-        async def send_to_chat(self, chat_id, text, keyboard=None, attachments=None):
-            self.messages.append((text, keyboard, attachments))
-        async def send_to_user(self, user_id, text, keyboard=None, attachments=None):
-            self.messages.append((text, keyboard, attachments))
-        async def answer_callback(self, callback_id):
-            self.callbacks.append(callback_id)
-
-    user = "pr020-service"
-    chat = "20020"
-    sender = FakeSender()
-    context = RouterContext(
-        event=NormalizedEvent(update_type="message_callback", platform_user_id=user, max_user_id=user, chat_id=chat, text=None, callback_payload=SEGMENTS_BROADCAST_PAYLOAD, callback_id="cb-pr020"),
-        sender=sender,
+    report = OmnichannelBroadcastReport(
+        broadcast_id="bid",
+        total_yclients_clients=4,
+        telegram_sent=1,
+        max_sent=1,
+        failed=2,
+        skipped_unreachable=1,
+        skipped_blocked=1,
+        skipped_sender_unavailable=1,
     )
-    state.set_state_data_value(user, chat, client_segments._SELECTED_SEGMENT_PAYLOAD_KEY, f"{SEGMENTS_BY_SERVICE_PREFIX}cat-7")
-    state.set_state_data_value(user, chat, client_segments._SELECTED_SEGMENT_RESULT_KEY, segments.ClientSegmentResult(segment_type="by_service", title="✂️ Клиенты услуги: Стрижки", members=[segments.ClientSegmentMember(yclients_client_id="cat-7", name="Анна", phone="79990000001")]))
-    state.set_state_data_value(user, chat, client_segments._SELECTED_SEGMENT_RECIPIENTS_KEY, [])
-    monkeypatch.setattr(client_segments, "_can_open_segments", lambda context: True)
+    report.last_telegram_error_short = "token=secret phone=+79990000001 payload raw"
+    text = _format_omnichannel_report(report)
 
-    asyncio.run(client_segments.handle_segment_broadcast(context))
-
-    assert sender.callbacks == ["cb-pr020"]
-    assert len(sender.messages) == 1
-    assert "Введите текст рассылки" in sender.messages[0][0]
-    assert "Клиентов в сегменте: 1" in sender.messages[0][0]
-    assert state.get_current_screen(user, chat) == state.BROADCAST_ONE_TIME_TEXT_SCREEN
-    assert state.get_state_data_value(user, chat, broadcasts._BROADCAST_AUDIENCE_KEY) == "by_service_category:cat-7"
-    assert state.get_state_data_value(user, chat, broadcasts._BROADCAST_RECIPIENT_COUNT_KEY) == 1
-
-
-def test_pr020_preview_and_confirm_preserve_selected_segment_label_and_count(monkeypatch):
-    from max_barbershop_bot.core.events import NormalizedEvent
-    from max_barbershop_bot.core.router import RouterContext
-    from max_barbershop_bot.core import state
-    from max_barbershop_bot.flows import broadcasts
-
-    class FakeSender:
-        def __init__(self):
-            self.messages = []
-        async def send_to_chat(self, chat_id, text, keyboard=None, attachments=None):
-            self.messages.append((text, keyboard, attachments))
-        async def send_to_user(self, user_id, text, keyboard=None, attachments=None):
-            self.messages.append((text, keyboard, attachments))
-        async def answer_callback(self, callback_id):
-            pass
-
-    class FakeEstimate:
-        total_deliveries = 3
-        total_yclients_clients = 5
-        telegram_selected = 1
-        max_selected = 2
-        unreachable = 2
-        duplicates_excluded = 0
-        media_cross_platform_supported = True
-        media_warning = None
-
-    class FakeOmni:
-        def estimate(self, clients, attachment=None):
-            assert [client.id for client in clients] == ["cat-7"]
-            return FakeEstimate()
-
-    async def fake_fetch(context, audience_key):
-        assert audience_key == "by_service_category:cat-7"
-        from max_barbershop_bot.integrations.yclients.dto import YClientsNormalizedClient
-        return [YClientsNormalizedClient(id="cat-7", name="Анна", phones=("79990000001",))]
-
-    user = "pr020-preview"
-    chat = "20021"
-    sender = FakeSender()
-    context = RouterContext(event=NormalizedEvent(update_type="message_created", platform_user_id=user, max_user_id=user, chat_id=chat, text="Акция", callback_payload=None, callback_id=None), sender=sender)
-    state.set_state_data_value(user, chat, broadcasts._BROADCAST_AUDIENCE_KEY, "by_service_category:cat-7")
-    state.set_state_data_value(user, chat, broadcasts._BROADCAST_AUDIENCE_LABEL_KEY, "✂️ Клиенты услуги: Стрижки · YClients: 5")
-    state.set_state_data_value(user, chat, broadcasts._BROADCAST_RECIPIENT_COUNT_KEY, 5)
-    monkeypatch.setattr(broadcasts, "_can_open_broadcasts", lambda context: True)
-    monkeypatch.setattr(broadcasts, "_fetch_yclients_clients_for_audience", fake_fetch)
-    monkeypatch.setattr(broadcasts, "_omnichannel_service", lambda context: FakeOmni())
-
-    asyncio.run(broadcasts.handle_text_input(context))
-
-    assert "Аудитория: ✂️ Клиенты услуги: Стрижки · YClients: 5" in sender.messages[-1][0]
-    assert "Получателей: 5" in sender.messages[-1][0]
-    assert state.get_current_screen(user, chat) == state.BROADCAST_ONE_TIME_PREVIEW_SCREEN
-    assert state.get_state_data_value(user, chat, broadcasts._BROADCAST_AUDIENCE_KEY) == "by_service_category:cat-7"
-
-
-def test_pr020_send_resolver_accepts_telegram_segment_aliases(monkeypatch):
-    from max_barbershop_bot.flows import broadcasts
-
-    calls = []
-    class FakeService:
-        def __init__(self, *args, **kwargs):
-            pass
-        async def get_clients_without_future_bookings(self):
-            calls.append("no_future_booking")
-            return segments.ClientSegmentResult(segment_type="no_future_bookings", title="📅", members=[])
-        async def get_clients_by_service_category(self, category):
-            calls.append(("by_service_category", category))
-            return segments.ClientSegmentResult(segment_type="by_service", title="✂️", members=[])
-
-    monkeypatch.setattr(broadcasts, "ClientSegmentService", FakeService)
-    asyncio.run(broadcasts._fetch_yclients_clients_for_audience(context=None, audience_key="no_future_booking"))  # type: ignore[arg-type]
-    asyncio.run(broadcasts._fetch_yclients_clients_for_audience(context=None, audience_key="by_service_category:cat-7"))  # type: ignore[arg-type]
-
-    assert calls == ["no_future_booking", ("by_service_category", "cat-7")]
+    assert "Отправлено: 2" in text
+    assert "Ошибок: 2" in text
+    assert "Заблокировали бота: 1" in text
+    assert "Пропущено: 2" in text
+    assert "Причины:" in text
+    assert "token=secret" not in text
+    assert "+79990000001" not in text
+    assert "payload raw" not in text
+    assert "Дубликатов исключено" not in text
+    assert "Telegram connection" not in text

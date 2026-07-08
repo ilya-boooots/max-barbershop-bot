@@ -311,7 +311,7 @@ def test_confirm_send_creates_one_run_and_delivery_per_eligible_or_skipped_outco
 
     assert len(history.broadcasts) == 1
     assert len(history.deliveries) == 2
-    assert [d["delivery_status"] for d in history.deliveries] == ["sent", "skipped_unreachable"]
+    assert [d["delivery_status"] for d in history.deliveries] == ["sent", "skipped_no_tg_id"]
     assert report.max_sent == 1
     assert report.skipped_unreachable == 1
 
@@ -344,7 +344,84 @@ def test_send_report_counts_sent_skipped_failed_blocked_and_dedup():
 
     assert report.max_sent == 1
     assert report.skipped_blocked == 1
-    assert report.failed == 1
+    assert report.failed == 2
     assert report.skipped_duplicate == 1
     assert report.skipped_unreachable == 1
-    assert [d["delivery_status"] for d in history.deliveries] == ["sent", "skipped_blocked", "failed", "skipped_duplicate", "skipped_unreachable"]
+    assert [d["delivery_status"] for d in history.deliveries] == ["sent", "blocked", "failed", "skipped_duplicate", "skipped_no_tg_id"]
+
+
+def test_blocked_and_rate_limited_match_telegram_failed_counts_without_retry():
+    import asyncio
+
+    adapter = FakeAdapter(outcomes={"max1": (False, "blocked"), "max2": (False, "retry_after")})
+    users = [
+        User(1, PLATFORM_MAX, "max1", "max1", "chat1", None, None, None, None, "+79990000001", None, "user", "1", True),
+        User(2, PLATFORM_MAX, "max2", "max2", "chat2", None, None, None, None, "+79990000002", None, "user", "2", True),
+    ]
+    svc, history = service_with_history(users, adapter)
+
+    report = asyncio.run(svc.send(
+        clients=[
+            YClientsNormalizedClient(id="1", phones=("+79990000001",)),
+            YClientsNormalizedClient(id="2", phones=("+79990000002",)),
+        ],
+        text="Тест",
+        origin_platform=PLATFORM_MAX,
+        created_by_user_id="owner",
+        broadcast_id="bid-rate",
+        sleep_seconds=0,
+    ))
+
+    assert adapter.sent == [("max1", "Тест"), ("max2", "Тест")]
+    assert report.failed == 2
+    assert report.skipped_blocked == 1
+    assert [d["delivery_status"] for d in history.deliveries] == ["blocked", "failed"]
+    assert [d["reason"] for d in history.deliveries] == ["forbidden", "retry_after"]
+
+
+def test_generic_failure_reason_is_masked_in_delivery_row():
+    import asyncio
+
+    raw = "token=secret phone=+79990000001 payload={'x': 1}"
+    adapter = FakeAdapter(outcomes={"max1": (False, raw)})
+    svc, history = service_with_history([max_user(yclients_client_id="1")], adapter)
+
+    report = asyncio.run(svc.send(
+        clients=[YClientsNormalizedClient(id="1")],
+        text="Тест",
+        origin_platform=PLATFORM_MAX,
+        created_by_user_id="owner",
+        broadcast_id="bid-mask",
+        sleep_seconds=0,
+    ))
+
+    assert report.failed == 1
+    stored = str(history.deliveries[0])
+    assert "token=secret" not in stored
+    assert "+79990000001" not in stored
+    assert "payload" not in stored
+    assert history.deliveries[0]["reason"] == "failed"
+
+
+def test_duplicate_final_route_is_recorded_but_not_sent_twice():
+    import asyncio
+
+    adapter = FakeAdapter(outcomes={"max1": (True, None)})
+    users = [User(1, PLATFORM_MAX, "max1", "max1", "chat1", None, None, None, None, "+79990000001", None, "user", "1", True)]
+    svc, history = service_with_history(users, adapter)
+
+    report = asyncio.run(svc.send(
+        clients=[
+            YClientsNormalizedClient(id="1", phones=("+79990000001",)),
+            YClientsNormalizedClient(id="2", phones=("+79990000001",)),
+        ],
+        text="Дубль",
+        origin_platform=PLATFORM_MAX,
+        created_by_user_id="owner",
+        broadcast_id="bid-dup",
+        sleep_seconds=0,
+    ))
+
+    assert adapter.sent == [("max1", "Дубль")]
+    assert report.skipped_duplicate == 1
+    assert [d["delivery_status"] for d in history.deliveries] == ["sent", "skipped_duplicate"]
