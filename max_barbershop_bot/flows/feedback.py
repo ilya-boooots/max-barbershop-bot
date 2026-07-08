@@ -15,6 +15,12 @@ from max_barbershop_bot.services.feedback import (
     NEGATIVE_THANKS_TEXT,
     NON_TEXT_COMMENT_TEXT,
     POSITIVE_TEXT,
+    COMMENT_TOO_LONG_TEXT,
+    COMMENT_TOO_SHORT_TEXT,
+    INVALID_RATING_TEXT,
+    MAX_COMMENT_LENGTH,
+    MIN_COMMENT_LENGTH,
+    RATING_MISSING_TEXT,
     STALE_TEXT,
     client_recipient,
     feedback_admin_reply_confirm_keyboard,
@@ -39,6 +45,7 @@ def configure_feedback_flow(database_path: str) -> None:
 
 def register_feedback_routes(router: Router) -> None:
     for rating in range(1, 6):
+        router.on_callback(f"fb:rate:{rating}", _handle_rating)
         router.on_callback(f"feedback:rate:{rating}", _handle_rating)
     router.on_callback_prefix("feedback_admin_reply:", _handle_admin_reply_start)
     router.on_callback_prefix("feedback_admin_reply_confirm:", _handle_admin_reply_confirm)
@@ -52,6 +59,11 @@ async def _handle_rating(context: RouterContext) -> None:
         rating = int(payload.rsplit(":", 1)[-1])
     except ValueError:
         await context.answer_callback()
+        await context.send_text(INVALID_RATING_TEXT)
+        return
+    if rating < 1 or rating > 5:
+        await context.answer_callback()
+        await context.send_text(INVALID_RATING_TEXT)
         return
     database_path = _database_path_from_context()
     response, negative = save_rating(database_path, platform_user_id=context.event.platform_user_id or "", rating=rating)
@@ -64,7 +76,7 @@ async def _handle_rating(context: RouterContext) -> None:
         await context.send_text(NEGATIVE_COMMENT_PROMPT)
     else:
         state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
-        await context.send_text(POSITIVE_TEXT)
+        await context.send_text(POSITIVE_TEXT, keyboard=feedback_review_links_keyboard())
     await context.answer_callback()
 
 
@@ -74,10 +86,16 @@ async def _handle_comment(context: RouterContext) -> None:
     if not text:
         await context.send_text(NON_TEXT_COMMENT_TEXT)
         return
+    if len(text) < MIN_COMMENT_LENGTH:
+        await context.send_text(COMMENT_TOO_SHORT_TEXT)
+        return
+    if len(text) > MAX_COMMENT_LENGTH:
+        await context.send_text(COMMENT_TOO_LONG_TEXT)
+        return
     response = save_negative_comment(database_path, platform_user_id=context.event.platform_user_id or "", comment=text)
     if response is None:
         state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
-        await context.send_text("⚠️ Эта оценка уже обработана или устарела.")
+        await context.send_text(RATING_MISSING_TEXT)
         return
     await context.send_text(NEGATIVE_THANKS_TEXT)
     await notify_negative_feedback(context.sender, database_path=database_path, response=response)

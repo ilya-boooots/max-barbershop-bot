@@ -929,6 +929,17 @@ def contacts_keyboard(route_links: dict[str, str]) -> MaxInlineKeyboard:
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
+
+def feedback_public_review_links_keyboard(*, yandex_url: str, two_gis_url: str) -> MaxInlineKeyboard:
+    """Build public review link buttons with Telegram labels."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="Яндекс Карты", type="link", url=yandex_url)],
+            [MaxButton(text="2GIS", type="link", url=two_gis_url)],
+        ]
+    )
+
 def navigation_keyboard(*, back_payload: str = NAV_BACK_PAYLOAD) -> MaxInlineKeyboard:
     """Build Back/Home navigation buttons for section screens."""
 
