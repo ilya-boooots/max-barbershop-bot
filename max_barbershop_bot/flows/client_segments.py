@@ -41,6 +41,7 @@ from max_barbershop_bot.ui.buttons import (
     SEGMENTS_BACK_PAYLOAD,
     SEGMENTS_BROADCAST_PAYLOAD,
     SEGMENTS_HOME_PAYLOAD,
+    MaxButton,
     broadcast_menu_keyboard,
     client_segment_result_keyboard,
     client_segments_menu_keyboard,
@@ -61,6 +62,7 @@ from max_barbershop_bot.ui.texts import (
 logger = logging.getLogger(__name__)
 
 SEGMENT_STALE_TEXT = "⚠️ Данные устарели. Откройте раздел заново."
+MASTER_PICKER_LOAD_ERROR_TEXT = "⚠️ Не удалось загрузить мастеров. Проверьте интеграцию YClients или попробуйте позже."
 
 _SELECTED_SEGMENT_PAYLOAD_KEY = "selected_segment_payload"
 _SELECTED_SEGMENT_RESULT_KEY = "selected_segment_result"
@@ -121,6 +123,12 @@ async def handle_segment_selected(context: RouterContext) -> None:
     if payload == SEGMENTS_BY_SERVICE_PAYLOAD:
         await _show_service_picker(context)
         return
+    if str(payload or "").startswith(SEGMENTS_BY_MASTER_PREFIX):
+        master_id = str(payload or "").removeprefix(SEGMENTS_BY_MASTER_PREFIX).strip()
+        if not master_id or master_id == "picker":
+            await _answer_callback(context)
+            await context.send_text(SEGMENT_STALE_TEXT, keyboard=client_segments_menu_keyboard())
+            return
     if not payload or (payload not in _SEGMENT_CALLBACKS and not payload.startswith((SEGMENTS_BY_MASTER_PREFIX, SEGMENTS_BY_SERVICE_PREFIX))):
         stale_prefixes = ("segments:active:", "segments:no_future")
         if str(payload or "").startswith(stale_prefixes):
@@ -182,6 +190,10 @@ async def handle_segments_back(context: RouterContext) -> None:
     await _answer_callback(context)
     current = state.get_current_screen(_user_id(context), _chat_id(context))
     if current == state.CLIENT_SEGMENT_RESULT_SCREEN:
+        payload = state.get_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SEGMENT_PAYLOAD_KEY)
+        if str(payload or "").startswith(SEGMENTS_BY_MASTER_PREFIX):
+            await _show_master_picker(context)
+            return
         state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENTS_MENU_SCREEN)
         await _show_segments_overview(context)
         return
@@ -205,11 +217,17 @@ async def _show_master_picker(context: RouterContext) -> None:
     try:
         masters = await ClientSegmentService(_yclients_settings_repository()).list_masters()
     except (ClientSegmentsNotConfiguredError, ClientSegmentsLoadError):
-        await context.send_text(CLIENT_SEGMENTS_LOAD_ERROR_TEXT, keyboard=client_segments_menu_keyboard())
+        await context.send_text(MASTER_PICKER_LOAD_ERROR_TEXT, keyboard=_segment_nav_only_keyboard())
+        return
+    if not masters:
+        await context.send_text(MASTER_PICKER_LOAD_ERROR_TEXT, keyboard=_segment_nav_only_keyboard())
         return
     from max_barbershop_bot.max_api.models import MaxInlineKeyboard
-    from max_barbershop_bot.ui.buttons import MaxButton
-    rows = [[MaxButton(text=item["title"][:80], payload=f"{SEGMENTS_BY_MASTER_PREFIX}{item['id']}")] for item in masters[:30]]
+    rows = [
+        [MaxButton(text=item["title"][:40], payload=f"{SEGMENTS_BY_MASTER_PREFIX}{item['id']}")]
+        for item in masters[:30]
+        if _valid_callback_payload(f"{SEGMENTS_BY_MASTER_PREFIX}{item['id']}")
+    ]
     rows += [[MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)]]
     await context.send_text("💈 Выберите мастера", keyboard=MaxInlineKeyboard.from_rows(rows))
 
@@ -257,7 +275,8 @@ async def _show_segment(context: RouterContext, payload: str, *, notification: s
     state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENT_RESULT_SCREEN)
 
     text = format_segment_summary(result)
-    await context.send_text(text, keyboard=client_segment_result_keyboard(can_broadcast=True))
+    keyboard = _by_master_detail_keyboard(payload) if payload.startswith(SEGMENTS_BY_MASTER_PREFIX) else client_segment_result_keyboard(can_broadcast=True)
+    await context.send_text(text, keyboard=keyboard)
 
 
 async def _load_segment(payload: str) -> ClientSegmentResult:
@@ -364,6 +383,34 @@ def _clear_segment_state(context: RouterContext) -> None:
 
 def _normalize_phone(value: str | None) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _valid_callback_payload(value: str) -> bool:
+    return bool(value.strip()) and len(value.encode("utf-8")) <= 64
+
+
+def _segment_nav_only_keyboard():
+    from max_barbershop_bot.max_api.models import MaxInlineKeyboard
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def _by_master_detail_keyboard(payload: str):
+    from max_barbershop_bot.max_api.models import MaxInlineKeyboard
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="📣 Использовать для рассылки", payload=SEGMENTS_BROADCAST_PAYLOAD)],
+            [MaxButton(text="🔄 Обновить", payload=payload)],
+            [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)],
+        ]
+    )
 
 
 
