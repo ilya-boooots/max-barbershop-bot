@@ -22,6 +22,7 @@ from max_barbershop_bot.core.payloads import indexed_payload
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 
 MENU_BOOKING_PAYLOAD = "menu:booking"
+CANCELLATION_RECOVERY_PAYLOAD_PREFIX = "cancel_recovery:"
 MENU_MY_BOOKINGS_PAYLOAD = "menu:my_bookings"
 MENU_MASTERS_PAYLOAD = "menu:masters"
 MENU_CONTACTS_PAYLOAD = "menu:contacts"
@@ -1566,5 +1567,18 @@ def settings_notification_tests_keyboard() -> MaxInlineKeyboard:
             [MaxButton(text="⏰ Тест напоминания за 2 часа", payload=SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def cancellation_recovery_keyboard(event_id: int | str) -> MaxInlineKeyboard:
+    """Build Telegram-equivalent cancellation recovery CTA keyboard."""
+
+    clean_event_id = str(event_id).strip()
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✂️ Подобрать новое время", payload=f"cancel_recovery:rebook:{clean_event_id}")],
+            [MaxButton(text="📅 Выбрать другую дату", payload=f"cancel_recovery:date:{clean_event_id}")],
+            [MaxButton(text="Позже", payload=f"cancel_recovery:later:{clean_event_id}")],
         ]
     )
