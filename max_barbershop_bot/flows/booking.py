@@ -12,6 +12,7 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, MAX_REPEAT_BOOKING_COMMENT_MARKER
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
+from max_barbershop_bot.repositories.repeat_visit_events import RepeatVisitEventsRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
@@ -71,6 +72,7 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_SLOT_PREV_PAYLOAD,
     MENU_BOOKING_PAYLOAD,
     NAV_HOME_PAYLOAD,
+    REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX,
     booking_categories_keyboard,
     booking_hub_keyboard,
     booking_dates_keyboard,
@@ -161,6 +163,7 @@ def register_booking_routes(router: Router) -> None:
     """Register booking category/service callbacks."""
 
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
+    router.on_callback_prefix(REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX, handle_repeat_visit_booking_start)
     router.on_callback(CANCELLATION_RECOVERY_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
     router.on_callback(NAV_HOME_PAYLOAD, handle_booking_home)
@@ -293,6 +296,34 @@ async def handle_booking_start(context: RouterContext) -> None:
 
     await context.answer_callback()
     _clear_booking_state(context)
+    await _show_booking_hub(context)
+
+
+async def handle_repeat_visit_booking_start(context: RouterContext) -> None:
+    """Open normal booking flow from repeat visit CTA and preserve attribution."""
+
+    payload = context.event.callback_payload or ""
+    raw_event_id = payload.removeprefix(REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX).strip()
+    try:
+        event_id = int(raw_event_id)
+    except ValueError:
+        await show_booking_stale_callback(context)
+        return
+    repo = RepeatVisitEventsRepository(_database_path())
+    event = repo.get_event(event_id)
+    if event is None:
+        await show_booking_stale_callback(context)
+        return
+    repo.mark_status(event.id, "clicked_booking", clicked=True)
+    await context.answer_callback()
+    _clear_booking_state(context)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "booking_source", "repeat_visit")
+    state.set_state_data_value(_user_id(context), _chat_id(context), "booking_origin_type", "repeat_visit")
+    state.set_state_data_value(_user_id(context), _chat_id(context), "repeat_visit_event_id", event.id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "notification_event_id", event.id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "yclients_client_id", event.yclients_client_id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "notification_is_test", event.is_test)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "notification_source", event.source)
     await _show_booking_hub(context)
 
 

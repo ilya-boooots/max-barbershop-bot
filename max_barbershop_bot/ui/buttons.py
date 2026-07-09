@@ -22,6 +22,8 @@ from max_barbershop_bot.core.payloads import indexed_payload
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 
 MENU_BOOKING_PAYLOAD = "menu:booking"
+REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX = "repeat_visit:book:"
+REPEAT_VISIT_BOOKING_BUTTON_TEXT = "✂️ Записаться"
 MENU_MY_BOOKINGS_PAYLOAD = "menu:my_bookings"
 MENU_MASTERS_PAYLOAD = "menu:masters"
 MENU_CONTACTS_PAYLOAD = "menu:contacts"
