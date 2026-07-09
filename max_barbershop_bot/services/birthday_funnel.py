@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.repositories.birthday_funnel_events import (
     BIRTHDAY_NOTIFICATION_TYPE,
     BirthdayFunnelEventsRepository,
@@ -17,15 +19,17 @@ from max_barbershop_bot.repositories.users import User, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import CompanyTimeService
 from max_barbershop_bot.services.notifications import PLATFORM_MAX, send_business_notification
-from max_barbershop_bot.ui.buttons import MENU_BOOKING_PAYLOAD
 
 logger = logging.getLogger(__name__)
 
 BIRTHDAY_SEND_DAYS_BEFORE = 7
+BIRTHDAY_BUTTON_CLAIM = "birthday_funnel:claim"
+BIRTHDAY_BUTTON_BOOK = "birthday_funnel:book"
 BIRTHDAY_MESSAGE_TEXT = (
     "Скоро ваш день рождения, поздравляем 🎉 😊\n\n"
     "Хотим сделать вам приятный подарок - покажите это сообщение администратору при оплате."
 )
+BIRTHDAY_WARNING = "У КЛИЕНТА ДЕНЬ РОЖДЕНИЕ - НУЖНО СДЕЛАТЬ СКИДКУ"
 BIRTHDAY_BOOKING_BUTTON_TEXT = "✂️ Записаться"
 BIRTHDAY_LOOP_INTERVAL_SECONDS = 3600
 
@@ -40,14 +44,20 @@ class BirthdayScanSummary:
     errors: int = 0
 
 
-async def run_birthday_scan(sender: MaxMessageSender, *, database_path: str) -> BirthdayScanSummary:
+async def run_birthday_scan(sender: MaxMessageSender, *, database_path: str, force: bool = False, source: str = "local_db", is_test: bool = False) -> BirthdayScanSummary:
     """Send due birthday messages once per user per birthday year."""
+
+    settings = _birthday_settings(database_path)
+    if not settings.get("enabled", True) and not force:
+        logger.info("birthday_scan_skipped_disabled")
+        return BirthdayScanSummary()
 
     users_repo = UsersRepository(database_path)
     events_repo = BirthdayFunnelEventsRepository(database_path)
     company_time = CompanyTimeService(YClientsSettingsRepository(database_path))
     today = company_time.today()
     branch_timezone = company_time.get_branch_timezone_name()
+    days_before = int(settings.get("send_days_before") or BIRTHDAY_SEND_DAYS_BEFORE)
     summary = BirthdayScanSummary()
 
     for user in users_repo.list_birthday_candidates(platform=PLATFORM_MAX):
@@ -60,6 +70,9 @@ async def run_birthday_scan(sender: MaxMessageSender, *, database_path: str) -> 
                 user=user,
                 today=today,
                 branch_timezone=branch_timezone,
+                days_before=days_before,
+                source=source,
+                is_test=is_test,
             )
             counters[outcome] += 1
         except Exception as exc:  # noqa: BLE001 - background funnel must not crash bot.
@@ -68,16 +81,7 @@ async def run_birthday_scan(sender: MaxMessageSender, *, database_path: str) -> 
                 "MAX birthday funnel diagnostic: platform_user_id_present=%s birthdate_present=%s "
                 "birth_year=%s due_today=%s history_existing=%s send_attempted=%s send_status=%s "
                 "delivery_status=%s blocked_or_stopped=%s error_class=%s",
-                bool(user.platform_user_id),
-                bool(user.birthdate),
-                today.year,
-                None,
-                None,
-                False,
-                None,
-                None,
-                None,
-                type(exc).__name__,
+                bool(user.platform_user_id), bool(user.birthdate), today.year, None, None, False, None, None, None, type(exc).__name__,
             )
         summary = BirthdayScanSummary(**counters)
     return summary
@@ -117,11 +121,14 @@ async def _process_user(
     user: User,
     today: date,
     branch_timezone: str,
+    days_before: int,
+    source: str,
+    is_test: bool,
 ) -> str:
-    birth_date = _parse_birthdate(user.birthdate)
+    birth_date = _parse_birth_date(user.birthdate)
     birth_year = today.year
-    due_today = _is_due_today(birth_date, today)
-    history_existing = bool(events_repo.find_by_user_year(user.platform_user_id, birth_year))
+    due_today = _is_due_today(birth_date, today, days_before=days_before)
+    history_existing = bool(events_repo.find_by_client_year(user.platform_user_id, birth_year, is_test=is_test))
     send_attempted = False
     send_status: str | None = None
     delivery_status: str | None = None
@@ -134,7 +141,18 @@ async def _process_user(
         recipient_type, recipient_id = _recipient(user)
         if recipient_id is None:
             return "skipped"
-        event = events_repo.create_pending(user.platform_user_id, birth_year)
+        event = events_repo.create_event(
+            platform_user_id=user.platform_user_id,
+            yclients_client_id=user.yclients_client_id,
+            client_tg_id=user.platform_user_id,
+            birth_date=birth_date.isoformat(),
+            birthday_year=birth_year,
+            scheduled_send_at_utc=datetime.now(UTC).isoformat(),
+            status="pending",
+            branch_timezone=branch_timezone,
+            source=source,
+            is_test=is_test,
+        )
         if event is None:
             return "skipped"
         send_attempted = True
@@ -152,36 +170,43 @@ async def _process_user(
             recipient_type=recipient_type,
             recipient_id=recipient_id,
             text=BIRTHDAY_MESSAGE_TEXT,
-            keyboard=_birthday_keyboard(),
-            metadata={"birthday_year": birth_year, "branch_timezone": branch_timezone},
+            keyboard=build_birthday_booking_keyboard(event.id),
+            metadata={"birthday_year": birth_year, "branch_timezone": branch_timezone, "source": source, "is_test": is_test},
         )
         send_status = history.status if history is not None else "failed"
+        if history and (history.is_blocked or history.is_stopped):
+            send_status = "blocked"
+        elif send_status not in {"sent", "blocked", "skipped"}:
+            send_status = "failed"
         delivery_status = send_status
         blocked_or_stopped = bool(history and (history.is_blocked or history.is_stopped))
-        events_repo.mark_status(event.id, send_status, sent=send_status == "sent")
-        return "sent" if send_status == "sent" else "errors"
+        events_repo.mark_status(event.id, send_status, sent=send_status == "sent", error_summary=None if send_status == "sent" else send_status)
+        if send_status == "sent":
+            return "sent"
+        if send_status == "skipped":
+            return "skipped"
+        return "errors"
     except Exception as exc:
         error_class = type(exc).__name__
+        if send_attempted and 'event' in locals() and event is not None:
+            events_repo.mark_status(event.id, "failed", error_summary=str(exc)[:180])
         raise
     finally:
         logger.info(
             "MAX birthday funnel diagnostic: platform_user_id_present=%s birthdate_present=%s "
             "birth_year=%s due_today=%s history_existing=%s send_attempted=%s send_status=%s "
             "delivery_status=%s blocked_or_stopped=%s error_class=%s",
-            bool(user.platform_user_id),
-            bool(user.birthdate),
-            birth_year,
-            due_today,
-            history_existing,
-            send_attempted,
-            send_status,
-            delivery_status,
-            blocked_or_stopped,
-            error_class,
+            bool(user.platform_user_id), bool(user.birthdate), birth_year, due_today, history_existing, send_attempted, send_status, delivery_status, blocked_or_stopped, error_class,
         )
 
 
-def _parse_birthdate(raw: str | None) -> date | None:
+def build_birthday_booking_keyboard(event_id: int) -> MaxInlineKeyboard:
+    """Build Telegram-equivalent birthday booking CTA keyboard for MAX."""
+
+    return MaxInlineKeyboard.from_rows([[MaxButton(text=BIRTHDAY_BOOKING_BUTTON_TEXT, payload=f"{BIRTHDAY_BUTTON_BOOK}:{event_id}")]])
+
+
+def _parse_birth_date(raw: str | None) -> date | None:
     if not raw:
         return None
     try:
@@ -190,12 +215,42 @@ def _parse_birthdate(raw: str | None) -> date | None:
         return None
 
 
-def _is_due_today(birth_date: date | None, today: date) -> bool:
+_parse_birthdate = _parse_birth_date
+
+
+def _is_due_today(birth_date: date | None, today: date, *, days_before: int = BIRTHDAY_SEND_DAYS_BEFORE) -> bool:
     if birth_date is None:
         return False
     day = min(birth_date.day, 28) if birth_date.month == 2 and birth_date.day == 29 else birth_date.day
     target = date(today.year, birth_date.month, day)
-    return (target - today).days == BIRTHDAY_SEND_DAYS_BEFORE
+    return (target - today).days == days_before
+
+
+def apply_birthday_warning(base_comment: str, *, booking_source: str | None, birthday_discount_context: bool = False) -> str:
+    """Append birthday discount warning exactly once for birthday-funnel bookings."""
+
+    if booking_source != "birthday_funnel" or not birthday_discount_context:
+        return base_comment
+    if BIRTHDAY_WARNING in base_comment:
+        return base_comment
+    return f"{base_comment}\n\n{BIRTHDAY_WARNING}"
+
+
+def _birthday_settings(database_path: str) -> dict[str, object]:
+    repo = AppSettingsRepository(database_path)
+    enabled = repo.get_bool("birthday", default=True)
+    days_before = BIRTHDAY_SEND_DAYS_BEFORE
+    try:
+        raw = repo.get_text("birthday_settings", default="")  # type: ignore[attr-defined]
+    except AttributeError:
+        raw = ""
+    if raw:
+        try:
+            data = json.loads(raw)
+            days_before = int(data.get("send_days_before") or days_before)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            days_before = BIRTHDAY_SEND_DAYS_BEFORE
+    return {"enabled": enabled, "send_days_before": days_before}
 
 
 def _recipient(user: User) -> tuple[str, str | None]:
@@ -204,7 +259,3 @@ def _recipient(user: User) -> tuple[str, str | None]:
     if user.chat_id:
         return "chat", user.chat_id
     return "user", None
-
-
-def _birthday_keyboard() -> MaxInlineKeyboard:
-    return MaxInlineKeyboard.from_rows([[MaxButton(text=BIRTHDAY_BOOKING_BUTTON_TEXT, payload=MENU_BOOKING_PAYLOAD)]])

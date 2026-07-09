@@ -11,6 +11,7 @@ from max_barbershop_bot.core.action_locks import BOOKING_CREATE_LOCK_TTL_SECONDS
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, MAX_REPEAT_BOOKING_COMMENT_MARKER
+from max_barbershop_bot.repositories.birthday_funnel_events import BirthdayFunnelEventsRepository
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
@@ -34,6 +35,10 @@ from max_barbershop_bot.services.booking import (
     has_available_masters,
     has_available_services,
     is_service_compatible_with_master,
+)
+from max_barbershop_bot.services.birthday_funnel import (
+    BIRTHDAY_BUTTON_BOOK,
+    apply_birthday_warning,
 )
 from max_barbershop_bot.services.cancellation_recovery import CANCELLATION_RECOVERY_BOOKING_PAYLOAD
 from max_barbershop_bot.services.contacts import ContactsService
@@ -162,6 +167,7 @@ def register_booking_routes(router: Router) -> None:
 
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback(CANCELLATION_RECOVERY_BOOKING_PAYLOAD, handle_booking_start)
+    router.on_callback_prefix(f"{BIRTHDAY_BUTTON_BOOK}:", handle_birthday_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
     router.on_callback(NAV_HOME_PAYLOAD, handle_booking_home)
     router.on_callback(BOOKING_CONFIRM_PAYLOAD, handle_booking_confirm)
@@ -286,6 +292,29 @@ async def start_staff_first_booking_with_master(context: RouterContext, master: 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, None)
     await _open_booking_catalog(context)
+
+
+async def handle_birthday_booking_start(context: RouterContext) -> None:
+    """Open booking from birthday-funnel CTA with attribution."""
+
+    await context.answer_callback()
+    event_id = _birthday_event_id_from_payload(context.event.callback_payload)
+    events_repo = BirthdayFunnelEventsRepository(_database_path())
+    event = events_repo.get_event(event_id) if event_id is not None else None
+    if event is None or event.platform_user_id != str(_user_id(context) or ""):
+        await context.send_text("⚠️ Это предложение уже устарело. Вы можете записаться через главное меню.")
+        return
+    events_repo.mark_status(event.id, "clicked_booking", clicked=True)
+    _clear_booking_state(context)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "booking_source", "birthday_funnel")
+    state.set_state_data_value(_user_id(context), _chat_id(context), "birthday_event_id", event.id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "birthday_discount_context", True)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "birthday_is_test", event.is_test)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "birthday_source", event.source)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "birthday_claimed_at_utc", event.clicked_at_utc or datetime.utcnow().isoformat())
+    state.set_state_data_value(_user_id(context), _chat_id(context), "notification_is_test", event.is_test)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "notification_source", event.source)
+    await _show_booking_hub(context)
 
 
 async def handle_booking_start(context: RouterContext) -> None:
@@ -824,7 +853,11 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
             selected_datetime=_optional_state_text(booking_data.get("selected_datetime")),
             client_name=_user_full_name(user),
             client_phone=booking_phone,
-            comment=MAX_REPEAT_BOOKING_COMMENT_MARKER if booking_data.get("entry_mode") == _ENTRY_MODE_REPEAT else MAX_BOOKING_COMMENT_MARKER,
+            comment=apply_birthday_warning(
+                MAX_REPEAT_BOOKING_COMMENT_MARKER if booking_data.get("entry_mode") == _ENTRY_MODE_REPEAT else MAX_BOOKING_COMMENT_MARKER,
+                booking_source=_optional_state_text(booking_data.get("booking_source")),
+                birthday_discount_context=bool(booking_data.get("birthday_discount_context")),
+            ),
         )
     except BookingServiceError as exc:
         logger.warning(
@@ -853,6 +886,11 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
         "MAX booking confirm duplicate diagnostic: max_user_id=%s draft_id=%s lock_key=%s callback=%s action=%s yclients_record_id=%s",
         _user_id(context), _chat_id(context), lock_key, context.event.callback_payload, "created", created.yclients_record_id,
     )
+    birthday_event_id = booking_data.get("birthday_event_id")
+    if booking_data.get("booking_source") == "birthday_funnel" and isinstance(birthday_event_id, int):
+        BirthdayFunnelEventsRepository(_database_path()).mark_status(
+            birthday_event_id, "booked_from_birthday_gift", booking_id=created.yclients_record_id
+        )
     _save_attribution_safely(
         platform_user_id=user.platform_user_id,
         yclients_record_id=created.yclients_record_id,
@@ -1642,6 +1680,14 @@ def _booking_state_snapshot(context: RouterContext) -> dict[str, object | None]:
         "booking_phone": _state_value(context, _BOOKING_PHONE_STATE_KEY),
         "booking_phone_source": _state_value(context, _BOOKING_PHONE_SOURCE_STATE_KEY),
         "entry_mode": _state_value(context, _ENTRY_MODE_STATE_KEY),
+        "booking_source": _state_value(context, "booking_source"),
+        "birthday_event_id": _state_value(context, "birthday_event_id"),
+        "birthday_discount_context": _state_value(context, "birthday_discount_context"),
+        "birthday_is_test": _state_value(context, "birthday_is_test"),
+        "birthday_source": _state_value(context, "birthday_source"),
+        "birthday_claimed_at_utc": _state_value(context, "birthday_claimed_at_utc"),
+        "notification_is_test": _state_value(context, "notification_is_test"),
+        "notification_source": _state_value(context, "notification_source"),
     }
 
 
@@ -2065,3 +2111,8 @@ def _chat_id(context: RouterContext) -> str | None:
 
 def _database_path() -> str:
     return getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH
+
+
+def _birthday_event_id_from_payload(payload: str | None) -> int | None:
+    raw = (payload or "").removeprefix(BIRTHDAY_BUTTON_BOOK).lstrip(":")
+    return int(raw) if raw.isdigit() else None
