@@ -1570,3 +1570,16 @@ def settings_notification_tests_keyboard() -> MaxInlineKeyboard:
             [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
         ]
     )
+
+
+def cancellation_recovery_keyboard(event_id: int | str) -> MaxInlineKeyboard:
+    """Build Telegram-equivalent cancellation recovery CTA keyboard."""
+
+    clean_event_id = str(event_id).strip()
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✂️ Подобрать новое время", payload=f"cancel_recovery:rebook:{clean_event_id}")],
+            [MaxButton(text="📅 Выбрать другую дату", payload=f"cancel_recovery:date:{clean_event_id}")],
+            [MaxButton(text="Позже", payload=f"cancel_recovery:later:{clean_event_id}")],
+        ]
+    )

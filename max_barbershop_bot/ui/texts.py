@@ -291,3 +291,7 @@ SETTINGS_MENU_TEXT = """⚙️ Настройки
 SETTINGS_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу."
 SETTINGS_CONTACTS_EDIT_SOON_TEXT = "Редактирование контактов добавим отдельным шагом 🔧"
 SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT = "Управление уведомлениями добавим отдельным шагом 🔧"
+
+CANCELLATION_RECOVERY_TEXT = "Видим, что вы отменили запись 😔\n\nМожем подобрать другое удобное время."
+CANCELLATION_RECOVERY_STALE_TEXT = "⚠️ Это уведомление уже устарело. Вы можете открыть запись через главное меню."
+CANCELLATION_RECOVERY_LATER_TEXT = "Хорошо, будем ждать вас позже 😊"

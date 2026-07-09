@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from os import getenv
 
 from max_barbershop_bot.core import state
@@ -11,6 +11,7 @@ from max_barbershop_bot.core.action_locks import BOOKING_CREATE_LOCK_TTL_SECONDS
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, MAX_REPEAT_BOOKING_COMMENT_MARKER
+from max_barbershop_bot.repositories.cancellation_recovery_events import CancellationRecoveryEventsRepository
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.repeat_visit_events import RepeatVisitEventsRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
@@ -103,6 +104,8 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_STALE_DATE_TEXT,
     BOOKING_STALE_SLOT_TEXT,
     BOOKING_STAFF_FIRST_CATEGORY_TEXT,
+    CANCELLATION_RECOVERY_LATER_TEXT,
+    CANCELLATION_RECOVERY_STALE_TEXT,
 )
 
 logger = logging.getLogger(__name__)
@@ -289,6 +292,43 @@ async def start_staff_first_booking_with_master(context: RouterContext, master: 
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_DATETIME_STATE_KEY, None)
     state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_RAW_STATE_KEY, None)
     await _open_booking_catalog(context)
+
+
+async def handle_cancellation_recovery_booking_cta(context: RouterContext) -> None:
+    """Route cancellation recovery CTA into the existing booking flow with attribution."""
+
+    await context.answer_callback()
+    payload = context.event.callback_payload or ""
+    parts = payload.split(":")
+    if len(parts) != 3 or parts[0] != "cancel_recovery" or parts[1] not in {"rebook", "date", "later"} or not parts[2].isdigit():
+        await context.send_text(CANCELLATION_RECOVERY_STALE_TEXT)
+        return
+    action = parts[1]
+    event_id = int(parts[2])
+    repository = CancellationRecoveryEventsRepository(_database_path())
+    event = repository.get_event(event_id)
+    if event is None or event.status not in {"sent", "pending"}:
+        await context.send_text(CANCELLATION_RECOVERY_STALE_TEXT)
+        return
+
+    now = datetime.now(UTC).isoformat()
+    if action == "later":
+        repository.set_status(event_id, "clicked_later", clicked_at_utc=now)
+        await context.send_text(CANCELLATION_RECOVERY_LATER_TEXT)
+        return
+
+    repository.set_status(event_id, "clicked_rebook", clicked_at_utc=now)
+    _clear_booking_state(context)
+    _set_cancellation_recovery_attribution(context, event_id=event_id, event=event)
+    if action == "date":
+        state.set_state_data_value(_user_id(context), _chat_id(context), _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_DATETIME_FIRST)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SERVICE_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_MASTER_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_DATE_STATE_KEY, None)
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_SLOT_TIME_STATE_KEY, None)
+        await _open_datetime_first_dates(context)
+        return
+    await _show_booking_hub(context)
 
 
 async def handle_booking_start(context: RouterContext) -> None:
@@ -1113,6 +1153,18 @@ async def _booking_hub_text() -> str:
 
 def _clear_booking_state(context: RouterContext) -> None:
     state.clear_state_data(_user_id(context), _chat_id(context))
+
+
+def _set_cancellation_recovery_attribution(context: RouterContext, *, event_id: int, event: object) -> None:
+    platform_user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    state.set_state_data_value(platform_user_id, chat_id, "booking_source", "cancellation_recovery")
+    state.set_state_data_value(platform_user_id, chat_id, "booking_origin_type", "cancellation_recovery")
+    state.set_state_data_value(platform_user_id, chat_id, "notification_event_id", event_id)
+    state.set_state_data_value(platform_user_id, chat_id, "cancellation_recovery_event_id", event_id)
+    state.set_state_data_value(platform_user_id, chat_id, "yclients_client_id", getattr(event, "yclients_client_id", None))
+    state.set_state_data_value(platform_user_id, chat_id, "notification_is_test", bool(getattr(event, "is_test", False)))
+    state.set_state_data_value(platform_user_id, chat_id, "notification_source", getattr(event, "source", None))
 
 
 async def _open_booking_catalog(context: RouterContext, *, push_current: bool = True) -> None:

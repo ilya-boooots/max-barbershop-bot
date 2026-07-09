@@ -149,6 +149,19 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             platform_user_id TEXT NOT NULL,
             yclients_record_id TEXT NOT NULL,
             yclients_client_id TEXT,
+            client_tg_id TEXT,
+            staff_id TEXT,
+            staff_name TEXT,
+            service_id TEXT,
+            service_name TEXT,
+            cancelled_booking_datetime_utc TEXT,
+            cancellation_detected_at_utc TEXT,
+            scheduled_send_at_utc TEXT,
+            branch_timezone TEXT,
+            is_test INTEGER NOT NULL DEFAULT 0,
+            source TEXT,
+            clicked_at_utc TEXT,
+            error_summary TEXT,
             max_user_id TEXT,
             chat_id TEXT,
             scheduled_at TEXT NOT NULL,
@@ -491,6 +504,19 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "cancellation_recovery_events", "platform_user_id", "TEXT")
     _ensure_column(connection, "cancellation_recovery_events", "yclients_record_id", "TEXT")
     _ensure_column(connection, "cancellation_recovery_events", "yclients_client_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "client_tg_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "staff_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "staff_name", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "service_id", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "service_name", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "cancelled_booking_datetime_utc", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "cancellation_detected_at_utc", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "scheduled_send_at_utc", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "branch_timezone", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "is_test", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "cancellation_recovery_events", "source", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "clicked_at_utc", "TEXT")
+    _ensure_column(connection, "cancellation_recovery_events", "error_summary", "TEXT")
     _ensure_column(connection, "cancellation_recovery_events", "max_user_id", "TEXT")
     _ensure_column(connection, "cancellation_recovery_events", "chat_id", "TEXT")
     _ensure_column(connection, "cancellation_recovery_events", "scheduled_at", "TEXT")
