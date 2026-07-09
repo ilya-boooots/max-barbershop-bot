@@ -7,6 +7,7 @@ START_GREETING_TEXT = """Привет! 👋 Это MAX-версия бота б�
 Скоро здесь появится запись, мои визиты, уведомления и связь с администратором."""
 MAIN_MENU_TEXT = "✨ Выберите действие в меню ниже 👇"
 SECTION_SOON_TEXT = "Раздел скоро появится 🔧"
+REPEAT_VISIT_FALLBACK_TEXT = "Пора обновить стрижку? 😊\n\nОбычно к этому времени форма уже начинает теряться."
 
 SUPPORT_TEXT = """🆘 Поддержка
 
@@ -290,3 +291,7 @@ SETTINGS_MENU_TEXT = """⚙️ Настройки
 SETTINGS_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу."
 SETTINGS_CONTACTS_EDIT_SOON_TEXT = "Редактирование контактов добавим отдельным шагом 🔧"
 SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT = "Управление уведомлениями добавим отдельным шагом 🔧"
+
+CANCELLATION_RECOVERY_TEXT = "Видим, что вы отменили запись 😔\n\nМожем подобрать другое удобное время."
+CANCELLATION_RECOVERY_STALE_TEXT = "⚠️ Это уведомление уже устарело. Вы можете открыть запись через главное меню."
+CANCELLATION_RECOVERY_LATER_TEXT = "Хорошо, будем ждать вас позже 😊"

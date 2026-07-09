@@ -11,27 +11,21 @@ from typing import Any
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
-from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.repeat_visit_events import RepeatVisitEvent, RepeatVisitEventsRepository
-from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
+from max_barbershop_bot.repositories.users import PLATFORM_MAX, User, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import normalize_branch_timezone, zoneinfo_or_default
-from max_barbershop_bot.services.notifications import get_notification_history, mark_notification_history_skipped, send_business_notification
+from max_barbershop_bot.services.notifications import send_business_notification
 from max_barbershop_bot.services.yclients_context import build_yclients_client_from_active_settings, has_required_yclients_credentials, load_active_yclients_settings
-from max_barbershop_bot.ui.buttons import MENU_BOOKING_PAYLOAD
 
 logger = logging.getLogger(__name__)
 
 REPEAT_VISIT_NOTIFICATION_TYPE = "repeat_visit"
 REPEAT_VISIT_DELAY_DAYS = 30
 REPEAT_VISIT_ANTISPAM_HOURS = 48
-REPEAT_VISIT_TEXTS = [
-    "Пора обновить стрижку? 😊\n\nОбычно к этому времени форма уже начинает теряться.",
-    "Кажется, самое время снова заглянуть к нам ✂️\n\nПодберём удобное окно для визита?",
-    "Ваша стрижка уже могла немного потерять форму 😊\n\nСамое время освежить образ.",
-    "Давно не виделись ✂️\n\nМожем подобрать удобное время к вашему мастеру.",
-    "Хотите снова выглядеть свежо? 😊\n\nЗапишитесь на удобное время — мы всё подготовим.",
-]
+BUTTON_CB_PREFIX = "repeat_visit:book:"
+FALLBACK_TEXT = "Пора обновить стрижку? 😊\n\nОбычно к этому времени форма уже начинает теряться."
+REPEAT_VISIT_TEXTS = [FALLBACK_TEXT]
 _COMPLETED = {"visit", "done", "paid", "completed", "show"}
 
 
@@ -43,72 +37,117 @@ class RepeatVisitSummary:
     errors: int = 0
 
 
-def repeat_visit_keyboard() -> MaxInlineKeyboard:
-    return MaxInlineKeyboard.from_rows([[MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)]])
+def build_repeat_visit_booking_keyboard(event_id: int) -> MaxInlineKeyboard:
+    return MaxInlineKeyboard.from_rows([[MaxButton(text="✂️ Записаться", payload=f"{BUTTON_CB_PREFIX}{event_id}")]])
 
 
-def select_repeat_visit_text() -> str:
-    return random.choice(REPEAT_VISIT_TEXTS)
+def repeat_visit_keyboard(event_id: int | None = None) -> MaxInlineKeyboard:
+    return build_repeat_visit_booking_keyboard(event_id or 0)
 
 
-async def schedule_repeat_visit_events(*, database_path: str, now: datetime | None = None, limit: int = 500) -> int:
-    """Scan attributed MAX records and create due-later repeat visit events after completed visits."""
+def select_repeat_visit_text(settings: dict[str, Any] | None = None, *, event_id: int | None = None, user_tg_id: int | str | None = None) -> tuple[int, str]:
+    raw = (settings or {}).get("templates")
+    if raw is None:
+        raw = REPEAT_VISIT_TEXTS
+    active: list[tuple[int, str]] = []
+    if isinstance(raw, list):
+        active = [(idx, str(text).strip()) for idx, text in enumerate(raw, start=1) if str(text or "").strip()]
+    logger.info("repeat_visit_text_selection_started available_text_count=%s event_id=%s user_tg_id=%s", len(active), event_id, user_tg_id)
+    if not active:
+        logger.info("repeat_visit_text_default_used available_text_count=0 event_id=%s user_tg_id=%s", event_id, user_tg_id)
+        return 0, FALLBACK_TEXT
+    selected_idx, selected_text = random.choice(active)
+    logger.info("repeat_visit_text_selected available_text_count=%s selected_text_index=%s event_id=%s user_tg_id=%s", len(active), selected_idx, event_id, user_tg_id)
+    return selected_idx, selected_text
 
-    settings = load_active_yclients_settings(YClientsSettingsRepository(database_path), operation="schedule_repeat_visit_events")
-    if not has_required_yclients_credentials(settings):
+
+async def schedule_repeat_visit_events(*, database_path: str, now: datetime | None = None, limit: int = 500, settings: dict[str, Any] | None = None) -> int:
+    """Scan mapped MAX clients and create Telegram-equivalent repeat visit events."""
+
+    cfg = settings or {}
+    if cfg.get("enabled") is False:
+        logger.info("repeat_visit_scan_skipped_disabled")
         return 0
-    tz_name = normalize_branch_timezone(settings.branch_timezone, flow="repeat_visit", operation="schedule_repeat_visit_events")
-    tz = zoneinfo_or_default(tz_name, flow="repeat_visit", operation="schedule_repeat_visit_events")
+    yclients_settings = load_active_yclients_settings(YClientsSettingsRepository(database_path), operation="schedule_repeat_visit_events")
+    if not has_required_yclients_credentials(yclients_settings):
+        return 0
+    tz_name = normalize_branch_timezone(yclients_settings.branch_timezone, flow="repeat_visit", operation="schedule_repeat_visit_events")
     now_utc = (now or datetime.now(UTC)).astimezone(UTC)
-    users = UsersRepository(database_path)
+    delay_days = int(cfg.get("delay_days", REPEAT_VISIT_DELAY_DAYS))
+    cooldown_hours = int(cfg.get("min_interval_hours", REPEAT_VISIT_ANTISPAM_HOURS))
+    exclude_future = bool(cfg.get("exclude_has_future_booking", True))
+    respect_antispam = bool(cfg.get("respect_anti_spam", True))
     repo = RepeatVisitEventsRepository(database_path)
+    users = [user for user in UsersRepository(database_path).list_all_users() if user.platform == PLATFORM_MAX and user.yclients_client_id]
     scheduled = 0
-    async with build_yclients_client_from_active_settings(settings) as client:
-        service = YClientsServiceLayer(client, company_id=settings.company_id)
-        for attribution in PlatformAttributionRepository(database_path).list_with_yclients_record_ids(limit=limit):
-            user = users.find_by_platform_user_id(attribution.platform_user_id, platform=attribution.platform)
-            record_id = _clean(attribution.yclients_record_id)
-            client_id = _clean(attribution.yclients_client_id) or _clean(getattr(user, "yclients_client_id", None))
-            if user is None or not record_id:
-                _log(platform_user_id=attribution.platform_user_id, yclients_record_id=record_id, skipped_reason="user_or_record_missing")
-                continue
-            if repo.get_event(platform=attribution.platform, platform_user_id=attribution.platform_user_id, yclients_record_id=record_id):
-                _log(platform_user_id=attribution.platform_user_id, yclients_record_id=record_id, history_existing=True)
+    async with build_yclients_client_from_active_settings(yclients_settings) as client:
+        service = YClientsServiceLayer(client, company_id=yclients_settings.company_id)
+        for user in users[: max(1, int(limit))]:
+            yc_id = str(user.yclients_client_id or "").strip()
+            if not user.notifications_enabled:
+                scheduled += _create_skip(repo, user, yc_id, None, None, None, None, delay_days, tz_name, "skipped_unsubscribed")
                 continue
             try:
-                record = _extract_record(await service.get_booking_details(company_id=settings.company_id, yclients_record_id=record_id))
-            except Exception as exc:  # noqa: BLE001 - YClients details are diagnostic-only here.
-                _log(platform_user_id=attribution.platform_user_id, yclients_record_id=record_id, error_class=type(exc).__name__)
+                records = _record_items(await service.get_client_records(company_id=yclients_settings.company_id, yclients_client_id=yc_id, count=50))
+            except Exception as exc:  # noqa: BLE001 - diagnostics only, keep scan moving.
+                logger.warning("MAX repeat visit diagnostic: platform_user_id_present=%s yclients_client_id_present=%s error_class=%s", bool(user.platform_user_id), bool(yc_id), type(exc).__name__)
                 continue
-            completed = _record_is_completed(record)
-            visit_dt = _record_datetime(record, tz_name)
-            if not completed or visit_dt is None:
-                _log(platform_user_id=attribution.platform_user_id, yclients_record_id=record_id, yclients_client_id=client_id, visit_completed=completed, skipped_reason="not_completed")
+            last_done: tuple[dict[str, Any], datetime] | None = None
+            future_exists = False
+            for rec in records:
+                dt = _record_datetime(rec, tz_name)
+                if dt is None:
+                    continue
+                dt_utc = dt.astimezone(UTC)
+                if dt_utc > now_utc and not _is_cancelled(rec):
+                    future_exists = True
+                if _record_is_completed(rec) and (last_done is None or dt_utc > last_done[1]):
+                    last_done = (rec, dt_utc)
+            if last_done is None:
                 continue
-            scheduled_at = (visit_dt.astimezone(tz) + timedelta(days=REPEAT_VISIT_DELAY_DAYS)).astimezone(UTC).isoformat()
+            rec, visit_dt = last_done
+            visit_id = _clean(rec.get("id"))
+            service_id, service_name = _extract_main_service(rec)
+            if exclude_future and future_exists:
+                scheduled += _create_skip(repo, user, yc_id, rec, visit_dt, service_id, service_name, delay_days, tz_name, "skipped_has_future_booking")
+                continue
+            if (now_utc - visit_dt).days < delay_days:
+                continue
+            if repo.has_event_for_visit(user.platform_user_id, visit_id, service_id, platform=PLATFORM_MAX):
+                scheduled += _create_skip(repo, user, yc_id, rec, visit_dt, service_id, service_name, delay_days, tz_name, "skipped_duplicate")
+                continue
+            if respect_antispam and repo.has_recent_sent(user.platform_user_id, cooldown_hours, platform=PLATFORM_MAX):
+                scheduled += _create_skip(repo, user, yc_id, rec, visit_dt, service_id, service_name, delay_days, tz_name, "skipped_antispam")
+                continue
+            template_idx, template_text = select_repeat_visit_text(cfg, user_tg_id=user.platform_user_id)
+            scheduled_at = now_utc.isoformat()
             event = repo.create_event(
                 platform=PLATFORM_MAX,
                 platform_user_id=user.platform_user_id,
-                yclients_record_id=record_id,
-                yclients_client_id=client_id,
+                yclients_record_id=visit_id,
+                yclients_client_id=yc_id,
+                yclients_visit_id=visit_id,
+                yclients_service_id=service_id,
+                service_name=service_name,
+                last_visit_datetime_utc=visit_dt.isoformat(),
+                delay_days=delay_days,
                 scheduled_at=scheduled_at,
+                scheduled_send_at_utc=scheduled_at,
+                selected_template_index=template_idx,
+                selected_template_text=template_text,
+                status="pending",
+                branch_timezone=tz_name,
+                source="yclients",
+                is_test=False,
             )
             if event is not None:
                 scheduled += 1
-                _log(
-                    platform_user_id=user.platform_user_id,
-                    yclients_record_id=record_id,
-                    yclients_client_id=client_id,
-                    visit_completed=True,
-                    scheduled_at=scheduled_at,
-                    due_now=scheduled_at <= now_utc.isoformat(),
-                )
     return scheduled
 
 
-async def process_due_repeat_visit_events(sender: MaxMessageSender, *, database_path: str, limit: int = 100) -> int:
+async def process_due_repeat_visit_events(sender: MaxMessageSender, *, database_path: str, limit: int = 100, settings: dict[str, Any] | None = None) -> int:
     now_iso = datetime.now(UTC).isoformat()
-    await schedule_repeat_visit_events(database_path=database_path)
+    await schedule_repeat_visit_events(database_path=database_path, settings=settings)
     repo = RepeatVisitEventsRepository(database_path)
     sent = 0
     for event in repo.find_due(now_iso, limit=limit):
@@ -135,92 +174,68 @@ async def run_repeat_visit_loop(sender: MaxMessageSender, *, database_path: str,
 
 
 async def _process_event(sender: MaxMessageSender, *, database_path: str, repository: RepeatVisitEventsRepository, event: RepeatVisitEvent, now_iso: str) -> bool:
-    history_existing = get_notification_history(database_path, platform=event.platform, platform_user_id=event.platform_user_id, yclients_record_id=event.yclients_record_id, notification_type=REPEAT_VISIT_NOTIFICATION_TYPE)
     user = UsersRepository(database_path).find_by_platform_user_id(event.platform_user_id, platform=event.platform)
-    if user is None or not user.notifications_enabled:
-        _skip(database_path, repository, event, "notifications_disabled" if user else "user_not_found")
+    if user is None:
+        repository.mark_status(event.id, "skipped_no_telegram")
         return False
-    if history_existing and (history_existing.is_blocked or history_existing.is_stopped):
-        _skip(database_path, repository, event, "blocked_or_stopped")
-        return False
-    visit_completed, has_future = await _verify_yclients(database_path, event, user)
-    if not visit_completed:
-        _skip(database_path, repository, event, "visit_not_completed")
-        return False
-    if has_future:
-        _skip(database_path, repository, event, "has_future_booking")
-        return False
-    recent = _has_recent_repeat_history(database_path, event.platform_user_id, now_iso)
-    if recent:
-        _skip(database_path, repository, event, "skipped_antispam")
+    if not user.notifications_enabled:
+        repository.mark_status(event.id, "skipped_unsubscribed")
         return False
     recipient_type, recipient_id = ("chat", user.chat_id) if user.chat_id else ("user", user.max_user_id or user.platform_user_id)
+    text = event.selected_template_text or FALLBACK_TEXT
     try:
-        history = await send_business_notification(sender, database_path=database_path, platform=event.platform, platform_user_id=event.platform_user_id, max_user_id=user.max_user_id, chat_id=user.chat_id, yclients_record_id=event.yclients_record_id, yclients_client_id=event.yclients_client_id or user.yclients_client_id, notification_type=REPEAT_VISIT_NOTIFICATION_TYPE, scheduled_for=event.scheduled_at, text=select_repeat_visit_text(), keyboard=repeat_visit_keyboard(), recipient_type=recipient_type, recipient_id=recipient_id, metadata={"source": "repeat_visit"})
+        history = await send_business_notification(
+            sender,
+            database_path=database_path,
+            platform=event.platform,
+            platform_user_id=event.platform_user_id,
+            max_user_id=user.max_user_id,
+            chat_id=user.chat_id,
+            yclients_record_id=event.yclients_visit_id or event.yclients_record_id or str(event.id),
+            yclients_client_id=event.yclients_client_id or user.yclients_client_id,
+            notification_type=REPEAT_VISIT_NOTIFICATION_TYPE,
+            scheduled_for=event.scheduled_send_at_utc or event.scheduled_at,
+            text=text,
+            keyboard=build_repeat_visit_booking_keyboard(event.id),
+            recipient_type=recipient_type,
+            recipient_id=recipient_id,
+            metadata={"source": event.source or "repeat_visit", "repeat_visit_event_id": event.id, "is_test": event.is_test},
+        )
     except Exception as exc:  # noqa: BLE001
-        repository.set_status(event.id, "failed", skipped_reason=type(exc).__name__)
-        _log(platform_user_id=event.platform_user_id, yclients_record_id=event.yclients_record_id, yclients_client_id=event.yclients_client_id, visit_completed=visit_completed, has_future_booking=has_future, scheduled_at=event.scheduled_at, due_now=True, history_existing=bool(history_existing), send_attempted=True, send_status="failed", error_class=type(exc).__name__)
+        repository.mark_status(event.id, "failed", error_summary=_safe_error(exc))
         return False
-    status = history.status if history else "skipped"
+    status = history.status if history else "failed"
     if status == "sent":
-        repository.set_status(event.id, "sent", sent_at=now_iso)
-    else:
-        repository.set_status(event.id, status, skipped_reason=status)
-    _log(platform_user_id=event.platform_user_id, yclients_record_id=event.yclients_record_id, yclients_client_id=event.yclients_client_id, visit_completed=visit_completed, has_future_booking=has_future, scheduled_at=event.scheduled_at, due_now=True, history_existing=bool(history_existing), send_attempted=True, send_status=status, blocked_or_stopped=bool(history and (history.is_blocked or history.is_stopped)))
-    return status == "sent"
+        repository.mark_status(event.id, "sent", sent=True)
+        return True
+    if status == "blocked":
+        repository.mark_status(event.id, "blocked", error_summary="blocked")
+        return False
+    repository.mark_status(event.id, "failed", error_summary=status)
+    return False
 
 
-async def _verify_yclients(database_path: str, event: RepeatVisitEvent, user: Any) -> tuple[bool, bool]:
-    settings = load_active_yclients_settings(YClientsSettingsRepository(database_path), operation="repeat_visit_verify")
-    if not has_required_yclients_credentials(settings):
-        return False, False
-    tz_name = normalize_branch_timezone(settings.branch_timezone, flow="repeat_visit", operation="repeat_visit_verify")
-    now = datetime.now(UTC)
-    client_id = event.yclients_client_id or getattr(user, "yclients_client_id", None)
-    async with build_yclients_client_from_active_settings(settings) as client:
-        service = YClientsServiceLayer(client, company_id=settings.company_id)
-        record = _extract_record(await service.get_booking_details(company_id=settings.company_id, yclients_record_id=event.yclients_record_id))
-        visit_completed = _record_is_completed(record)
-        has_future = False
-        if client_id:
-            rows = _record_items(await service.get_client_records(company_id=settings.company_id, yclients_client_id=client_id, count=50))
-            for item in rows:
-                dt = _record_datetime(item, tz_name)
-                if dt and dt.astimezone(UTC) > now and not _is_cancelled(item) and not _record_is_completed(item):
-                    has_future = True
-                    break
-        _log(platform_user_id=event.platform_user_id, yclients_record_id=event.yclients_record_id, yclients_client_id=client_id, visit_completed=visit_completed, has_future_booking=has_future)
-        return visit_completed, has_future
-
-
-def _skip(database_path: str, repository: RepeatVisitEventsRepository, event: RepeatVisitEvent, reason: str) -> None:
-    repository.set_status(event.id, "skipped", skipped_reason=reason)
-    mark_notification_history_skipped(database_path, platform=event.platform, platform_user_id=event.platform_user_id, yclients_record_id=event.yclients_record_id, notification_type=REPEAT_VISIT_NOTIFICATION_TYPE, scheduled_for=event.scheduled_at, reason=reason, metadata={"source": "repeat_visit"})
-    _log(platform_user_id=event.platform_user_id, yclients_record_id=event.yclients_record_id, yclients_client_id=event.yclients_client_id, scheduled_at=event.scheduled_at, due_now=True, send_attempted=False, skipped_reason=reason, blocked_or_stopped=reason == "blocked_or_stopped")
-
-
-def _has_recent_repeat_history(database_path: str, platform_user_id: str, now_iso: str) -> bool:
-    import sqlite3
-    from contextlib import closing
-    cutoff = (datetime.fromisoformat(now_iso.replace("Z", "+00:00")) - timedelta(hours=REPEAT_VISIT_ANTISPAM_HOURS)).isoformat()
-    with closing(sqlite3.connect(database_path)) as connection:
-        row = connection.execute("""
-            SELECT 1 FROM notification_history
-            WHERE platform = ? AND platform_user_id = ? AND notification_type = ? AND sent_at IS NOT NULL AND sent_at >= ?
-            LIMIT 1
-        """, (PLATFORM_MAX, platform_user_id, REPEAT_VISIT_NOTIFICATION_TYPE, cutoff)).fetchone()
-    return row is not None
-
-
-def _extract_record(payload: Any) -> dict[str, Any]:
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, dict):
-            return data
-        if isinstance(data, list) and data and isinstance(data[0], dict):
-            return data[0]
-        return payload
-    return payload[0] if isinstance(payload, list) and payload and isinstance(payload[0], dict) else {}
+def _create_skip(repo: RepeatVisitEventsRepository, user: User, yc_id: str, rec: dict[str, Any] | None, visit_dt: datetime | None, service_id: str | None, service_name: str | None, delay_days: int, tz_name: str, status: str) -> int:
+    visit_id = _clean((rec or {}).get("id")) or f"skip-{status}-{user.platform_user_id}-{datetime.now(UTC).timestamp()}"
+    # Keep Telegram dedup fields exact while avoiding old MAX unique(platform,user,record) conflicts for skip audit rows.
+    record_id = visit_id if status not in {"skipped_duplicate", "skipped_has_future_booking", "skipped_antispam", "skipped_unsubscribed"} else f"{visit_id}:{status}:{datetime.now(UTC).timestamp()}"
+    event = repo.create_event(
+        platform=PLATFORM_MAX,
+        platform_user_id=user.platform_user_id,
+        yclients_record_id=record_id,
+        yclients_client_id=yc_id,
+        yclients_visit_id=visit_id,
+        yclients_service_id=service_id,
+        service_name=service_name,
+        last_visit_datetime_utc=visit_dt.isoformat() if visit_dt else None,
+        delay_days=delay_days,
+        scheduled_at=datetime.now(UTC).isoformat(),
+        scheduled_send_at_utc=datetime.now(UTC).isoformat(),
+        status=status,
+        branch_timezone=tz_name,
+        source="yclients",
+    )
+    return 1 if event is not None else 0
 
 
 def _record_items(payload: Any) -> list[dict[str, Any]]:
@@ -232,14 +247,17 @@ def _record_items(payload: Any) -> list[dict[str, Any]]:
 
 
 def _record_is_completed(record: dict[str, Any]) -> bool:
-    attendance = record.get("attendance", record.get("visit_attendance"))
+    attendance = record.get("attendance")
+    if attendance is None:
+        attendance = record.get("visit_attendance")
     if attendance is not None:
         return str(attendance).strip() == "1"
-    return str(record.get("status") or record.get("record_status") or record.get("state") or "").strip().lower() in _COMPLETED
+    status = str(record.get("status") or "").strip().lower()
+    return status in _COMPLETED
 
 
 def _is_cancelled(record: dict[str, Any]) -> bool:
-    return "cancel" in str(record.get("status") or record.get("record_status") or record.get("state") or "").lower()
+    return "cancel" in str(record.get("status") or "").lower()
 
 
 def _record_datetime(record: dict[str, Any], timezone_name: str) -> datetime | None:
@@ -253,18 +271,21 @@ def _record_datetime(record: dict[str, Any], timezone_name: str) -> datetime | N
     tz = zoneinfo_or_default(timezone_name, flow="repeat_visit", operation="_record_datetime")
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=tz)
-    return parsed.astimezone(tz)
+    return parsed.astimezone(UTC)
+
+
+def _extract_main_service(rec: dict[str, Any]) -> tuple[str | None, str | None]:
+    services = rec.get("services")
+    if isinstance(services, list) and services:
+        first = services[0] if isinstance(services[0], dict) else {}
+        return _clean(first.get("id")), _clean(first.get("title") or first.get("name"))
+    return None, _clean(rec.get("service_name") or rec.get("service"))
+
+
+def _safe_error(exc: BaseException) -> str:
+    return str(exc or type(exc).__name__)[:180]
 
 
 def _clean(value: object) -> str | None:
     text = str(value or "").strip()
     return text or None
-
-
-def _log(**fields: Any) -> None:
-    allowed = {"platform_user_id_present", "yclients_record_id_present", "yclients_client_id_present", "visit_completed", "has_future_booking", "scheduled_at", "due_now", "history_existing", "send_attempted", "send_status", "skipped_reason", "blocked_or_stopped", "error_class"}
-    safe = {k: v for k, v in fields.items() if k in allowed}
-    safe["platform_user_id_present"] = bool(fields.get("platform_user_id"))
-    safe["yclients_record_id_present"] = bool(fields.get("yclients_record_id"))
-    safe["yclients_client_id_present"] = bool(fields.get("yclients_client_id"))
-    logger.info("MAX repeat visit diagnostic: %s", safe)

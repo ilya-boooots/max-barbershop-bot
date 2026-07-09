@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from os import getenv
 
 from max_barbershop_bot.core import state
@@ -13,6 +13,7 @@ from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, MAX_REPEAT_BOOKING_COMMENT_MARKER
 from max_barbershop_bot.repositories.birthday_funnel_events import BirthdayFunnelEventsRepository
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
+from max_barbershop_bot.repositories.repeat_visit_events import RepeatVisitEventsRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.master_photos import MasterPhotosRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
@@ -76,6 +77,7 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_SLOT_PREV_PAYLOAD,
     MENU_BOOKING_PAYLOAD,
     NAV_HOME_PAYLOAD,
+    REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX,
     booking_categories_keyboard,
     booking_hub_keyboard,
     booking_dates_keyboard,
@@ -106,6 +108,8 @@ from max_barbershop_bot.ui.texts import (
     BOOKING_STALE_DATE_TEXT,
     BOOKING_STALE_SLOT_TEXT,
     BOOKING_STAFF_FIRST_CATEGORY_TEXT,
+    CANCELLATION_RECOVERY_LATER_TEXT,
+    CANCELLATION_RECOVERY_STALE_TEXT,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,6 +170,7 @@ def register_booking_routes(router: Router) -> None:
     """Register booking category/service callbacks."""
 
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
+    router.on_callback_prefix(REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX, handle_repeat_visit_booking_start)
     router.on_callback(CANCELLATION_RECOVERY_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback_prefix(f"{BIRTHDAY_BUTTON_BOOK}:", handle_birthday_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
@@ -322,6 +327,34 @@ async def handle_booking_start(context: RouterContext) -> None:
 
     await context.answer_callback()
     _clear_booking_state(context)
+    await _show_booking_hub(context)
+
+
+async def handle_repeat_visit_booking_start(context: RouterContext) -> None:
+    """Open normal booking flow from repeat visit CTA and preserve attribution."""
+
+    payload = context.event.callback_payload or ""
+    raw_event_id = payload.removeprefix(REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX).strip()
+    try:
+        event_id = int(raw_event_id)
+    except ValueError:
+        await show_booking_stale_callback(context)
+        return
+    repo = RepeatVisitEventsRepository(_database_path())
+    event = repo.get_event(event_id)
+    if event is None:
+        await show_booking_stale_callback(context)
+        return
+    repo.mark_status(event.id, "clicked_booking", clicked=True)
+    await context.answer_callback()
+    _clear_booking_state(context)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "booking_source", "repeat_visit")
+    state.set_state_data_value(_user_id(context), _chat_id(context), "booking_origin_type", "repeat_visit")
+    state.set_state_data_value(_user_id(context), _chat_id(context), "repeat_visit_event_id", event.id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "notification_event_id", event.id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "yclients_client_id", event.yclients_client_id)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "notification_is_test", event.is_test)
+    state.set_state_data_value(_user_id(context), _chat_id(context), "notification_source", event.source)
     await _show_booking_hub(context)
 
 
@@ -1120,6 +1153,18 @@ async def _booking_hub_text() -> str:
 
 def _clear_booking_state(context: RouterContext) -> None:
     state.clear_state_data(_user_id(context), _chat_id(context))
+
+
+def _set_cancellation_recovery_attribution(context: RouterContext, *, event_id: int, event: object) -> None:
+    platform_user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    state.set_state_data_value(platform_user_id, chat_id, "booking_source", "cancellation_recovery")
+    state.set_state_data_value(platform_user_id, chat_id, "booking_origin_type", "cancellation_recovery")
+    state.set_state_data_value(platform_user_id, chat_id, "notification_event_id", event_id)
+    state.set_state_data_value(platform_user_id, chat_id, "cancellation_recovery_event_id", event_id)
+    state.set_state_data_value(platform_user_id, chat_id, "yclients_client_id", getattr(event, "yclients_client_id", None))
+    state.set_state_data_value(platform_user_id, chat_id, "notification_is_test", bool(getattr(event, "is_test", False)))
+    state.set_state_data_value(platform_user_id, chat_id, "notification_source", getattr(event, "source", None))
 
 
 async def _open_booking_catalog(context: RouterContext, *, push_current: bool = True) -> None:
