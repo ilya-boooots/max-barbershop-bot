@@ -128,6 +128,8 @@ LOST_CLIENTS_REFRESH_PAYLOAD = "lost_clients:refresh"
 LOST_CLIENTS_BROADCAST_PAYLOAD = "lost_clients:broadcast"
 LOST_CLIENTS_BACK_PAYLOAD = "lost_clients:back"
 LOST_CLIENTS_HOME_PAYLOAD = "lost_clients:home"
+LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX = "lost_clients:book:"
+LOST_CLIENTS_BOOKING_BUTTON_TEXT = "✂️ Записаться"
 SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD = "segments:no_future_bookings"
 SEGMENTS_REFRESH_PAYLOAD = "segments:refresh"
 SEGMENTS_BROADCAST_PAYLOAD = "segments:broadcast"
@@ -1583,3 +1585,9 @@ def cancellation_recovery_keyboard(event_id: int | str) -> MaxInlineKeyboard:
             [MaxButton(text="Позже", payload=f"cancel_recovery:later:{clean_event_id}")],
         ]
     )
+
+
+def lost_client_booking_keyboard(event_id: int) -> MaxInlineKeyboard:
+    """Telegram-equivalent lost client booking CTA."""
+
+    return MaxInlineKeyboard(rows=((MaxButton(text=LOST_CLIENTS_BOOKING_BUTTON_TEXT, payload=f"{LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX}{int(event_id)}"),),))

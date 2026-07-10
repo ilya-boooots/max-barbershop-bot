@@ -162,6 +162,17 @@ _ENTRY_MODE_STAFF_FIRST = "staff_first"
 _ENTRY_MODE_DATETIME_FIRST = "datetime_first"
 _ENTRY_MODE_REPEAT = "repeat_booking"
 _REPEAT_SOURCE_SCREEN_STATE_KEY = "repeat_source_screen"
+
+
+def apply_lost_client_discount_comment(base_comment: str, *, booking_origin_type: str | None, lost_days: int | None) -> str:
+    """Append Telegram-equivalent lost-client discount marker once."""
+
+    if booking_origin_type != "lost_client" or not isinstance(lost_days, int) or lost_days not in {30, 60, 90}:
+        return base_comment
+    warning = f"Клиент не посещал {lost_days} дней. НУЖНО СДЕЛАТЬ СКИДКУ"
+    if warning in base_comment:
+        return base_comment
+    return f"{base_comment}\n{warning}" if base_comment else warning
 def _confirm_lock_key(context: RouterContext) -> str:
     return f"booking_create|{_user_id(context) or 'unknown'}"
 
@@ -886,10 +897,14 @@ async def _create_booking_after_lock(context: RouterContext, *, lock_key: str) -
             selected_datetime=_optional_state_text(booking_data.get("selected_datetime")),
             client_name=_user_full_name(user),
             client_phone=booking_phone,
-            comment=apply_birthday_warning(
-                MAX_REPEAT_BOOKING_COMMENT_MARKER if booking_data.get("entry_mode") == _ENTRY_MODE_REPEAT else MAX_BOOKING_COMMENT_MARKER,
-                booking_source=_optional_state_text(booking_data.get("booking_source")),
-                birthday_discount_context=bool(booking_data.get("birthday_discount_context")),
+            comment=apply_lost_client_discount_comment(
+                apply_birthday_warning(
+                    MAX_REPEAT_BOOKING_COMMENT_MARKER if booking_data.get("entry_mode") == _ENTRY_MODE_REPEAT else MAX_BOOKING_COMMENT_MARKER,
+                    booking_source=_optional_state_text(booking_data.get("booking_source")),
+                    birthday_discount_context=bool(booking_data.get("birthday_discount_context")),
+                ),
+                booking_origin_type=_optional_state_text(booking_data.get("booking_origin_type")),
+                lost_days=booking_data.get("lost_days") if isinstance(booking_data.get("lost_days"), int) else None,
             ),
         )
     except BookingServiceError as exc:
@@ -1731,6 +1746,11 @@ def _booking_state_snapshot(context: RouterContext) -> dict[str, object | None]:
         "birthday_is_test": _state_value(context, "birthday_is_test"),
         "birthday_source": _state_value(context, "birthday_source"),
         "birthday_claimed_at_utc": _state_value(context, "birthday_claimed_at_utc"),
+        "booking_origin": _state_value(context, "booking_origin"),
+        "booking_origin_type": _state_value(context, "booking_origin_type"),
+        "lost_client_event_id": _state_value(context, "lost_client_event_id"),
+        "notification_event_id": _state_value(context, "notification_event_id"),
+        "lost_days": _state_value(context, "lost_days"),
         "notification_is_test": _state_value(context, "notification_is_test"),
         "notification_source": _state_value(context, "notification_source"),
     }
