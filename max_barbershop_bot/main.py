@@ -20,6 +20,7 @@ from max_barbershop_bot.max_api.client import MaxApiClient, MaxApiError
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.services.birthday_funnel import run_birthday_loop
 from max_barbershop_bot.services.cancellation_recovery import run_cancellation_recovery_loop
+from max_barbershop_bot.services.lost_clients import run_lost_clients_loop
 from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.services.reminder_lifecycle import shutdown_reminder_lifecycle, start_reminder_lifecycle
 
@@ -53,6 +54,7 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
     polling_task = asyncio.create_task(_poll_dev_updates(client, sender, router, stop_event, diagnostics))
     birthday_task: asyncio.Task | None = None
     cancellation_recovery_task: asyncio.Task | None = None
+    lost_clients_task: asyncio.Task | None = None
     settings_repository = AppSettingsRepository(config.database_path)
     notifications_enabled = settings_repository.notifications_enabled()
     setting_source = settings_repository.notification_setting_source()
@@ -112,6 +114,23 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
         )
     else:
         logger.info("Birthday funnel disabled by BIRTHDAY_FUNNEL_ENABLED")
+    if config.lost_clients_enabled:
+        lost_clients_task = asyncio.create_task(
+            run_lost_clients_loop(
+                sender,
+                database_path=config.database_path,
+                stop_event=stop_event,
+                interval_seconds=config.lost_clients_poll_interval_seconds,
+                error_callback=lambda error: diagnostics.handle_runtime_exception(
+                    exception=error,
+                    sender=sender,
+                    location="lost_clients_loop",
+                ),
+            ),
+            name="lost-clients",
+        )
+    else:
+        logger.info("Lost clients disabled by LOST_CLIENTS_ENABLED")
     try:
         await stop_event.wait()
     finally:
@@ -124,6 +143,9 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
         if cancellation_recovery_task is not None:
             cancellation_recovery_task.cancel()
             tasks.append(cancellation_recovery_task)
+        if lost_clients_task is not None:
+            lost_clients_task.cancel()
+            tasks.append(lost_clients_task)
         for task in tasks:
             try:
                 await task

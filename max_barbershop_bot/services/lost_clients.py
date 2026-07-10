@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -552,6 +553,32 @@ async def run_lost_clients_scan(
                 logger.exception("lost_clients_client_processing_failed platform_user_id=%s err=%s", user.platform_user_id, exc)
                 summary.errors += 1
     return summary
+
+
+async def run_lost_clients_loop(
+    sender: MaxMessageSender,
+    *,
+    database_path: str,
+    stop_event: asyncio.Event,
+    interval_seconds: int,
+    error_callback: object | None = None,
+) -> None:
+    """Run lost-client scans until graceful shutdown."""
+
+    while not stop_event.is_set():
+        try:
+            await run_lost_clients_scan(sender, database_path=database_path)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - runtime loop must survive one failed scan.
+            if callable(error_callback):
+                await error_callback(exc)
+            else:
+                logger.warning("MAX lost clients diagnostic: error_class=%s", type(exc).__name__, exc_info=True)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=max(300, int(interval_seconds)))
+        except TimeoutError:
+            continue
 
 
 def _load_lost_clients_settings(database_path: str) -> dict[str, Any]:
