@@ -16,6 +16,8 @@ DEFAULT_REMINDERS_ENABLED = True
 DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS = 300
 DEFAULT_BIRTHDAY_FUNNEL_ENABLED = False
 DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS = 3600
+DEFAULT_LOST_CLIENTS_ENABLED = False
+DEFAULT_LOST_CLIENTS_POLL_INTERVAL_SECONDS = 3600
 DEFAULT_CANCELLATION_RECOVERY_ENABLED = False
 DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS = 300
 DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED = True
@@ -40,6 +42,8 @@ class Config:
     reminders_poll_interval_seconds: int = DEFAULT_REMINDERS_POLL_INTERVAL_SECONDS
     birthday_funnel_enabled: bool = DEFAULT_BIRTHDAY_FUNNEL_ENABLED
     birthday_funnel_poll_interval_seconds: int = DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS
+    lost_clients_enabled: bool = DEFAULT_LOST_CLIENTS_ENABLED
+    lost_clients_poll_interval_seconds: int = DEFAULT_LOST_CLIENTS_POLL_INTERVAL_SECONDS
     cancellation_recovery_enabled: bool = DEFAULT_CANCELLATION_RECOVERY_ENABLED
     cancellation_recovery_poll_interval_seconds: int = DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS
     developer_diagnostics_enabled: bool = DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED
@@ -86,6 +90,13 @@ def load_config() -> Config:
         birthday_funnel_poll_interval_seconds=_int_env(
             "BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS",
             DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS,
+            dotenv_values,
+            minimum=300,
+        ),
+        lost_clients_enabled=_bool_env("LOST_CLIENTS_ENABLED", DEFAULT_LOST_CLIENTS_ENABLED, dotenv_values),
+        lost_clients_poll_interval_seconds=_int_env(
+            "LOST_CLIENTS_POLL_INTERVAL_SECONDS",
+            DEFAULT_LOST_CLIENTS_POLL_INTERVAL_SECONDS,
             dotenv_values,
             minimum=300,
         ),
