@@ -144,6 +144,9 @@ BROADCAST_LOST_CLIENTS_PAYLOAD = "broadcast:lost_clients"
 BROADCAST_EFFECTIVENESS_PAYLOAD = "broadcast:effectiveness"
 BROADCAST_HISTORY_PAYLOAD = "broadcast:history"
 BROADCAST_TESTS_PAYLOAD = "broadcast:tests"
+DEV_TESTS_ROOT_PAYLOAD = "broadcast:dev_tests:root"
+DEV_TESTS_PAYLOAD_PREFIX = "broadcast:dev_tests:"
+DEV_TESTS_CLEANUP_CONFIRM_PAYLOAD = "broadcast:dev_tests:cleanup_confirm"
 BROADCAST_TEST_CONFIRM_48H_PAYLOAD = "broadcast:dev_tests:booking_confirm_2d"
 BROADCAST_TEST_REMINDER_2H_PAYLOAD = "broadcast:dev_tests:booking_reminder_2h"
 BROADCAST_AUDIENCE_ACTIVE_30_PAYLOAD = "broadcast:aud:active_30"
@@ -1560,15 +1563,39 @@ def registration_navigation_keyboard() -> MaxInlineKeyboard:
     )
 
 
-def settings_notification_tests_keyboard() -> MaxInlineKeyboard:
-    """Build safe per-notification test buttons from Telegram reference dev-tests pattern."""
+DEV_TEST_BUTTONS: tuple[tuple[str, str], ...] = (
+    ("⭐️ Тест оценки после визита", "post_visit_review"),
+    ("❌ Тест отмены записи", "cancellation"),
+    ("😔 Тест потерянного клиента 30 дней", "lost_client_30"),
+    ("😔 Тест потерянного клиента 60 дней", "lost_client_60"),
+    ("😔 Тест потерянного клиента 90 дней", "lost_client_90"),
+    ("🎂 Тест дня рождения", "birthday"),
+    ("🔁 Тест повторного визита", "repeat_visit"),
+    ("✅ Тест подтверждения записи (48ч+)", "booking_confirm_2d"),
+    ("⏰ Тест напоминания о записи (2ч)", "booking_reminder_2h"),
+    ("📣 Тест уведомления себе", "self"),
+    ("🧹 Очистить тестовые события", "cleanup"),
+)
 
+
+def settings_notification_tests_keyboard() -> MaxInlineKeyboard:
+    """Build Telegram-equivalent developer funnel test hub keyboard."""
+
+    rows = [[MaxButton(text=text, payload=f"{DEV_TESTS_PAYLOAD_PREFIX}{key}")] for text, key in DEV_TEST_BUTTONS]
+    rows.extend(
+        [
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def dev_tests_cleanup_confirm_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="✅ Тест подтверждения сразу", payload=SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD)],
-            [MaxButton(text="✅ Тест подтверждения за 48 часов", payload=SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD)],
-            [MaxButton(text="⏰ Тест напоминания за 2 часа", payload=SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD)],
-            [MaxButton(text="⬅️ Назад", payload=SETTINGS_NOTIFICATIONS_PAYLOAD)],
+            [MaxButton(text="✅ Очистить", payload=DEV_TESTS_CLEANUP_CONFIRM_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=DEV_TESTS_ROOT_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
         ]
     )

@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from os import getenv
@@ -26,6 +28,12 @@ from max_barbershop_bot.core.permissions import (
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.flows.notification_history import handle_notification_history, handle_notification_history_failed
 from max_barbershop_bot.repositories.notification_history import NotificationHistoryRepository
+from max_barbershop_bot.repositories.notification_test_events import NotificationTestEventsRepository
+from max_barbershop_bot.repositories.feedback import FeedbackRepository
+from max_barbershop_bot.repositories.cancellation_recovery_events import CancellationRecoveryEventsRepository
+from max_barbershop_bot.repositories.lost_client_events import LostClientEventsRepository
+from max_barbershop_bot.repositories.birthday_funnel_events import BirthdayFunnelEventsRepository
+from max_barbershop_bot.repositories.repeat_visit_events import RepeatVisitEventsRepository
 from max_barbershop_bot.flows.staff import handle_staff_menu
 from max_barbershop_bot.flows.yclients_settings import handle_connection_check, handle_yclients_menu
 from max_barbershop_bot.flows.support import render_support_message
@@ -54,6 +62,8 @@ from max_barbershop_bot.services.reminders import (
     send_booking_notification,
 )
 from max_barbershop_bot.services.settings_audit import log_settings_action
+from max_barbershop_bot.services.birthday_funnel import BIRTHDAY_MESSAGE_TEXT, build_birthday_booking_keyboard
+from max_barbershop_bot.services.repeat_visit import build_repeat_visit_booking_keyboard, select_repeat_visit_text
 from max_barbershop_bot.ui.buttons import (
     ADMIN_SETTINGS_PAYLOAD,
     SETTINGS_BACK_PAYLOAD,
@@ -98,6 +108,9 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD,
     SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD,
     SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD,
+    DEV_TESTS_ROOT_PAYLOAD,
+    DEV_TESTS_PAYLOAD_PREFIX,
+    DEV_TESTS_CLEANUP_CONFIRM_PAYLOAD,
     SETTINGS_ROLES_PAYLOAD,
     SETTINGS_YCLIENTS_PAYLOAD,
     settings_contacts_input_keyboard,
@@ -107,6 +120,9 @@ from max_barbershop_bot.ui.buttons import (
     settings_menu_keyboard,
     settings_notifications_keyboard,
     settings_notification_tests_keyboard,
+    dev_tests_cleanup_confirm_keyboard,
+    cancellation_recovery_keyboard,
+    lost_client_booking_keyboard,
     settings_status_keyboard,
     settings_support_input_keyboard,
     settings_support_keyboard,
@@ -114,6 +130,7 @@ from max_barbershop_bot.ui.buttons import (
 from max_barbershop_bot.ui.texts import (
     SETTINGS_MENU_TEXT,
     SETTINGS_NO_ACCESS_TEXT,
+    CANCELLATION_RECOVERY_TEXT,
 )
 from max_barbershop_bot.services.developer_diagnostics import (
     NO_ACCESS_TEXT as DEV_DIAGNOSTICS_NO_ACCESS_TEXT,
@@ -158,9 +175,12 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD, handle_settings_notifications_toggle)
     router.on_callback(SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD, handle_settings_notifications_smoke)
     router.on_callback(SETTINGS_NOTIFICATIONS_TESTS_PAYLOAD, handle_settings_notifications_tests)
+    router.on_callback(DEV_TESTS_ROOT_PAYLOAD, handle_settings_notifications_tests)
+    router.on_callback(DEV_TESTS_CLEANUP_CONFIRM_PAYLOAD, handle_settings_notifications_cleanup_confirm)
     router.on_callback(SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD, handle_settings_notifications_run_test)
     router.on_callback(SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD, handle_settings_notifications_run_test)
     router.on_callback(SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD, handle_settings_notifications_run_test)
+    router.on_callback_prefix(DEV_TESTS_PAYLOAD_PREFIX, handle_settings_notifications_run_test)
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
     router.on_callback(DEV_DIAGNOSTICS_REFRESH_PAYLOAD, handle_settings_diagnostics_refresh)
@@ -467,33 +487,306 @@ async def handle_settings_notifications_smoke(context: RouterContext) -> None:
 
 
 async def handle_settings_notifications_tests(context: RouterContext) -> None:
-    """Open safe per-notification tests, ported from Telegram dev-tests UX."""
+    """Open Telegram-equivalent protected developer funnel test hub."""
 
-    actor_role = _actor_role(context)
-    if not can_view_notification_settings(actor_role):
-        await _send_no_access(context)
+    if not _is_protected_developer(context):
+        await _send_funnel_dev_no_access(context)
         return
     await _answer_callback_if_needed(context)
-    text = (
-        "🧪 Тест уведомлений\n\n"
-        "Выберите конкретное уведомление для безопасной проверки.\n"
-        "Тесты не отправляют сообщения клиентам, не меняют YClients и не создают реальные записи."
-    )
-    await context.send_text(text, keyboard=settings_notification_tests_keyboard())
+    logger.info("dev_tests_hub_opened actor_platform_user_id=%s", context.event.platform_user_id)
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_NOTIFICATIONS_SCREEN)
+    await context.send_text(_DEV_TESTS_HUB_TEXT, keyboard=settings_notification_tests_keyboard())
 
 
 async def handle_settings_notifications_run_test(context: RouterContext) -> None:
-    """Run one safe notification dry-run test for the current admin/developer."""
+    """Run one protected, current-developer-only funnel test."""
 
-    actor_role = _actor_role(context)
-    if not can_view_notification_settings(actor_role):
-        await _send_no_access(context)
+    if not _is_protected_developer(context):
+        await _send_funnel_dev_no_access(context)
         return
     await _answer_callback_if_needed(context)
     payload = context.event.callback_payload or ""
-    text = await _send_notification_test_and_build_result_text(context, payload)
-    _audit(context, actor_role, action="notifications_safe_test_run", section="notifications", metadata={"payload": payload})
-    await context.send_text(text, keyboard=settings_notification_tests_keyboard())
+    key = payload.removeprefix(DEV_TESTS_PAYLOAD_PREFIX)
+    if key in {"root", ""}:
+        await handle_settings_notifications_tests(context)
+        return
+    if key == "cleanup":
+        logger.info("dev_test_cleanup_requested actor_platform_user_id=%s", context.event.platform_user_id)
+        await context.send_text(_DEV_TESTS_CLEANUP_TEXT, keyboard=dev_tests_cleanup_confirm_keyboard())
+        return
+    if key == "cleanup_confirm":
+        await handle_settings_notifications_cleanup_confirm(context)
+        return
+    if key not in _DEV_TEST_KEYS:
+        await context.send_text("🧪 Тест уведомлений\n\n⚠️ Тест устарел или неизвестен. Откройте раздел заново.", keyboard=settings_notification_tests_keyboard())
+        return
+
+    repo = NotificationTestEventsRepository(_database_path())
+    event_id = repo.create_test_event(
+        event_type=key,
+        target_platform_user_id=context.event.platform_user_id,
+        target_max_user_id=context.event.max_user_id,
+        target_chat_id=context.event.chat_id,
+        target_tg_id=context.event.platform_user_id,
+        payload={"source": "dev_test", "is_test": True, "key": key},
+    )
+    logger.info("dev_test_event_created actor_platform_user_id=%s test_event_id=%s key=%s", context.event.platform_user_id, event_id, key)
+    try:
+        if key == "self":
+            await _run_dev_self_test(context)
+            success_text = "✅ Тестовое уведомление отправлено себе."
+        elif key == "post_visit_review":
+            success_text = await _run_dev_feedback_test(context, event_id)
+        elif key == "cancellation":
+            success_text = await _run_dev_cancellation_test(context, event_id)
+        elif key.startswith("lost_client_"):
+            success_text = await _run_dev_lost_client_test(context, key)
+        elif key == "birthday":
+            success_text = await _run_dev_birthday_test(context, event_id)
+        elif key == "repeat_visit":
+            success_text = await _run_dev_repeat_visit_test(context, event_id)
+        elif key in {"booking_confirm_2d", "booking_reminder_2h"}:
+            success_text = await _run_dev_booking_reminder_test(context, key)
+        else:  # pragma: no cover - guarded above
+            raise RuntimeError("unknown_dev_test")
+        repo.mark_sent(event_id)
+        logger.info("dev_test_sent actor_platform_user_id=%s test_event_id=%s key=%s", context.event.platform_user_id, event_id, key)
+        await context.send_text(success_text, keyboard=settings_notification_tests_keyboard())
+    except Exception as exc:  # noqa: BLE001 - user must receive generic safe failure.
+        repo.mark_failed(event_id, _safe_dev_error(exc))
+        logger.warning("dev_test_failed actor_platform_user_id=%s test_event_id=%s key=%s error=%s", context.event.platform_user_id, event_id, key, _safe_dev_error(exc))
+        await context.send_text("⚠️ Тест не удалось отправить. Подробности сохранены в безопасном журнале.", keyboard=settings_notification_tests_keyboard())
+
+
+async def handle_settings_notifications_cleanup_confirm(context: RouterContext) -> None:
+    if not _is_protected_developer(context):
+        await _send_funnel_dev_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    deleted = NotificationTestEventsRepository(_database_path()).cleanup_test_events()
+    _cleanup_dev_test_feedback_requests()
+    _cleanup_dev_test_notification_history()
+    logger.info("dev_test_cleanup_confirmed actor_platform_user_id=%s deleted_notification_test_events=%s", context.event.platform_user_id, deleted)
+    await context.send_text("✅ Тестовые события очищены.", keyboard=settings_notification_tests_keyboard())
+
+
+_DEV_TESTS_HUB_TEXT = (
+    "🧪 Тест уведомлений\n\n"
+    "Здесь можно безопасно проверить уведомления и автоворонки без ожидания часов и дней. "
+    "Все тестовые события помечаются как dev/test и не затрагивают реальных клиентов."
+)
+_DEV_TESTS_CLEANUP_TEXT = (
+    "🧹 Очистить тестовые события?\n\n"
+    "Будут удалены только события с пометкой dev/test. Реальные уведомления и клиенты не будут затронуты."
+)
+_DEV_TEST_KEYS = {
+    "post_visit_review", "cancellation", "lost_client_30", "lost_client_60", "lost_client_90",
+    "birthday", "repeat_visit", "booking_confirm_2d", "booking_reminder_2h", "self",
+}
+_SELF_TEST_TEXT = (
+    "📣 Тестовое уведомление\n\n"
+    "Это тестовое сообщение от системы уведомлений FlowBots.\n\n"
+    "Если вы видите это сообщение — базовая отправка работает ✅"
+)
+_FEEDBACK_TEST_TEXT = "⭐️ Как прошёл ваш визит?\n\nОцените, пожалуйста, от 1 до 5 ⭐️"
+_LOST_TEST_TEXTS = {
+    "lost_client_30": "Давно вас не видели 😊\n\nСамое время обновить стрижку.",
+    "lost_client_60": "Похоже, вы давно не заглядывали к нам.\n\nПодберём удобное время?",
+    "lost_client_90": "Мы скучаем 😄\n\nДля вас есть специальное предложение на возвращение.",
+}
+
+
+async def _send_funnel_dev_no_access(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context, "⛔ Раздел доступен только разработчику.")
+    await context.send_text("⛔ Раздел доступен только разработчику.")
+
+
+async def _run_dev_self_test(context: RouterContext) -> None:
+    result = await _send_to_current_developer(context, _SELF_TEST_TEXT, message_type="dev_test_self")
+    if not result.ok:
+        raise RuntimeError(result.error_message or result.error_code or "send_failed")
+
+
+async def _run_dev_feedback_test(context: RouterContext, test_event_id: int) -> str:
+    record_id = f"dev-post-visit-{test_event_id}-{uuid4().hex[:8]}"
+    repo = FeedbackRepository(_database_path())
+    request = repo.create_request_if_missing(
+        platform_user_id=str(context.event.platform_user_id or ""),
+        yclients_record_id=record_id,
+        yclients_client_id="dev-test-client",
+    )
+    if request is None:
+        raise RuntimeError("failed_to_create_dev_feedback_request")
+    _mark_feedback_request_dev_test(request.id)
+    keyboard = MaxInlineKeyboard.from_rows([[MaxButton(text=f"⭐️ {rating}", payload=f"feedback:rate:{rating}") for rating in range(1, 6)]])
+    result = await _send_to_current_developer(context, _FEEDBACK_TEST_TEXT, keyboard=keyboard, message_type="dev_test_post_visit")
+    if not result.ok:
+        raise RuntimeError(result.error_message or result.error_code or "send_failed")
+    logger.info("dev_test_post_visit_underlying_event_created feedback_request_id=%s source=dev_test is_test=True", request.id)
+    return "✅ Тест оценки после визита отправлен себе."
+
+
+async def _run_dev_cancellation_test(context: RouterContext, test_event_id: int) -> str:
+    now = datetime.now(UTC).isoformat()
+    event = CancellationRecoveryEventsRepository(_database_path()).create_event(
+        yclients_record_id=f"dev-cancel-{test_event_id}-{uuid4().hex[:8]}",
+        yclients_client_id="dev-test-client",
+        client_tg_id=context.event.platform_user_id,
+        platform_user_id=context.event.platform_user_id,
+        staff_id="dev-test-staff",
+        staff_name="Тестовый мастер",
+        service_id="dev-test-service",
+        service_name="Тестовая стрижка",
+        cancelled_booking_datetime_utc=now,
+        cancellation_detected_at_utc=now,
+        scheduled_send_at_utc=now,
+        branch_timezone="Europe/Moscow",
+        is_test=True,
+        source="dev_test",
+        max_user_id=context.event.max_user_id,
+        chat_id=context.event.chat_id,
+        status="pending",
+    )
+    if event is None:
+        raise RuntimeError("failed_to_create_dev_cancellation_event")
+    result = await _send_to_current_developer(context, CANCELLATION_RECOVERY_TEXT, keyboard=cancellation_recovery_keyboard(event.id), message_type="dev_test_cancellation")
+    if not result.ok:
+        raise RuntimeError(result.error_message or result.error_code or "send_failed")
+    CancellationRecoveryEventsRepository(_database_path()).set_status(event.id, "sent", sent_at_utc=datetime.now(UTC).isoformat(), sent_at=datetime.now(UTC).isoformat())
+    logger.info("dev_test_cancellation_underlying_event_created cancellation_event_id=%s source=dev_test is_test=True", event.id)
+    return "✅ Тест отмены записи отправлен себе."
+
+
+async def _run_dev_lost_client_test(context: RouterContext, key: str) -> str:
+    threshold = int(key.rsplit("_", 1)[-1])
+    now = datetime.now(UTC).isoformat()
+    event = LostClientEventsRepository(_database_path()).create_event(
+        yclients_client_id="dev-test-client",
+        client_tg_id=context.event.platform_user_id,
+        platform_user_id=context.event.platform_user_id,
+        threshold_days=threshold,
+        segment_key=f"lost_{threshold}",
+        last_visit_datetime_utc=now,
+        last_visit_id=f"dev-lost-{threshold}-{uuid4().hex[:8]}",
+        has_future_booking=False,
+        scheduled_send_at_utc=now,
+        status="pending",
+        source="dev_test",
+        is_test=True,
+        max_user_id=context.event.max_user_id,
+        chat_id=context.event.chat_id,
+    )
+    result = await _send_to_current_developer(context, _LOST_TEST_TEXTS[key], keyboard=lost_client_booking_keyboard(event.id), message_type="dev_test_lost_client")
+    if not result.ok:
+        raise RuntimeError(result.error_message or result.error_code or "send_failed")
+    LostClientEventsRepository(_database_path()).mark_status(event.id, "sent", sent=True)
+    logger.info("dev_test_lost_client_underlying_event_created lost_client_event_id=%s threshold=%s source=dev_test is_test=True", event.id, threshold)
+    return f"✅ Тест потерянного клиента {threshold} дней отправлен себе."
+
+
+async def _run_dev_birthday_test(context: RouterContext, test_event_id: int) -> str:
+    now = datetime.now(UTC)
+    event = BirthdayFunnelEventsRepository(_database_path()).create_event(
+        platform_user_id=context.event.platform_user_id,
+        yclients_client_id="dev-test-client",
+        client_tg_id=context.event.platform_user_id,
+        birth_date=now.date().isoformat(),
+        birthday_year=200000 + int(test_event_id),
+        birth_year=200000 + int(test_event_id),
+        scheduled_send_at_utc=now.isoformat(),
+        status="pending",
+        branch_timezone="Europe/Moscow",
+        source="dev_test",
+        is_test=True,
+    )
+    if event is None:
+        raise RuntimeError("failed_to_create_dev_birthday_event")
+    result = await _send_to_current_developer(context, BIRTHDAY_MESSAGE_TEXT, keyboard=build_birthday_booking_keyboard(event.id), message_type="dev_test_birthday")
+    if not result.ok:
+        raise RuntimeError(result.error_message or result.error_code or "send_failed")
+    BirthdayFunnelEventsRepository(_database_path()).mark_status(event.id, "sent", sent=True)
+    logger.info("dev_test_birthday_underlying_event_created birthday_event_id=%s source=dev_test is_test=True", event.id)
+    return "✅ Тест дня рождения отправлен себе."
+
+
+async def _run_dev_repeat_visit_test(context: RouterContext, test_event_id: int) -> str:
+    now = datetime.now(UTC).isoformat()
+    template_index, text = select_repeat_visit_text(None, event_id=test_event_id, user_tg_id=context.event.platform_user_id)
+    event = RepeatVisitEventsRepository(_database_path()).create_event(
+        platform_user_id=str(context.event.platform_user_id or ""),
+        yclients_record_id=f"dev-repeat-{test_event_id}-{uuid4().hex[:8]}",
+        yclients_client_id="dev-test-client",
+        scheduled_at=now,
+        yclients_visit_id=f"dev-visit-{test_event_id}-{uuid4().hex[:8]}",
+        yclients_service_id="dev-test-service",
+        service_name="Тестовая стрижка",
+        last_visit_datetime_utc=now,
+        delay_days=30,
+        scheduled_send_at_utc=now,
+        selected_template_index=template_index,
+        selected_template_text=text,
+        status="pending",
+        branch_timezone="Europe/Moscow",
+        source="dev_test",
+        is_test=True,
+    )
+    if event is None:
+        raise RuntimeError("failed_to_create_dev_repeat_visit_event")
+    result = await _send_to_current_developer(context, text, keyboard=build_repeat_visit_booking_keyboard(event.id), message_type="dev_test_repeat_visit")
+    if not result.ok:
+        raise RuntimeError(result.error_message or result.error_code or "send_failed")
+    RepeatVisitEventsRepository(_database_path()).mark_status(event.id, "sent", sent=True)
+    logger.info("dev_test_repeat_visit_underlying_event_created repeat_visit_event_id=%s source=dev_test is_test=True", event.id)
+    return "✅ Тест повторного визита отправлен себе."
+
+
+async def _run_dev_booking_reminder_test(context: RouterContext, key: str) -> str:
+    text = await _send_notification_test_and_build_result_text(
+        context,
+        SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD if key == "booking_confirm_2d" else SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD,
+    )
+    if "history_status=sent" not in text and "Статус: ✅" not in text:
+        raise RuntimeError("booking_reminder_test_not_sent")
+    return text
+
+
+async def _send_to_current_developer(context: RouterContext, text: str, *, keyboard: MaxInlineKeyboard | None = None, message_type: str) -> object:
+    del message_type
+    recipient_id = context.event.max_user_id or context.event.platform_user_id
+    if not recipient_id:
+        raise RuntimeError("developer_recipient_missing")
+    return await context.sender.send_to_user(
+        recipient_id,
+        text,
+        keyboard=keyboard,
+        metadata={"source": "dev_test", "is_test": True},
+    )
+
+
+def _mark_feedback_request_dev_test(request_id: int) -> None:
+    with closing(sqlite3.connect(_database_path())) as connection:
+        connection.execute("UPDATE feedback_requests SET source='dev_test', is_test=1 WHERE id=?", (int(request_id),))
+        connection.commit()
+
+
+def _cleanup_dev_test_feedback_requests() -> None:
+    with closing(sqlite3.connect(_database_path())) as connection:
+        connection.execute("DELETE FROM feedback_requests WHERE is_test=1 OR source='dev_test'")
+        connection.commit()
+
+
+def _cleanup_dev_test_notification_history() -> None:
+    with closing(sqlite3.connect(_database_path())) as connection:
+        connection.execute("DELETE FROM notification_history WHERE yclients_record_id LIKE 'dev-test-%' OR metadata_json LIKE '%dev_test%'")
+        connection.execute("DELETE FROM notification_delivery WHERE metadata_json LIKE '%dev_test%'")
+        connection.commit()
+
+
+def _safe_dev_error(exc: Exception) -> str:
+    text = sanitize_text(str(exc) or exc.__class__.__name__)
+    for marker in ("token", "authorization", "password", "secret"):
+        text = text.replace(marker, "hidden")
+    return " ".join(text.split())[:200]
 
 
 async def _show_notifications_settings(context: RouterContext) -> None:
@@ -624,7 +917,7 @@ async def _send_notification_test_and_build_result_text(context: RouterContext, 
     booking_context = BookingNotificationContext(
         platform_user_id=str(context.event.platform_user_id or "dev-safe-test"),
         max_user_id=context.event.max_user_id or context.event.platform_user_id,
-        chat_id=context.event.chat_id,
+        chat_id=None,
         yclients_record_id=dev_record_id,
         yclients_client_id="dev-test-client",
         notification_type=notification_type,

@@ -265,6 +265,24 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             metadata_json TEXT
         );
 
+
+
+        CREATE TABLE IF NOT EXISTS notification_test_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            target_platform_user_id TEXT,
+            target_max_user_id TEXT,
+            target_chat_id TEXT,
+            target_tg_id TEXT,
+            source TEXT NOT NULL DEFAULT 'dev_test',
+            is_test INTEGER NOT NULL DEFAULT 1,
+            payload_json TEXT NOT NULL DEFAULT '{{}}',
+            status TEXT NOT NULL DEFAULT 'created',
+            created_at_utc TEXT NOT NULL,
+            sent_at_utc TEXT,
+            error_summary TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS notification_delivery (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -727,6 +745,20 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "notification_history", "is_blocked", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "notification_history", "is_stopped", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "notification_history", "metadata_json", "TEXT")
+    _ensure_column(connection, "notification_test_events", "event_type", "TEXT")
+    _ensure_column(connection, "notification_test_events", "target_platform_user_id", "TEXT")
+    _ensure_column(connection, "notification_test_events", "target_max_user_id", "TEXT")
+    _ensure_column(connection, "notification_test_events", "target_chat_id", "TEXT")
+    _ensure_column(connection, "notification_test_events", "target_tg_id", "TEXT")
+    _ensure_column(connection, "notification_test_events", "source", "TEXT NOT NULL DEFAULT 'dev_test'")
+    _ensure_column(connection, "notification_test_events", "is_test", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(connection, "notification_test_events", "payload_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(connection, "notification_test_events", "status", "TEXT NOT NULL DEFAULT 'created'")
+    _ensure_column(connection, "notification_test_events", "created_at_utc", "TEXT")
+    _ensure_column(connection, "notification_test_events", "sent_at_utc", "TEXT")
+    _ensure_column(connection, "notification_test_events", "error_summary", "TEXT")
+    _ensure_column(connection, "feedback_requests", "source", "TEXT")
+    _ensure_column(connection, "feedback_requests", "is_test", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(connection, "notification_history", "updated_at", "TEXT")
     connection.commit()
 
