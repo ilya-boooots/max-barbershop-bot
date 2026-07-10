@@ -22,6 +22,7 @@ from max_barbershop_bot.services.birthday_funnel import run_birthday_loop
 from max_barbershop_bot.services.cancellation_recovery import run_cancellation_recovery_loop
 from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.services.reminder_lifecycle import shutdown_reminder_lifecycle, start_reminder_lifecycle
+from max_barbershop_bot.services.repeat_visit import run_repeat_visit_loop
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
     polling_task = asyncio.create_task(_poll_dev_updates(client, sender, router, stop_event, diagnostics))
     birthday_task: asyncio.Task | None = None
     cancellation_recovery_task: asyncio.Task | None = None
+    repeat_visit_task: asyncio.Task | None = None
     settings_repository = AppSettingsRepository(config.database_path)
     notifications_enabled = settings_repository.notifications_enabled()
     setting_source = settings_repository.notification_setting_source()
@@ -112,6 +114,24 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
         )
     else:
         logger.info("Birthday funnel disabled by BIRTHDAY_FUNNEL_ENABLED")
+
+    if config.repeat_visit_enabled:
+        repeat_visit_task = asyncio.create_task(
+            run_repeat_visit_loop(
+                sender,
+                database_path=config.database_path,
+                stop_event=stop_event,
+                interval_seconds=config.repeat_visit_poll_interval_seconds,
+                error_callback=lambda *, location, exception: diagnostics.handle_runtime_exception(
+                    exception=exception,
+                    sender=sender,
+                    location=location,
+                ),
+            ),
+            name="repeat-visit",
+        )
+    else:
+        logger.info("Repeat visit disabled by REPEAT_VISIT_ENABLED")
     try:
         await stop_event.wait()
     finally:
@@ -124,6 +144,9 @@ async def _run_dev_polling_runtime(client: MaxApiClient, config: Config) -> None
         if cancellation_recovery_task is not None:
             cancellation_recovery_task.cancel()
             tasks.append(cancellation_recovery_task)
+        if repeat_visit_task is not None:
+            repeat_visit_task.cancel()
+            tasks.append(repeat_visit_task)
         for task in tasks:
             try:
                 await task

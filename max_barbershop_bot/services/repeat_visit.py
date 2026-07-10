@@ -164,11 +164,13 @@ async def run_repeat_visit_loop(sender: MaxMessageSender, *, database_path: str,
             raise
         except Exception as exc:  # noqa: BLE001
             if callable(error_callback):
-                await error_callback(exc)
+                result = error_callback(location="repeat_visit_loop", exception=exc)
+                if hasattr(result, "__await__"):
+                    await result
             else:
                 logger.warning("MAX repeat visit diagnostic: error_class=%s", type(exc).__name__, exc_info=True)
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=max(30, interval_seconds))
+            await asyncio.wait_for(stop_event.wait(), timeout=max(300, interval_seconds))
         except TimeoutError:
             continue
 

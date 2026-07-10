@@ -18,6 +18,8 @@ DEFAULT_BIRTHDAY_FUNNEL_ENABLED = False
 DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS = 3600
 DEFAULT_CANCELLATION_RECOVERY_ENABLED = False
 DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS = 300
+DEFAULT_REPEAT_VISIT_ENABLED = False
+DEFAULT_REPEAT_VISIT_POLL_INTERVAL_SECONDS = 3600
 DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED = True
 
 
@@ -42,6 +44,8 @@ class Config:
     birthday_funnel_poll_interval_seconds: int = DEFAULT_BIRTHDAY_FUNNEL_POLL_INTERVAL_SECONDS
     cancellation_recovery_enabled: bool = DEFAULT_CANCELLATION_RECOVERY_ENABLED
     cancellation_recovery_poll_interval_seconds: int = DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS
+    repeat_visit_enabled: bool = DEFAULT_REPEAT_VISIT_ENABLED
+    repeat_visit_poll_interval_seconds: int = DEFAULT_REPEAT_VISIT_POLL_INTERVAL_SECONDS
     developer_diagnostics_enabled: bool = DEFAULT_DEVELOPER_DIAGNOSTICS_ENABLED
     telegram_bot_token: str | None = None
     telegram_db_path: str | None = None
@@ -95,6 +99,13 @@ def load_config() -> Config:
             DEFAULT_CANCELLATION_RECOVERY_POLL_INTERVAL_SECONDS,
             dotenv_values,
             minimum=30,
+        ),
+        repeat_visit_enabled=_bool_env("REPEAT_VISIT_ENABLED", DEFAULT_REPEAT_VISIT_ENABLED, dotenv_values),
+        repeat_visit_poll_interval_seconds=_int_env(
+            "REPEAT_VISIT_POLL_INTERVAL_SECONDS",
+            DEFAULT_REPEAT_VISIT_POLL_INTERVAL_SECONDS,
+            dotenv_values,
+            minimum=300,
         ),
         developer_diagnostics_enabled=_bool_env(
             "DEVELOPER_DIAGNOSTICS_ENABLED",
