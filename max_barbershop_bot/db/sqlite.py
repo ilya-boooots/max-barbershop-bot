@@ -174,6 +174,33 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         );
 
 
+        CREATE TABLE IF NOT EXISTS lost_client_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'max',
+            platform_user_id TEXT,
+            yclients_client_id TEXT,
+            client_tg_id TEXT,
+            threshold_days INTEGER NOT NULL DEFAULT 0,
+            segment_key TEXT,
+            last_visit_datetime_utc TEXT,
+            last_visit_id TEXT,
+            has_future_booking INTEGER NOT NULL DEFAULT 0,
+            scheduled_send_at_utc TEXT,
+            sent_at_utc TEXT,
+            clicked_at_utc TEXT,
+            status TEXT NOT NULL DEFAULT 'candidate',
+            source TEXT,
+            is_test INTEGER NOT NULL DEFAULT 0,
+            error_summary TEXT,
+            created_at_utc TEXT,
+            updated_at_utc TEXT,
+            max_user_id TEXT,
+            chat_id TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+
         CREATE TABLE IF NOT EXISTS repeat_visit_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform TEXT NOT NULL DEFAULT 'max',
@@ -538,6 +565,29 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "cancellation_recovery_events", "skipped_reason", "TEXT")
     _ensure_column(connection, "cancellation_recovery_events", "created_at", "TEXT")
     _ensure_column(connection, "cancellation_recovery_events", "updated_at", "TEXT")
+
+    _ensure_column(connection, "lost_client_events", "platform", "TEXT NOT NULL DEFAULT 'max'")
+    _ensure_column(connection, "lost_client_events", "platform_user_id", "TEXT")
+    _ensure_column(connection, "lost_client_events", "yclients_client_id", "TEXT")
+    _ensure_column(connection, "lost_client_events", "client_tg_id", "TEXT")
+    _ensure_column(connection, "lost_client_events", "threshold_days", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "lost_client_events", "segment_key", "TEXT")
+    _ensure_column(connection, "lost_client_events", "last_visit_datetime_utc", "TEXT")
+    _ensure_column(connection, "lost_client_events", "last_visit_id", "TEXT")
+    _ensure_column(connection, "lost_client_events", "has_future_booking", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "lost_client_events", "scheduled_send_at_utc", "TEXT")
+    _ensure_column(connection, "lost_client_events", "sent_at_utc", "TEXT")
+    _ensure_column(connection, "lost_client_events", "clicked_at_utc", "TEXT")
+    _ensure_column(connection, "lost_client_events", "status", "TEXT NOT NULL DEFAULT 'candidate'")
+    _ensure_column(connection, "lost_client_events", "source", "TEXT")
+    _ensure_column(connection, "lost_client_events", "is_test", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(connection, "lost_client_events", "error_summary", "TEXT")
+    _ensure_column(connection, "lost_client_events", "created_at_utc", "TEXT")
+    _ensure_column(connection, "lost_client_events", "updated_at_utc", "TEXT")
+    _ensure_column(connection, "lost_client_events", "max_user_id", "TEXT")
+    _ensure_column(connection, "lost_client_events", "chat_id", "TEXT")
+    _ensure_column(connection, "lost_client_events", "created_at", "TEXT")
+    _ensure_column(connection, "lost_client_events", "updated_at", "TEXT")
 
     _ensure_column(connection, "repeat_visit_events", "platform", "TEXT NOT NULL DEFAULT 'max'")
     _ensure_column(connection, "repeat_visit_events", "platform_user_id", "TEXT")

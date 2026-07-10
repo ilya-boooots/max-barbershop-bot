@@ -10,6 +10,7 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.permissions import can_view_broadcasts
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.flows.broadcasts import open_segment_broadcast_text
+from max_barbershop_bot.repositories.lost_client_events import LostClientEventsRepository
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
@@ -26,6 +27,7 @@ from max_barbershop_bot.ui.buttons import (
     LOST_CLIENTS_BACK_PAYLOAD,
     LOST_CLIENTS_BROADCAST_PAYLOAD,
     LOST_CLIENTS_HOME_PAYLOAD,
+    LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX,
     LOST_CLIENTS_OPEN_PAYLOAD,
     LOST_CLIENTS_REFRESH_PAYLOAD,
     client_segments_menu_keyboard,
@@ -53,6 +55,38 @@ def register_lost_clients_routes(router: Router) -> None:
     router.on_callback(LOST_CLIENTS_BROADCAST_PAYLOAD, handle_lost_clients_broadcast)
     router.on_callback(LOST_CLIENTS_BACK_PAYLOAD, handle_lost_clients_back)
     router.on_callback(LOST_CLIENTS_HOME_PAYLOAD, handle_lost_clients_home)
+    router.on_callback_prefix(LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX, handle_lost_client_booking_cta)
+
+
+async def handle_lost_client_booking_cta(context: RouterContext) -> None:
+    """Handle lost-client booking CTA and preserve notification attribution."""
+
+    raw_payload = context.event.callback_payload or ""
+    raw_id = raw_payload.removeprefix(LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX)
+    event_id = int(raw_id) if raw_id.isdigit() and int(raw_id) > 0 else None
+    repo = LostClientEventsRepository(_database_path())
+    event = repo.get_event(event_id) if event_id else None
+    if event is None:
+        await _answer_callback(context)
+        await context.send_text("⚠️ Эта ссылка устарела. Откройте запись через меню 🙏")
+        return
+
+    repo.mark_status(event.id, "clicked_booking", clicked=True)
+    user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    state.set_state_data_value(user_id, chat_id, "booking_source", "lost_client")
+    state.set_state_data_value(user_id, chat_id, "booking_origin", "lost_client")
+    state.set_state_data_value(user_id, chat_id, "booking_origin_type", "lost_client")
+    state.set_state_data_value(user_id, chat_id, "lost_client_event_id", event.id)
+    state.set_state_data_value(user_id, chat_id, "notification_event_id", event.id)
+    state.set_state_data_value(user_id, chat_id, "yclients_client_id", event.yclients_client_id)
+    state.set_state_data_value(user_id, chat_id, "lost_days", event.threshold_days)
+    state.set_state_data_value(user_id, chat_id, "notification_is_test", event.is_test)
+    state.set_state_data_value(user_id, chat_id, "notification_source", event.source)
+    await _answer_callback(context)
+    from max_barbershop_bot.flows.booking import handle_booking_start
+
+    await handle_booking_start(context)
 
 
 async def handle_lost_clients_open(context: RouterContext) -> None:

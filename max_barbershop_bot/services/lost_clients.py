@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -9,8 +10,12 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from max_barbershop_bot.integrations.yclients.client import YClientsClient
-from max_barbershop_bot.integrations.yclients.endpoints import list_bookings_by_date_range
+from max_barbershop_bot.integrations.yclients.endpoints import list_bookings_by_date_range, list_user_bookings
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
+from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
+from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
+from max_barbershop_bot.repositories.lost_client_events import LostClientEventsRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettings, YClientsSettingsRepository
 from max_barbershop_bot.services.broadcasts import BroadcastRecipient
@@ -322,7 +327,7 @@ def _is_valid_past_visit(record: dict[str, Any], now_utc: datetime) -> bool:
     event_dt = _record_datetime_utc(record)
     if event_dt and event_dt > now_utc:
         return False
-    return record.get("attendance") == 1
+    return _is_completed_visit(record)
 
 
 def _is_active_future_booking(record: dict[str, Any], now_utc: datetime) -> bool:
@@ -331,7 +336,7 @@ def _is_active_future_booking(record: dict[str, Any], now_utc: datetime) -> bool
     event_dt = _record_datetime_utc(record)
     if not event_dt or event_dt <= now_utc:
         return False
-    return record.get("attendance") in (None, 0, 2)
+    return True
 
 
 def _record_datetime_utc(record: dict[str, Any]) -> datetime | None:
@@ -412,3 +417,223 @@ def _zoneinfo(tz_name: str | None) -> ZoneInfo:
     except ZoneInfoNotFoundError:
         logger.warning("lost_clients_timezone_invalid timezone=%s", tz_name)
         return ZoneInfo(DEFAULT_BRANCH_TIMEZONE)
+
+
+@dataclass
+class LostClientsScanSummary:
+    """Telegram-equivalent lost clients scan counters."""
+
+    candidates: int = 0
+    sent: int = 0
+    skipped: int = 0
+    errors: int = 0
+
+
+LOST_CLIENTS_BOOKING_BUTTON_TEXT = "✂️ Записаться"
+LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX = "lost_clients:book:"
+
+
+def build_lost_client_booking_keyboard(event_id: int) -> MaxInlineKeyboard:
+    """Build the Telegram-equivalent booking CTA for a lost-client message."""
+
+    return MaxInlineKeyboard(rows=((MaxButton(text=LOST_CLIENTS_BOOKING_BUTTON_TEXT, payload=f"{LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX}{int(event_id)}"),),))
+
+
+async def run_lost_clients_scan(
+    sender: MaxMessageSender,
+    *,
+    database_path: str,
+    force: bool = False,
+    source: str = "yclients",
+    is_test: bool = False,
+    now: datetime | None = None,
+) -> LostClientsScanSummary:
+    """Scan inactive MAX users and send Telegram-equivalent lost-client messages."""
+
+    summary = LostClientsScanSummary()
+    settings = _load_lost_clients_settings(database_path)
+    anti_spam = _load_anti_spam_settings(database_path)
+    if not settings.get("enabled") and not force:
+        logger.info("lost_clients_scan_skipped_disabled")
+        return summary
+    ok, reason = _check_lost_clients_working_hours(settings, now=now)
+    if not ok and not force:
+        logger.info("lost_clients_scan_skipped_hours reason=%s", reason)
+        return summary
+
+    settings_repo = YClientsSettingsRepository(database_path)
+    users_repo = UsersRepository(database_path)
+    events_repo = LostClientEventsRepository(database_path)
+    yc_settings = load_active_yclients_settings(settings_repo, operation="run_lost_clients_scan")
+    if not has_required_yclients_credentials(yc_settings):
+        return summary
+
+    thresholds = _lost_thresholds(settings)
+    cooldown_days = max(1, int(float(anti_spam.get("min_interval_hours", 48)) / 24))
+    now_utc = now.astimezone(timezone.utc) if now else datetime.now(timezone.utc)
+    async with _build_client(yc_settings) as client:
+        users = [u for u in users_repo.list_users_for_broadcast_audience(platform=PLATFORM_MAX) if u.yclients_client_id]
+        for user in users:
+            if not user.notifications_enabled:
+                summary.skipped += 1
+                continue
+            try:
+                payload = await list_user_bookings(client, company_id=str(yc_settings.company_id), client_id=str(user.yclients_client_id), count=50)
+                records = _extract_rows(payload)
+                last_visit, last_visit_id = _latest_completed_visit(records)
+                if last_visit is None:
+                    continue
+                if _has_future_booking(records, now_utc) and bool(settings.get("exclude_has_future_booking", True)):
+                    events_repo.create_event(
+                        yclients_client_id=user.yclients_client_id,
+                        client_tg_id=user.platform_user_id,
+                        platform_user_id=user.platform_user_id,
+                        max_user_id=user.max_user_id,
+                        chat_id=user.chat_id,
+                        threshold_days=0,
+                        segment_key="lost_skip_future",
+                        last_visit_datetime_utc=last_visit.isoformat(),
+                        last_visit_id=last_visit_id,
+                        has_future_booking=True,
+                        status="skipped_has_future_booking",
+                        source=source,
+                        is_test=is_test,
+                    )
+                    summary.skipped += 1
+                    continue
+                days_inactive = (now_utc - last_visit).days
+                threshold = next((value for value in thresholds if days_inactive >= value), None)
+                if threshold is None:
+                    continue
+                if not is_test and events_repo.has_recent_sent(user.platform_user_id, threshold, cooldown_days):
+                    summary.skipped += 1
+                    continue
+                summary.candidates += 1
+                event = events_repo.create_event(
+                    yclients_client_id=user.yclients_client_id,
+                    client_tg_id=user.platform_user_id,
+                    platform_user_id=user.platform_user_id,
+                    max_user_id=user.max_user_id,
+                    chat_id=user.chat_id,
+                    threshold_days=threshold,
+                    segment_key=f"lost_{threshold}",
+                    last_visit_datetime_utc=last_visit.isoformat(),
+                    last_visit_id=last_visit_id,
+                    has_future_booking=False,
+                    scheduled_send_at_utc=now_utc.isoformat(),
+                    status="pending",
+                    source=source,
+                    is_test=is_test,
+                )
+                text = str(settings.get(f"text_{threshold}", "") or "")
+                allowed, decision = _can_send_lost_client(anti_spam, is_test=is_test)
+                if not allowed:
+                    events_repo.mark_status(event.id, "skipped", error_summary=decision)
+                    summary.skipped += 1
+                    continue
+                result = await sender.send_to_user(
+                    user.max_user_id or user.platform_user_id,
+                    text,
+                    keyboard=build_lost_client_booking_keyboard(event.id),
+                    metadata={"lost_client_event_id": event.id, "threshold_days": threshold, "source": source, "is_test": is_test},
+                )
+                if result.ok:
+                    events_repo.mark_status(event.id, "sent", sent=True)
+                    summary.sent += 1
+                elif result.is_blocked:
+                    events_repo.mark_status(event.id, "blocked", error_summary=result.error_message or result.error_code or "blocked")
+                    summary.errors += 1
+                else:
+                    events_repo.mark_status(event.id, "failed", error_summary=(result.error_message or result.error_code or "send_failed")[:180])
+                    summary.errors += 1
+            except YClientsError:
+                summary.errors += 1
+            except Exception as exc:  # pragma: no cover - defensive production logging
+                logger.exception("lost_clients_client_processing_failed platform_user_id=%s err=%s", user.platform_user_id, exc)
+                summary.errors += 1
+    return summary
+
+
+def _load_lost_clients_settings(database_path: str) -> dict[str, Any]:
+    return _load_json_setting(database_path, "lost_clients", default={"enabled": False, "threshold_days": [30, 60, 90], "exclude_has_future_booking": True})
+
+
+def _load_anti_spam_settings(database_path: str) -> dict[str, Any]:
+    return _load_json_setting(database_path, "anti_spam", default={"min_interval_hours": 48, "enabled": True})
+
+
+def _load_json_setting(database_path: str, key: str, *, default: dict[str, Any]) -> dict[str, Any]:
+    repo = AppSettingsRepository(database_path)
+    with repo._connect() as connection:  # small internal helper parity shim for existing key-value store
+        row = connection.execute("SELECT value FROM app_settings WHERE key = ? LIMIT 1", (key,)).fetchone()
+    if row is None or row["value"] is None:
+        return dict(default)
+    try:
+        parsed = json.loads(str(row["value"]))
+    except json.JSONDecodeError:
+        parsed = {"enabled": str(row["value"]).strip().lower() in {"1", "true", "yes", "on", "enabled"}}
+    if not isinstance(parsed, dict):
+        return dict(default)
+    merged = dict(default)
+    merged.update(parsed)
+    return merged
+
+
+def _lost_thresholds(settings: dict[str, Any]) -> list[int]:
+    raw = settings.get("threshold_days", [30, 60, 90])
+    values = [int(value) for value in raw if int(value) > 0] if isinstance(raw, list) else [30, 60, 90]
+    return sorted(values or [30, 60, 90], reverse=True)
+
+
+def _latest_completed_visit(records: list[dict[str, Any]]) -> tuple[datetime | None, str | None]:
+    last_visit: datetime | None = None
+    last_visit_id: str | None = None
+    for record in records:
+        dt = _record_datetime_utc(record)
+        if dt is None or not _is_completed_visit(record):
+            continue
+        if last_visit is None or dt > last_visit:
+            last_visit = dt
+            last_visit_id = _normalize_id(record.get("id") or record.get("record_id")) or None
+    return last_visit, last_visit_id
+
+
+def _is_completed_visit(record: dict[str, Any]) -> bool:
+    attendance = record.get("attendance")
+    if attendance is None:
+        attendance = record.get("visit_attendance")
+    if attendance is not None:
+        return str(attendance).strip() == "1"
+    status = str(record.get("status") or "").strip().lower()
+    return status in {"visit", "done", "paid", "completed", "show"}
+
+
+def _has_future_booking(records: list[dict[str, Any]], now_utc: datetime) -> bool:
+    return any((dt := _record_datetime_utc(record)) is not None and dt > now_utc for record in records)
+
+
+def _can_send_lost_client(anti_spam: dict[str, Any], *, is_test: bool) -> tuple[bool, str]:
+    if is_test:
+        return True, "allowed"
+    if anti_spam.get("allow_send") is False or anti_spam.get("enabled") is False:
+        return False, "anti_spam_disabled"
+    return True, "allowed"
+
+
+def _check_lost_clients_working_hours(settings: dict[str, Any], *, now: datetime | None) -> tuple[bool, str | None]:
+    hours = settings.get("working_hours")
+    if not isinstance(hours, dict) or not hours.get("enabled"):
+        return True, None
+    start = str(hours.get("start") or "").strip()
+    end = str(hours.get("end") or "").strip()
+    if not start or not end:
+        return True, None
+    current = (now or datetime.now(timezone.utc)).time()
+    try:
+        start_t = datetime.strptime(start, "%H:%M").time()
+        end_t = datetime.strptime(end, "%H:%M").time()
+    except ValueError:
+        return True, None
+    if start_t <= current <= end_t:
+        return True, None
+    return False, "outside_working_hours"
