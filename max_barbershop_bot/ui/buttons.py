@@ -47,6 +47,10 @@ SETTINGS_NOTIFICATIONS_TESTS_PAYLOAD = "settings:notifications:tests"
 SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD = "settings:notifications:test:immediate"
 SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD = "settings:notifications:test:48h"
 SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD = "settings:notifications:test:2h"
+SETTINGS_AUTOMATION_ROOT_PAYLOAD = "settings:automation"
+SETTINGS_AUTOMATION_MODULE_PREFIX = "set:auto:mod:"
+SETTINGS_AUTOMATION_TOGGLE_PREFIX = "set:auto:t:"
+SETTINGS_AUTOMATION_EDIT_PREFIX = "set:auto:e:"
 SETTINGS_MASTER_PHOTOS_PAYLOAD = "settings:master_photos"
 SETTINGS_ROLES_PAYLOAD = "settings:roles"
 SETTINGS_DIAGNOSTICS_PAYLOAD = "settings:diagnostics"
@@ -541,6 +545,7 @@ def settings_notifications_keyboard(*, enabled: bool = True) -> MaxInlineKeyboar
     return MaxInlineKeyboard.from_rows(
         [
             [toggle],
+            [MaxButton(text="⚙️ Настройки рассылок", payload=SETTINGS_AUTOMATION_ROOT_PAYLOAD)],
             [MaxButton(text="🧾 История уведомлений", payload=SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD)],
             [MaxButton(text="🔄 Проверить работу уведомлений", payload=SETTINGS_NOTIFICATIONS_SMOKE_PAYLOAD)],
             [MaxButton(text="🧪 Тест уведомлений", payload=SETTINGS_NOTIFICATIONS_TESTS_PAYLOAD)],
@@ -549,6 +554,51 @@ def settings_notifications_keyboard(*, enabled: bool = True) -> MaxInlineKeyboar
         ]
     )
 
+
+
+def settings_automation_root_keyboard() -> MaxInlineKeyboard:
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⭐ Оценка после визита", payload=f"{SETTINGS_AUTOMATION_MODULE_PREFIX}post_visit_review")],
+            [MaxButton(text="❌ Возврат после отмены", payload=f"{SETTINGS_AUTOMATION_MODULE_PREFIX}cancellation_return")],
+            [MaxButton(text="😔 Потерянные клиенты", payload=f"{SETTINGS_AUTOMATION_MODULE_PREFIX}lost_clients")],
+            [MaxButton(text="🎂 День рождения", payload=f"{SETTINGS_AUTOMATION_MODULE_PREFIX}birthday")],
+            [MaxButton(text="🔁 Повторный визит", payload=f"{SETTINGS_AUTOMATION_MODULE_PREFIX}repeat_visit")],
+            [MaxButton(text="🔕 Антиспам", payload=f"{SETTINGS_AUTOMATION_MODULE_PREFIX}anti_spam")],
+            [MaxButton(text="🔗 Ссылки на отзывы", payload=f"{SETTINGS_AUTOMATION_MODULE_PREFIX}review_links")],
+            [MaxButton(text="⏰ Рабочее время / тихие часы", payload=f"{SETTINGS_AUTOMATION_MODULE_PREFIX}quiet_hours")],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def settings_automation_module_keyboard(key: str, *, enabled: bool = False) -> MaxInlineKeyboard:
+    rows: list[list[MaxButton]] = []
+    if key in {"post_visit_review", "cancellation_return", "lost_clients", "birthday", "repeat_visit", "quiet_hours"}:
+        text = "⛔ Выключить" if enabled else "✅ Включить"
+        if key == "quiet_hours":
+            text = "☀️ Выключить тихие часы" if enabled else "🌙 Включить тихие часы"
+        rows.append([MaxButton(text=text, payload=f"{SETTINGS_AUTOMATION_TOGGLE_PREFIX}{key}")])
+    mapping = {
+        "post_visit_review": [("⏱ Изменить задержку", "delay_hours"), ("✏️ Изменить текст", "message_text"), ("🔗 Ссылки на отзывы", "go_review_links")],
+        "cancellation_return": [("⏱ Изменить задержку", "delay_hours"), ("✏️ Изменить текст", "message_text")],
+        "lost_clients": [("⏱ Настроить сроки", "threshold_days"), ("✏️ Текст 30 дней", "text_30"), ("✏️ Текст 60 дней", "text_60"), ("✏️ Текст 90 дней", "text_90")],
+        "birthday": [("📅 Изменить срок отправки", "send_days_before"), ("✏️ Изменить текст", "message_text")],
+        "repeat_visit": [("⏱ Изменить срок по умолчанию", "delay_days"), ("✏️ Текст 1", "template_1"), ("✏️ Текст 2", "template_2"), ("✏️ Текст 3", "template_3"), ("✏️ Текст 4", "template_4"), ("✏️ Текст 5", "template_5")],
+        "anti_spam": [("🔢 Изменить лимит в неделю", "max_weekly_marketing"), ("⏱ Изменить минимальный интервал", "min_interval_hours"), ("ℹ️ Белые и зелёные уведомления", "white_green_info")],
+        "review_links": [("🟡 Изменить ссылку Яндекс", "yandex_url"), ("🟢 Изменить ссылку 2ГИС", "two_gis_url"), ("🧹 Очистить ссылку Яндекс", "clear_yandex"), ("🧹 Очистить ссылку 2ГИС", "clear_two_gis")],
+        "quiet_hours": [("⏰ Изменить тихие часы", "range"), ("📌 Режим вне рабочего времени", "outside_allowed_behavior")],
+    }
+    for label, field in mapping.get(key, []):
+        rows.append([MaxButton(text=label, payload=f"{SETTINGS_AUTOMATION_EDIT_PREFIX}{key}:{field}")])
+    rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_AUTOMATION_ROOT_PAYLOAD if key == "lost_clients" else SETTINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def settings_automation_input_keyboard() -> MaxInlineKeyboard:
+    return MaxInlineKeyboard.from_rows([[MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)]])
 
 def settings_diagnostics_keyboard() -> MaxInlineKeyboard:
     """Build diagnostics settings buttons."""
