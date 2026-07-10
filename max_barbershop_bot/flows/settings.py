@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import csv
+import re
 import io
 import logging
 import sqlite3
@@ -108,6 +110,10 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD,
     SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD,
     SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD,
+    SETTINGS_AUTOMATION_ROOT_PAYLOAD,
+    SETTINGS_AUTOMATION_MODULE_PREFIX,
+    SETTINGS_AUTOMATION_TOGGLE_PREFIX,
+    SETTINGS_AUTOMATION_EDIT_PREFIX,
     DEV_TESTS_ROOT_PAYLOAD,
     DEV_TESTS_PAYLOAD_PREFIX,
     DEV_TESTS_CLEANUP_CONFIRM_PAYLOAD,
@@ -119,6 +125,9 @@ from max_barbershop_bot.ui.buttons import (
     settings_diagnostics_keyboard,
     settings_menu_keyboard,
     settings_notifications_keyboard,
+    settings_automation_root_keyboard,
+    settings_automation_module_keyboard,
+    settings_automation_input_keyboard,
     settings_notification_tests_keyboard,
     dev_tests_cleanup_confirm_keyboard,
     cancellation_recovery_keyboard,
@@ -180,6 +189,10 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_NOTIFICATIONS_TEST_IMMEDIATE_PAYLOAD, handle_settings_notifications_run_test)
     router.on_callback(SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD, handle_settings_notifications_run_test)
     router.on_callback(SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD, handle_settings_notifications_run_test)
+    router.on_callback(SETTINGS_AUTOMATION_ROOT_PAYLOAD, handle_settings_automation_root)
+    router.on_callback_prefix(SETTINGS_AUTOMATION_MODULE_PREFIX, handle_settings_automation_module)
+    router.on_callback_prefix(SETTINGS_AUTOMATION_TOGGLE_PREFIX, handle_settings_automation_toggle)
+    router.on_callback_prefix(SETTINGS_AUTOMATION_EDIT_PREFIX, handle_settings_automation_edit)
     router.on_callback_prefix(DEV_TESTS_PAYLOAD_PREFIX, handle_settings_notifications_run_test)
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
@@ -207,6 +220,7 @@ def register_settings_routes(router: Router) -> None:
     router.on_screen_text(state.SETTINGS_CONTACTS_EDIT_GOOGLE_MAPS_SCREEN, handle_settings_contacts_google_input)
     router.on_screen_text(state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, handle_settings_support_username_input)
     router.on_screen_text(state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN, handle_settings_support_description_input)
+    router.on_screen_text("settings_automation_edit", handle_settings_automation_input)
     router.on_screen_text(state.SETTINGS_DIAGNOSTICS_USER_LOGS_INPUT_SCREEN, handle_settings_diagnostics_user_logs_input)
     router.on_screen_text(state.SETTINGS_DIAGNOSTICS_EVENT_SEARCH_INPUT_SCREEN, handle_settings_diagnostics_event_search_input)
 
@@ -1238,6 +1252,133 @@ async def handle_settings_notification_history(context: RouterContext) -> None:
     await handle_notification_history(context)
 
 
+AUTOMATION_DEFAULTS: dict[str, dict[str, object]] = {
+    "post_visit_review": {"enabled": True, "delay_hours": 2, "message_text": "Как прошёл ваш визит?\n\nОцените, пожалуйста, от 1 до 5 ⭐", "rating_scale": "1-5", "high_rating_behavior": "4-5: ask_public_review", "low_rating_behavior": "1-3: ask_comment_notify_admin"},
+    "cancellation_return": {"enabled": True, "delay_hours": 2, "message_text": "Видим, что вы отменили запись 😔\n\nМожем подобрать другое удобное время.", "exclude_has_future_booking": True},
+    "lost_clients": {"enabled": True, "threshold_days": [30, 60, 90], "exclude_has_future_booking": True, "text_30": "Давно вас не видели 😊\n\nСамое время обновить стрижку.", "text_60": "Похоже, вы давно не заглядывали к нам.\n\nПодберём удобное время?", "text_90": "Мы скучаем 😄\n\nДля вас есть специальное предложение на возвращение."},
+    "birthday": {"enabled": True, "send_days_before": 7, "once_per_year": True, "message_text": "Скоро ваш день рождения, поздравляем 🎉 😊\n\nХотим сделать вам приятный подарок - покажите это сообщение администратору при оплате.", "gift_text": "Покажите это сообщение администратору при оплате."},
+    "repeat_visit": {"enabled": True, "delay_days": 30, "exclude_has_future_booking": True, "respect_marketing_unsubscribe": True, "respect_anti_spam": True, "respect_working_hours": True, "templates": ["Пора обновить стрижку? 😊\n\nОбычно к этому времени форма уже начинает теряться.", "Кажется, самое время снова заглянуть к нам ✂️\n\nПодберём удобное окно для визита?", "Ваша стрижка уже могла немного потерять форму 😊\n\nСамое время освежить образ.", "Давно не виделись ✂️\n\nМожем подобрать удобное время к вашему мастеру.", "Хотите снова выглядеть свежо? 😊\n\nЗапишитесь на удобное время — мы всё подготовим."], "service_rules": []},
+    "anti_spam": {"enabled": True, "max_weekly_marketing": 2, "min_interval_hours": 48, "respect_marketing_unsubscribe": True, "service_notifications_ignore_marketing_unsubscribe": True, "block_duplicate_same_event": True},
+    "review_links": {"yandex_url": "", "two_gis_url": ""},
+    "quiet_hours": {"enabled": True, "start": "21:00", "end": "09:00", "outside_allowed_behavior": "postpone_to_next_allowed", "working_hours_source": "yclients"},
+}
+AUTOMATION_KEYS = tuple(AUTOMATION_DEFAULTS)
+MAX_AUTOMATION_TEXT_LEN = 1000
+
+def get_automation_setting(key: str, repository: AppSettingsRepository | None = None) -> dict[str, object]:
+    if key not in AUTOMATION_DEFAULTS:
+        return {}
+    merged = copy.deepcopy(AUTOMATION_DEFAULTS[key])
+    stored = (repository or AppSettingsRepository(_database_path())).get_json(f"automation:{key}")
+    if stored:
+        merged.update(stored)
+    return merged
+
+def upsert_automation_setting(key: str, value: dict[str, object], repository: AppSettingsRepository | None = None) -> None:
+    if key not in AUTOMATION_DEFAULTS:
+        return
+    (repository or AppSettingsRepository(_database_path())).set_json(f"automation:{key}", value)
+
+def automation_edit_prompt(key: str, field: str, current: object) -> str:
+    hints = {"delay_hours": "Введите положительное число часов:", "min_interval_hours": "Введите положительное число часов:", "delay_days": "Введите положительное число дней:", "send_days_before": "Введите положительное число дней:", "max_weekly_marketing": "Введите положительное число сообщений в неделю:", "threshold_days": "Введите три срока через /, например 30/60/90:", "range": "Введите интервал в формате HH:MM-HH:MM, например 21:00-09:00:", "yandex_url": "Введите ссылку Яндекс или отправьте пустое значение для очистки:", "two_gis_url": "Введите ссылку 2ГИС или отправьте пустое значение для очистки:"}
+    return f"Текущее значение: {current or '—'}\n\n{hints.get(field, 'Введите новый текст:')}"
+
+async def handle_settings_automation_root(context: RouterContext) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role):
+        await _send_no_access(context); return
+    await _answer_callback_if_needed(context)
+    _audit(context, actor_role, action="settings_section_opened", section="automation")
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, "settings_automation_root")
+    await context.send_text("⚙️ Настройки рассылок\n\nЗдесь настраиваются автоматические уведомления и правила рассылок. Бот будет сам возвращать клиентов по заданным сценариям.", keyboard=settings_automation_root_keyboard())
+
+async def handle_settings_automation_module(context: RouterContext) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role):
+        await _send_no_access(context); return
+    await _answer_callback_if_needed(context)
+    await _show_automation_module(context, _payload_suffix(context, SETTINGS_AUTOMATION_MODULE_PREFIX))
+
+async def _show_automation_module(context: RouterContext, key: str) -> None:
+    if key not in AUTOMATION_DEFAULTS:
+        await context.send_text("⚠️ Раздел настроек не найден.", keyboard=settings_automation_root_keyboard()); return
+    setting = get_automation_setting(key)
+    state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), "settings_automation_module")
+    state.set_state_data_value(context.event.platform_user_id, _settings_state_chat_id(context), "automation_module_key", key)
+    await context.send_text(render_automation_module_text(key, setting), keyboard=settings_automation_module_keyboard(key, enabled=bool(setting.get("enabled", False))))
+
+def render_automation_module_text(key: str, s: dict[str, object]) -> str:
+    status = "✅ Включено" if s.get("enabled") else "❌ Выключено"
+    if key == "post_visit_review": return f"⭐ Оценка после визита\n\nСтатус: {status}\nЗадержка после визита: {s.get('delay_hours', 2)} ч\nТекст сообщения:\n{s.get('message_text', '')}\n\nПоложительная оценка: 4–5 ⭐ → клиенту показываются ссылки на отзывы.\nНегативная оценка: 1–3 ⭐ → бот попросит комментарий и передаст администратору."
+    if key == "cancellation_return": return f"❌ Возврат после отмены\n\nСтатус: {status}\nЗадержка после отмены: {s.get('delay_hours', 2)} ч\nТекст сообщения:\n{s.get('message_text', '')}\n\nПравило: отправлять только если у клиента нет новой будущей записи."
+    if key == "lost_clients": return f"😔 Потерянные клиенты\n\nСтатус: {status}\nСроки: {' / '.join(map(str, s.get('threshold_days') or [30, 60, 90]))} дней\nПравило: не отправлять, если у клиента есть будущая запись.\n\n30 дней:\n{s.get('text_30', '')}\n\n60 дней:\n{s.get('text_60', '')}\n\n90 дней:\n{s.get('text_90', '')}"
+    if key == "birthday": return f"🎂 День рождения\n\nСтатус: {status}\nОтправлять за: {s.get('send_days_before', 7)} дней\nТекст сообщения:\n{s.get('message_text', '')}\n\nКнопка в уведомлении: ✂️ Записаться\nКомментарий в YClients при записи: У КЛИЕНТА ДЕНЬ РОЖДЕНИЕ - НУЖНО СДЕЛАТЬ СКИДКУ"
+    if key == "repeat_visit": return f"🔁 Повторный визит\n\nСтатус: {status}\nСрок по умолчанию: {s.get('delay_days', 30)} дней\nПравило: напоминать только если нет будущей записи.\n\n" + "\n\n".join(f"Текст {i}:\n{txt}" for i, txt in enumerate((s.get('templates') or [])[:5], 1))
+    if key == "anti_spam": return f"🔕 Антиспам\n\nЛимит зелёных сообщений в неделю: {s.get('max_weekly_marketing', 2)}\nМинимальный интервал между зелёными сообщениями: {s.get('min_interval_hours', 48)} ч\nОтписка: зелёные уведомления не отправляются отписавшимся клиентам.\n\nℹ️ Подробности по белым и зелёным уведомлениям: кнопка ниже."
+    if key == "review_links": return f"🔗 Ссылки на отзывы\n\nИспользуются после оценки 4–5 ⭐.\n\nЯндекс: {s.get('yandex_url') or '—'}\n2ГИС: {s.get('two_gis_url') or '—'}"
+    return f"⏰ Рабочее время и тихие часы\n\nЧасовой пояс филиала: не настроен\nРабочее время филиала берётся из YClients.\nСтатус тихих часов: {'✅ Включены' if s.get('enabled') else '❌ Выключены'}\nТихие часы: {s.get('start', '21:00')}–{s.get('end', '09:00')}\nРежим вне рабочего времени: {s.get('outside_allowed_behavior', 'postpone_to_next_allowed')}\n\nЗелёные уведомления не отправляются в нерабочее время.\nБелые уведомления по записи отправляются всегда."
+
+async def handle_settings_automation_toggle(context: RouterContext) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role): await _send_no_access(context); return
+    await _answer_callback_if_needed(context)
+    key = _payload_suffix(context, SETTINGS_AUTOMATION_TOGGLE_PREFIX)
+    if key not in AUTOMATION_DEFAULTS: await handle_settings_automation_root(context); return
+    setting = get_automation_setting(key); setting["enabled"] = not bool(setting.get("enabled", False)); upsert_automation_setting(key, setting)
+    _audit(context, actor_role, action="automation_toggled", section="automation", metadata={"setting_key": key, "enabled": bool(setting.get("enabled"))})
+    await context.send_text("Сохранено ✅")
+    await _show_automation_module(context, key)
+
+async def handle_settings_automation_edit(context: RouterContext) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role): await _send_no_access(context); return
+    await _answer_callback_if_needed(context)
+    payload = _payload_suffix(context, SETTINGS_AUTOMATION_EDIT_PREFIX)
+    key, _, field = payload.partition(":")
+    if key not in AUTOMATION_DEFAULTS: await handle_settings_automation_root(context); return
+    if field == "go_review_links": await _show_automation_module(context, "review_links"); return
+    if field == "white_green_info": await context.send_text("⚪ Белые уведомления — сервисные сообщения по записи.\n\n🟢 Зелёные уведомления — акции, автоворонки и возврат клиентов.", keyboard=settings_automation_module_keyboard(key, enabled=False)); return
+    if field in {"clear_yandex", "clear_two_gis"}:
+        setting = get_automation_setting("review_links"); setting["yandex_url" if field == "clear_yandex" else "two_gis_url"] = ""; upsert_automation_setting("review_links", setting)
+        _audit(context, actor_role, action="review_link_changed", section="automation", metadata={"setting_key": "review_links", "field": field})
+        await context.send_text("Сохранено ✅"); await _show_automation_module(context, "review_links"); return
+    setting = get_automation_setting(key); current = setting.get(field, "")
+    if key == "repeat_visit" and field.startswith("template_"):
+        idx = int(field.split("_")[-1]) - 1; current = (setting.get("templates") or [""] * 5)[idx]
+    if field == "range": current = f"{setting.get('start', '21:00')}-{setting.get('end', '09:00')}"
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, "settings_automation_edit")
+    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, "automation_edit_key", key)
+    state.set_state_data_value(context.event.platform_user_id, context.event.chat_id, "automation_edit_field", field)
+    await context.send_text(automation_edit_prompt(key, field, current), keyboard=settings_automation_input_keyboard())
+
+async def handle_settings_automation_input(context: RouterContext) -> None:
+    actor_role = _actor_role(context)
+    if not can_view_notification_settings(actor_role): await _send_no_access(context); return
+    chat_id = _settings_state_chat_id(context); key = str(state.get_state_data_value(context.event.platform_user_id, chat_id, "automation_edit_key") or ""); field = str(state.get_state_data_value(context.event.platform_user_id, chat_id, "automation_edit_field") or ""); raw = (context.event.text or "").strip()
+    setting = get_automation_setting(key)
+    try: value = _parse_automation_value(key, field, raw, setting)
+    except (AssertionError, ValueError):
+        await context.send_text("⚠️ Некорректное значение. Проверьте и попробуйте ещё раз.", keyboard=settings_automation_input_keyboard()); return
+    if key == "repeat_visit" and field.startswith("template_"):
+        idx = int(field.split("_")[-1]) - 1; templates = list(setting.get("templates") or [])
+        while len(templates) < 5: templates.append("")
+        templates[idx] = str(value); setting["templates"] = templates
+    elif field == "range":
+        start, end = raw.split("-"); setting["start"] = start; setting["end"] = end
+    else: setting[field] = value
+    upsert_automation_setting(key, setting)
+    _audit(context, actor_role, action="automation_setting_changed", section="automation", metadata={"setting_key": key, "field": field})
+    await context.send_text("Сохранено ✅"); await _show_automation_module(context, key)
+
+def _parse_automation_value(key: str, field: str, raw: str, setting: dict[str, object]) -> object:
+    if field in {"delay_hours", "min_interval_hours"}: value = int(raw); assert 1 <= value <= 720; return value
+    if field in {"delay_days", "send_days_before", "max_weekly_marketing"}: value = int(raw); assert 1 <= value <= 365; return value
+    if field == "threshold_days":
+        value = [int(x.strip()) for x in re.split(r"[/,\s]+", raw) if x.strip()]; assert len(value) == 3 and all(1 <= x <= 365 for x in value); return value
+    if field == "range": assert re.match(r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$", raw); return None
+    if field in {"yandex_url", "two_gis_url"}: assert (not raw) or raw.startswith(("http://", "https://")); return raw
+    assert raw and len(raw) <= MAX_AUTOMATION_TEXT_LEN; return raw
+
 async def handle_settings_yclients_check(context: RouterContext) -> None:
     """Run existing YClients check from diagnostics."""
 
@@ -1264,7 +1405,11 @@ async def handle_settings_back(context: RouterContext) -> None:
     if current in {state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN}:
         await _show_support_editor(context)
         return
-    if current in {state.SETTINGS_CONTACTS_SCREEN, state.SETTINGS_SUPPORT_SCREEN, state.SETTINGS_NOTIFICATIONS_SCREEN, state.SETTINGS_DIAGNOSTICS_SCREEN}:
+    if current == "settings_automation_edit":
+        key = state.get_state_data_value(context.event.platform_user_id, _settings_state_chat_id(context), "automation_edit_key")
+        await _show_automation_module(context, str(key or "post_visit_review"))
+        return
+    if current in {state.SETTINGS_CONTACTS_SCREEN, state.SETTINGS_SUPPORT_SCREEN, state.SETTINGS_NOTIFICATIONS_SCREEN, "settings_automation_root", "settings_automation_module", state.SETTINGS_DIAGNOSTICS_SCREEN}:
         await _show_settings_menu(context, actor_role)
         return
     await go_back(context)
@@ -1586,6 +1731,9 @@ def _settings_state_chat_id(context: RouterContext) -> str | None:
         state.SETTINGS_CONTACTS_EDIT_TWOGIS_SCREEN,
         state.SETTINGS_CONTACTS_EDIT_GOOGLE_MAPS_SCREEN,
         state.SETTINGS_MENU_SCREEN,
+        "settings_automation_root",
+        "settings_automation_module",
+        "settings_automation_edit",
     )
     for screen_id in candidate_screens:
         chat_id = state.find_chat_id_for_current_screen(context.event.platform_user_id, screen_id)

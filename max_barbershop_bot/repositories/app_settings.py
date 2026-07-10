@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime
@@ -37,6 +38,34 @@ class AppSettingsRepository:
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
                 """,
                 (str(key), "1" if enabled else "0", now, now),
+            )
+            connection.commit()
+
+
+    def get_json(self, key: str) -> dict[str, object] | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT value FROM app_settings WHERE key = ? LIMIT 1",
+                (str(key),),
+            ).fetchone()
+        if row is None or row["value"] is None:
+            return None
+        try:
+            payload = json.loads(str(row["value"]))
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def set_json(self, key: str, value: dict[str, object]) -> None:
+        now = datetime.now(UTC).isoformat()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (str(key), json.dumps(dict(value), ensure_ascii=False, sort_keys=True), now, now),
             )
             connection.commit()
 
