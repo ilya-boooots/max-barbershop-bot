@@ -11,6 +11,7 @@ from typing import Any
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.repositories.repeat_visit_events import RepeatVisitEvent, RepeatVisitEventsRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, User, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
@@ -64,7 +65,7 @@ def select_repeat_visit_text(settings: dict[str, Any] | None = None, *, event_id
 async def schedule_repeat_visit_events(*, database_path: str, now: datetime | None = None, limit: int = 500, settings: dict[str, Any] | None = None) -> int:
     """Scan mapped MAX clients and create Telegram-equivalent repeat visit events."""
 
-    cfg = settings or {}
+    cfg = settings if settings is not None else AppSettingsRepository(database_path).get_automation_setting("repeat_visit")
     if cfg.get("enabled") is False:
         logger.info("repeat_visit_scan_skipped_disabled")
         return 0
@@ -147,7 +148,8 @@ async def schedule_repeat_visit_events(*, database_path: str, now: datetime | No
 
 async def process_due_repeat_visit_events(sender: MaxMessageSender, *, database_path: str, limit: int = 100, settings: dict[str, Any] | None = None) -> int:
     now_iso = datetime.now(UTC).isoformat()
-    await schedule_repeat_visit_events(database_path=database_path, settings=settings)
+    cfg = settings if settings is not None else AppSettingsRepository(database_path).get_automation_setting("repeat_visit")
+    await schedule_repeat_visit_events(database_path=database_path, settings=cfg)
     repo = RepeatVisitEventsRepository(database_path)
     sent = 0
     for event in repo.find_due(now_iso, limit=limit):

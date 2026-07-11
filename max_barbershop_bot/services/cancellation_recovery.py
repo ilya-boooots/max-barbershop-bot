@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.repositories.cancellation_recovery_events import (
     CancellationRecoveryEvent,
     CancellationRecoveryEventsRepository,
@@ -57,7 +58,9 @@ def create_cancellation_recovery_event(
         )
         return None
     now = cancelled_at or datetime.now(UTC)
-    scheduled_at = (now.astimezone(UTC) + timedelta(hours=CANCELLATION_RECOVERY_DELAY_HOURS)).isoformat()
+    settings = AppSettingsRepository(database_path).get_automation_setting("cancellation_return")
+    delay_hours = int(settings.get("delay_hours") or CANCELLATION_RECOVERY_DELAY_HOURS)
+    scheduled_at = (now.astimezone(UTC) + timedelta(hours=delay_hours)).isoformat()
     event = CancellationRecoveryEventsRepository(database_path).create_event(
         platform=PLATFORM_MAX,
         platform_user_id=platform_user_id,
@@ -84,6 +87,9 @@ def create_cancellation_recovery_event(
 async def process_due_cancellation_recovery_events(sender: MaxMessageSender, *, database_path: str, limit: int = 50) -> int:
     """Send due recovery events once, respecting preferences and duplicate history."""
 
+    settings = AppSettingsRepository(database_path).get_automation_setting("cancellation_return")
+    if settings.get("enabled") is False:
+        return 0
     repository = CancellationRecoveryEventsRepository(database_path)
     now_iso = datetime.now(UTC).isoformat()
     sent = 0
@@ -172,7 +178,7 @@ async def _process_event(
             yclients_client_id=(user.yclients_client_id if user else None) or event.yclients_client_id,
             notification_type=CANCELLATION_RECOVERY_NOTIFICATION_TYPE,
             scheduled_for=event.effective_scheduled_send_at_utc,
-            text=CANCELLATION_RECOVERY_TEXT,
+            text=str(AppSettingsRepository(database_path).get_automation_setting("cancellation_return").get("message_text") or CANCELLATION_RECOVERY_TEXT),
             keyboard=recovery_keyboard(event.id),
             recipient_type=recipient_type,
             recipient_id=recipient,

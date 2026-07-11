@@ -10,6 +10,8 @@ from typing import Any
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
 from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
+from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
+from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
 from max_barbershop_bot.repositories.feedback import FeedbackAdminReply, FeedbackRepository, FeedbackRequest, FeedbackResponse
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
@@ -76,13 +78,16 @@ def feedback_rating_keyboard() -> MaxInlineKeyboard:
         [MaxButton(text="⭐", payload="fb:rate:1")],
     ])
 
-def feedback_review_links_keyboard() -> MaxInlineKeyboard:
-    return feedback_public_review_links_keyboard(
-        yandex_url=(os.getenv("YANDEX_REVIEW_URL") or DEFAULT_YANDEX_REVIEW_URL).strip(),
-        two_gis_url=(os.getenv("TWO_GIS_REVIEW_URL") or DEFAULT_TWO_GIS_REVIEW_URL).strip(),
-    )
+def feedback_review_links_keyboard(database_path: str | None = None) -> MaxInlineKeyboard:
+    links = AppSettingsRepository(database_path or _database_path()).get_automation_setting("review_links")
+    yandex_url = str(links.get("yandex_url") or os.getenv("YANDEX_REVIEW_URL") or DEFAULT_YANDEX_REVIEW_URL).strip()
+    two_gis_url = str(links.get("two_gis_url") or os.getenv("TWO_GIS_REVIEW_URL") or DEFAULT_TWO_GIS_REVIEW_URL).strip()
+    return feedback_public_review_links_keyboard(yandex_url=yandex_url, two_gis_url=two_gis_url)
 
 async def send_due_feedback_requests(sender: MaxMessageSender, *, database_path: str, now: datetime | None = None, timezone_name: str | None = None) -> int:
+    settings = AppSettingsRepository(database_path).get_automation_setting("post_visit_review")
+    if settings.get("enabled") is False:
+        return 0
     sent = 0
     for due in await get_due_feedback_requests(database_path=database_path, now=now, timezone_name=timezone_name):
         recipient_type, recipient_id = _recipient(due.user)
@@ -99,7 +104,7 @@ async def send_due_feedback_requests(sender: MaxMessageSender, *, database_path:
             yclients_client_id=due.request.yclients_client_id,
             notification_type=POST_VISIT_FEEDBACK_REQUEST,
             scheduled_for=due.visit_datetime.isoformat(),
-            text=REQUEST_TEXT,
+            text=str(settings.get("message_text") or REQUEST_TEXT),
             recipient_type=recipient_type,
             recipient_id=recipient_id,
             keyboard=feedback_rating_keyboard(),
@@ -116,6 +121,8 @@ async def get_due_feedback_requests(*, database_path: str, now: datetime | None 
     tz_name = normalize_branch_timezone(timezone_name or settings.branch_timezone, flow="feedback", operation="get_due_feedback_requests")
     tz = zoneinfo_or_default(tz_name, flow="feedback", operation="get_due_feedback_requests")
     now_local = (now or datetime.now(UTC)).astimezone(tz)
+    delay_hours = int(AppSettingsRepository(database_path).get_automation_setting("post_visit_review").get("delay_hours") or 2)
+    delay = timedelta(hours=delay_hours)
     repo = FeedbackRepository(database_path)
     users = UsersRepository(database_path)
     due: list[DueFeedback] = []
@@ -136,7 +143,7 @@ async def get_due_feedback_requests(*, database_path: str, now: datetime | None 
             record = _extract_record(payload)
             completed = _record_is_completed(record)
             visit_dt = _record_datetime(record, tz_name)
-            visit_finished = bool(visit_dt and visit_dt + _DELAY <= now_local)
+            visit_finished = bool(visit_dt and visit_dt + delay <= now_local)
             _log_feedback_diagnostic(platform_user_id=user.platform_user_id, yclients_record_id=attribution.yclients_record_id, record_status=_record_status(record), visit_finished=visit_finished)
             if not completed or not visit_finished or visit_dt is None:
                 continue
@@ -312,3 +319,7 @@ def _log_feedback_diagnostic(**fields: Any) -> None:
     safe["platform_user_id_present"] = bool(fields.get("platform_user_id"))
     safe["yclients_record_id_present"] = bool(fields.get("yclients_record_id"))
     logger.info("MAX post-visit feedback diagnostic: %s", safe)
+
+
+def _database_path() -> str:
+    return os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH).strip() or DEFAULT_DATABASE_PATH
