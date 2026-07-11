@@ -54,15 +54,15 @@ def normalize_phone(raw_phone: str | None) -> str | None:
 
 
 def validate_name(raw_name: str | None) -> str | None:
-    """Return a clean name when it is suitable for a barbershop profile."""
+    """Return a Telegram-compatible clean registration name."""
 
     if raw_name is None:
         return None
 
     name = " ".join(raw_name.strip().split())
-    if not (_MIN_NAME_LENGTH <= len(name) <= _MAX_NAME_LENGTH):
+    if len(name) < _MIN_NAME_LENGTH:
         return None
-    if name.isdigit() or name == FALLBACK_DISPLAY_NAME:
+    if name == FALLBACK_DISPLAY_NAME:
         return None
     return name
 
@@ -82,27 +82,26 @@ def validate_birthdate(raw_birthdate: str | None) -> BirthdateValidationResult:
 
 
 def is_registered(user: User | None) -> bool:
-    """Check whether the profile has enough data to use the bot."""
+    """Check whether PR-031 registration is complete: name plus birthdate."""
 
-    return bool(user and user.first_name and user.phone and user.birthdate)
+    return bool(user and validate_name(user.first_name) and user.birthdate)
 
 
 def save_registration_profile(
     repository: UsersRepository,
     *,
     platform_user_id: str,
-    phone: str,
     first_name: str,
     birthdate: str,
 ) -> User:
-    """Persist the collected registration data into the existing user row."""
+    """Persist the collected PR-031 registration data into the existing user row."""
 
     saved_name = validate_name(first_name) or clean_display_name(first_name)
-    if saved_name is None:
+    if saved_name is None or saved_name == FALLBACK_DISPLAY_NAME:
         raise ValueError("Имя для регистрации не может быть пустым")
     user = repository.update_profile(
         platform_user_id,
-        UserProfileUpdate(first_name=saved_name, display_name=saved_name, phone=phone, birthdate=birthdate),
+        UserProfileUpdate(first_name=saved_name, display_name=saved_name, birthdate=birthdate),
     )
     if user is None:
         raise RuntimeError("Пользователь для завершения регистрации не найден")
