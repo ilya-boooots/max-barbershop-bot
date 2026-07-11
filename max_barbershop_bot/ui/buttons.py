@@ -147,6 +147,9 @@ BROADCAST_HOME_PAYLOAD = "broadcast:home"
 BROADCAST_LOST_CLIENTS_PAYLOAD = "broadcast:lost_clients"
 BROADCAST_EFFECTIVENESS_PAYLOAD = "broadcast:effectiveness"
 BROADCAST_HISTORY_PAYLOAD = "broadcast:history"
+BROADCAST_HISTORY_ROOT_PAYLOAD = "broadcast:history:root"
+BROADCAST_HISTORY_LIST_PREFIX = "broadcast:hist:list:"
+BROADCAST_HISTORY_DETAIL_PREFIX = "broadcast:hist:detail:"
 BROADCAST_TESTS_PAYLOAD = "broadcast:tests"
 DEV_TESTS_ROOT_PAYLOAD = "broadcast:dev_tests:root"
 DEV_TESTS_PAYLOAD_PREFIX = "broadcast:dev_tests:"
@@ -951,7 +954,57 @@ def broadcast_report_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
+            [MaxButton(text="📜 История рассылок", payload=BROADCAST_HISTORY_PAYLOAD)],
             [MaxButton(text="✉️ Новая рассылка", payload=BROADCAST_NEW_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def broadcast_history_root_keyboard() -> MaxInlineKeyboard:
+    """Build Telegram-parity notification history root filters."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="📋 Все уведомления", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}all:1")],
+            [MaxButton(text="✉️ Ручные рассылки", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}manual_broadcast:1")],
+            [MaxButton(text="⭐️ Оценка после визита", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}post_visit_rating:1")],
+            [MaxButton(text="❌ Возврат после отмены", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}cancellation_recovery:1")],
+            [MaxButton(text="😔 Потерянные клиенты", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}lost_client:1")],
+            [MaxButton(text="🎂 День рождения", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}birthday:1")],
+            [MaxButton(text="🔁 Повторный визит", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}repeat_visit:1")],
+            [MaxButton(text="🔎 Поиск по клиенту", payload="broadcast:history:search")],
+            [MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def broadcast_history_list_keyboard(*, filter_key: str, page: int = 1, has_next: bool = False, broadcast_ids: list[str] | None = None) -> MaxInlineKeyboard:
+    """Build Telegram-parity history list navigation."""
+
+    rows: list[list[MaxButton]] = []
+    for index, broadcast_id in enumerate(broadcast_ids or [], start=1 + (page - 1) * 10):
+        rows.append([MaxButton(text=f"📄 Отчёт #{index}", payload=f"{BROADCAST_HISTORY_DETAIL_PREFIX}{broadcast_id}")])
+    if page > 1:
+        rows.append([MaxButton(text="⬅️ Предыдущая", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}{filter_key}:{page - 1}")])
+    if has_next:
+        rows.append([MaxButton(text="➡️ Далее", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}{filter_key}:{page + 1}")])
+    rows.extend(
+        [
+            [MaxButton(text="⬅️ Назад", payload=BROADCAST_HISTORY_ROOT_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
+        ]
+    )
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def broadcast_history_detail_keyboard() -> MaxInlineKeyboard:
+    """Build Telegram-parity broadcast report navigation."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=f"{BROADCAST_HISTORY_LIST_PREFIX}manual_broadcast:1")],
             [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)],
         ]
     )
