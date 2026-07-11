@@ -27,6 +27,7 @@ from max_barbershop_bot.ui.buttons import (
     REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX,
     SETTINGS_AUTOMATION_EDIT_PREFIX,
     SETTINGS_AUTOMATION_MODULE_PREFIX,
+    SETTINGS_AUTOMATION_ROOT_PAYLOAD,
     settings_automation_module_keyboard,
     settings_automation_root_keyboard,
 )
@@ -147,6 +148,21 @@ def test_audit_metadata_does_not_store_raw_url_or_text(db) -> None:
     assert "private-token-url" not in joined
     assert "https://reviews.example" not in joined
     assert "value_length" in joined
+
+
+def test_module_back_buttons_return_to_automation_root_like_telegram() -> None:
+    for key in [
+        "post_visit_review",
+        "cancellation_return",
+        "lost_clients",
+        "birthday",
+        "repeat_visit",
+        "anti_spam",
+        "review_links",
+        "quiet_hours",
+    ]:
+        buttons = _buttons(settings_automation_module_keyboard(key))
+        assert ("⬅️ Назад", SETTINGS_AUTOMATION_ROOT_PAYLOAD) in buttons
 
 
 def test_cta_payload_prefixes_unchanged() -> None:
