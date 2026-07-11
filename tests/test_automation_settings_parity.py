@@ -28,6 +28,8 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_AUTOMATION_EDIT_PREFIX,
     SETTINGS_AUTOMATION_MODULE_PREFIX,
     SETTINGS_AUTOMATION_ROOT_PAYLOAD,
+    SETTINGS_BACK_PAYLOAD,
+    SETTINGS_HOME_PAYLOAD,
     settings_automation_module_keyboard,
     settings_automation_root_keyboard,
 )
@@ -150,11 +152,14 @@ def test_audit_metadata_does_not_store_raw_url_or_text(db) -> None:
     assert "value_length" in joined
 
 
-def test_module_back_buttons_return_to_automation_root_like_telegram() -> None:
+def test_module_back_buttons_match_telegram_reference() -> None:
+    root_buttons = _buttons(settings_automation_module_keyboard("lost_clients"))
+    assert ("⬅️ Назад", SETTINGS_AUTOMATION_ROOT_PAYLOAD) in root_buttons
+    assert ("🏠 Главное меню", SETTINGS_HOME_PAYLOAD) in root_buttons
+
     for key in [
         "post_visit_review",
         "cancellation_return",
-        "lost_clients",
         "birthday",
         "repeat_visit",
         "anti_spam",
@@ -162,7 +167,8 @@ def test_module_back_buttons_return_to_automation_root_like_telegram() -> None:
         "quiet_hours",
     ]:
         buttons = _buttons(settings_automation_module_keyboard(key))
-        assert ("⬅️ Назад", SETTINGS_AUTOMATION_ROOT_PAYLOAD) in buttons
+        assert ("⬅️ Назад", SETTINGS_BACK_PAYLOAD) in buttons
+        assert ("🏠 Главное меню", SETTINGS_HOME_PAYLOAD) in buttons
 
 
 def test_cta_payload_prefixes_unchanged() -> None:
