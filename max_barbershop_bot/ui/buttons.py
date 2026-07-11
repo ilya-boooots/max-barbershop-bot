@@ -11,7 +11,6 @@ from max_barbershop_bot.core.permissions import (
     can_view_broadcasts,
     can_view_contacts_settings,
     can_view_notification_settings,
-    can_view_settings,
     can_view_staff,
     can_view_statistics,
     can_view_yclients,
@@ -264,6 +263,7 @@ MENU_PAYLOADS = frozenset(
         ADMIN_YCLIENTS_PAYLOAD,
         ADMIN_NOTIFICATION_HISTORY_PAYLOAD,
         ADMIN_CLIENTS_DIRECTORY_PAYLOAD,
+        SETTINGS_DIAGNOSTICS_PAYLOAD,
     }
 )
 
@@ -282,12 +282,13 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
         rows.append([MaxButton(text="📊 Статистика", payload=ADMIN_STATISTICS_PAYLOAD)])
     if can_view_staff(normalized_role):
         rows.append([MaxButton(text="👥 Персонал", payload=ADMIN_STAFF_PAYLOAD)])
-    if can_view_settings(normalized_role):
-        rows.append([MaxButton(text="⚙️ Настройки", payload=ADMIN_SETTINGS_PAYLOAD)])
+    rows.append([MaxButton(text="⚙️ Настройки", payload=ADMIN_SETTINGS_PAYLOAD)])
     if can_view_broadcasts(normalized_role):
         rows.append([MaxButton(text="📣 Рассылка", payload=ADMIN_BROADCASTS_PAYLOAD)])
+    if normalized_role == ROLE_DEVELOPER:
+        rows.append([MaxButton(text="🛠️ Разработка: Диагностика", payload=SETTINGS_DIAGNOSTICS_PAYLOAD)])
     if can_view_yclients(normalized_role):
-        rows.append([MaxButton(text="🧩 YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
+        rows.append([MaxButton(text="⚙️ Интеграция YClients", payload=ADMIN_YCLIENTS_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
 
