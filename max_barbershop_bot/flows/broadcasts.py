@@ -71,6 +71,9 @@ from max_barbershop_bot.ui.buttons import (
     BROADCAST_CONFIRM_SEND_PAYLOAD,
     BROADCAST_EFFECTIVENESS_PAYLOAD,
     BROADCAST_HISTORY_PAYLOAD,
+    BROADCAST_HISTORY_DETAIL_PREFIX,
+    BROADCAST_HISTORY_LIST_PREFIX,
+    BROADCAST_HISTORY_ROOT_PAYLOAD,
     BROADCAST_HOME_PAYLOAD,
     BROADCAST_LOST_CLIENTS_PAYLOAD,
     BROADCAST_NEW_PAYLOAD,
@@ -87,12 +90,18 @@ from max_barbershop_bot.ui.buttons import (
     broadcast_audience_keyboard,
     broadcast_confirm_keyboard,
     broadcast_menu_keyboard,
+    broadcast_history_detail_keyboard,
+    broadcast_history_list_keyboard,
+    broadcast_history_root_keyboard,
     broadcast_preview_keyboard,
     broadcast_report_keyboard,
     broadcast_text_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
     BROADCAST_ALREADY_SENDING_TEXT,
+    BROADCAST_HISTORY_EMPTY_TEXT,
+    BROADCAST_HISTORY_ROOT_TEXT,
+    BROADCAST_HISTORY_STALE_TEXT,
     BROADCAST_MENU_TEXT,
     BROADCAST_NO_ACCESS_TEXT,
     BROADCAST_NO_RECIPIENTS_TEXT,
@@ -141,6 +150,9 @@ def register_broadcast_routes(router: Router) -> None:
     router.on_callback(BROADCAST_LOST_CLIENTS_PAYLOAD, handle_lost_clients_section)
     router.on_callback(BROADCAST_EFFECTIVENESS_PAYLOAD, handle_effectiveness_section)
     router.on_callback(BROADCAST_HISTORY_PAYLOAD, handle_history_section)
+    router.on_callback(BROADCAST_HISTORY_ROOT_PAYLOAD, handle_history_section)
+    router.on_callback_prefix(BROADCAST_HISTORY_LIST_PREFIX, handle_history_list)
+    router.on_callback_prefix(BROADCAST_HISTORY_DETAIL_PREFIX, handle_history_detail)
     router.on_callback(BROADCAST_TESTS_PAYLOAD, handle_tests_section)
     router.on_callback(BROADCAST_TEST_CONFIRM_48H_PAYLOAD, handle_reminder_notification_test)
     router.on_callback(BROADCAST_TEST_REMINDER_2H_PAYLOAD, handle_reminder_notification_test)
@@ -312,23 +324,155 @@ async def handle_effectiveness_section(context: RouterContext) -> None:
     text = (
         "📊 Эффективность\n\n"
         f"Ручные рассылки: {len(rows)}\n"
-        f"✅ Отправлено: {sent}\n"
-        f"❌ Ошибок: {failed}\n"
-        f"⏭ Пропущено: {skipped}\n\n"
-        "Данные берутся из истории доставок. Фейковых метрик нет."
+        f"Отправлено уведомлений: {sent}\n"
+        f"Ошибок: {failed}\n"
+        f"Пропущено: {skipped}\n\n"
+        "Клики, записи, выручка, отзывы и конверсия не показаны: текущая MAX-история рассылок не хранит эти Telegram-метрики точно."
     )
     await context.send_text(text, keyboard=broadcast_menu_keyboard())
 
 
 async def handle_history_section(context: RouterContext) -> None:
+    if not _can_open_broadcasts(context):
+        await _send_no_access(context)
+        return
     await _answer_callback_if_needed(context)
-    from max_barbershop_bot.max_api.models import MaxInlineKeyboard
-    from max_barbershop_bot.ui.buttons import MaxButton
-    text = "📜 История уведомлений\n\nЗдесь видно, какие уведомления бот отправлял клиентам: автоматические воронки, ручные рассылки и результаты доставки."
-    buttons = [("📋 Все уведомления", "broadcast:history:all"), ("✉️ Ручные рассылки", "broadcast:history:manual"), ("⭐ Оценка после визита", "broadcast:history:feedback"), ("❌ Возврат после отмены", "broadcast:history:cancel"), ("😔 Потерянные клиенты", "broadcast:history:lost"), ("🎂 День рождения", "broadcast:history:birthday"), ("🔁 Повторный визит", "broadcast:history:repeat"), ("🔎 Поиск по клиенту", "broadcast:history:search")]
-    rows = [[MaxButton(text=label, payload=payload)] for label, payload in buttons]
-    rows += [[MaxButton(text="⬅️ Назад", payload=BROADCAST_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=BROADCAST_HOME_PAYLOAD)]]
-    await context.send_text(text, keyboard=MaxInlineKeyboard.from_rows(rows))
+    await context.send_text(BROADCAST_HISTORY_ROOT_TEXT, keyboard=broadcast_history_root_keyboard())
+
+
+async def handle_history_list(context: RouterContext) -> None:
+    if not _can_open_broadcasts(context):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    filter_key, page = _parse_history_list_payload(context.event.callback_payload or "")
+    repo = OmnichannelBroadcastRepository(_database_path())
+    rows = repo.list_recent_broadcasts(limit=11, filter_key=filter_key, offset=(page - 1) * 10)
+    shown = rows[:10]
+    has_next = len(rows) > 10
+    title = _history_filter_title(filter_key)
+    lines = [title]
+    if not shown:
+        lines.append(f"\n{BROADCAST_HISTORY_EMPTY_TEXT}")
+    for index, row in enumerate(shown, start=1 + (page - 1) * 10):
+        lines.extend(_format_broadcast_history_row(row, index))
+    ids = [str(row.get("broadcast_id") or "") for row in shown if row.get("broadcast_id")]
+    await context.send_text("\n".join(lines)[:3900], keyboard=broadcast_history_list_keyboard(filter_key=filter_key, page=page, has_next=has_next, broadcast_ids=ids))
+
+
+async def handle_history_detail(context: RouterContext) -> None:
+    if not _can_open_broadcasts(context):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    broadcast_id = (context.event.callback_payload or "").removeprefix(BROADCAST_HISTORY_DETAIL_PREFIX).strip()
+    row = OmnichannelBroadcastRepository(_database_path()).get_broadcast_detail(broadcast_id)
+    if row is None:
+        await context.send_text(BROADCAST_HISTORY_STALE_TEXT, keyboard=broadcast_history_detail_keyboard())
+        return
+    await context.send_text(_format_broadcast_history_detail(row), keyboard=broadcast_history_detail_keyboard())
+
+
+def _parse_history_list_payload(payload: str) -> tuple[str, int]:
+    raw = payload.removeprefix(BROADCAST_HISTORY_LIST_PREFIX)
+    parts = raw.split(":")
+    filter_key = parts[0] if parts and parts[0] else "all"
+    try:
+        page = max(1, int(parts[1])) if len(parts) > 1 else 1
+    except ValueError:
+        page = 1
+    return filter_key, page
+
+
+def _history_filter_title(key: str) -> str:
+    return {
+        "all": "📜 Все уведомления",
+        "manual_broadcast": "✉️ Ручные рассылки",
+        "post_visit_rating": "⭐️ Оценка после визита",
+        "cancellation_recovery": "❌ Возврат после отмены",
+        "lost_client": "😔 Потерянные клиенты",
+        "birthday": "🎂 День рождения",
+        "repeat_visit": "🔁 Повторный визит",
+    }.get(key, "📜 История уведомлений")
+
+
+def _format_broadcast_history_row(row: dict[str, object], index: int) -> list[str]:
+    broadcast_id = str(row.get("broadcast_id") or "")
+    audience = _history_audience_label(str(row.get("audience_source") or ""))
+    status = _history_status_label(str(row.get("status") or ""))
+    when = _history_timestamp(row)
+    sent = int(row.get("sent_count") or 0)
+    skipped = int(row.get("skipped_count") or 0)
+    failed = int(row.get("failed_count") or 0)
+    blocked = int(row.get("blocked_count") or 0)
+    return [
+        f"\n{index}. Рассылка #{broadcast_id}",
+        f"Статус: {status}",
+        f"Аудитория: {audience}",
+        f"Дата: {when}",
+        f"Отправлено: {sent}",
+        f"Ошибок: {failed}",
+        f"Заблокировали бота: {blocked}",
+        f"Пропущено: {skipped}",
+    ]
+
+
+def _format_broadcast_history_detail(row: dict[str, object]) -> str:
+    audience = _history_audience_label(str(row.get("audience_source") or ""))
+    total = int(row.get("delivery_count") or 0)
+    sent = int(row.get("sent_count") or 0)
+    failed = int(row.get("failed_count") or 0)
+    blocked = int(row.get("blocked_count") or 0)
+    skipped = int(row.get("skipped_count") or 0)
+    status = _history_status_label(str(row.get("status") or ""))
+    lines = [
+        "✅ Рассылка завершена" if str(row.get("status") or "") == "sent" else "📜 Отчёт по рассылке",
+        "",
+        f"Аудитория: {audience}",
+        f"Всего клиентов: {total}",
+        f"Отправлено: {sent}",
+        f"Ошибок: {failed}",
+        f"Заблокировали бота: {blocked}",
+        f"Пропущено: {skipped}",
+        f"Статус: {status}",
+        f"Создана: {row.get('created_at') or '—'}",
+        f"Завершена: {row.get('finished_at') or '—'}",
+    ]
+    attachment_type = str(row.get("attachment_type") or "").strip()
+    if attachment_type:
+        lines.append(f"Медиа: {attachment_type}")
+    return "\n".join(lines)
+
+
+def _history_timestamp(row: dict[str, object]) -> str:
+    return str(row.get("finished_at") or row.get("started_at") or row.get("updated_at") or row.get("created_at") or "—")
+
+
+def _history_status_label(status: str) -> str:
+    return {
+        "draft": "черновик",
+        "sending": "отправляется",
+        "sent": "отправлено",
+        "failed": "ошибка",
+        "scheduled": "запланировано",
+    }.get(status, status or "—")
+
+
+def _history_audience_label(audience_key: str) -> str:
+    return {
+        "yclients_all_clients": "👥 Все клиенты",
+        "all_clients": "👥 Все клиенты",
+        "active_30": "🔥 Активные за 30 дней",
+        "lost_30": "😴 Потерянные 30 дней",
+        "lost_60": "😴 Потерянные 60 дней",
+        "lost_90": "😴 Потерянные 90 дней",
+        "no_future_booking": "📅 Без будущей записи",
+        "cancelled_recent": "❌ Отменили запись",
+        "birthday_soon": "🎂 День рождения скоро",
+        "self_test": "🧪 Отправить себе",
+        "send_to_self": "🧪 Отправить себе",
+        "by_service_category": "✂️ По категории услуг",
+    }.get(audience_key, audience_key or "—")
 
 
 async def handle_safe_broadcast_subscreen(context: RouterContext) -> None:

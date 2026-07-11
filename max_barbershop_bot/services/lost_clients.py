@@ -582,11 +582,11 @@ async def run_lost_clients_loop(
 
 
 def _load_lost_clients_settings(database_path: str) -> dict[str, Any]:
-    return _load_json_setting(database_path, "lost_clients", default={"enabled": False, "threshold_days": [30, 60, 90], "exclude_has_future_booking": True})
+    return dict(AppSettingsRepository(database_path).get_automation_setting("lost_clients"))
 
 
 def _load_anti_spam_settings(database_path: str) -> dict[str, Any]:
-    return _load_json_setting(database_path, "anti_spam", default={"min_interval_hours": 48, "enabled": True})
+    return dict(AppSettingsRepository(database_path).get_automation_setting("anti_spam"))
 
 
 def _load_json_setting(database_path: str, key: str, *, default: dict[str, Any]) -> dict[str, Any]:

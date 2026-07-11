@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -58,6 +57,7 @@ async def run_birthday_scan(sender: MaxMessageSender, *, database_path: str, for
     today = company_time.today()
     branch_timezone = company_time.get_branch_timezone_name()
     days_before = int(settings.get("send_days_before") or BIRTHDAY_SEND_DAYS_BEFORE)
+    message_text = str(settings.get("message_text") or BIRTHDAY_MESSAGE_TEXT)
     summary = BirthdayScanSummary()
 
     for user in users_repo.list_birthday_candidates(platform=PLATFORM_MAX):
@@ -73,6 +73,7 @@ async def run_birthday_scan(sender: MaxMessageSender, *, database_path: str, for
                 days_before=days_before,
                 source=source,
                 is_test=is_test,
+                message_text=message_text,
             )
             counters[outcome] += 1
         except Exception as exc:  # noqa: BLE001 - background funnel must not crash bot.
@@ -124,6 +125,7 @@ async def _process_user(
     days_before: int,
     source: str,
     is_test: bool,
+    message_text: str = BIRTHDAY_MESSAGE_TEXT,
 ) -> str:
     birth_date = _parse_birth_date(user.birthdate)
     birth_year = today.year
@@ -169,7 +171,7 @@ async def _process_user(
             scheduled_for=datetime.now(UTC).isoformat(),
             recipient_type=recipient_type,
             recipient_id=recipient_id,
-            text=BIRTHDAY_MESSAGE_TEXT,
+            text=message_text,
             keyboard=build_birthday_booking_keyboard(event.id),
             metadata={"birthday_year": birth_year, "branch_timezone": branch_timezone, "source": source, "is_test": is_test},
         )
@@ -237,20 +239,13 @@ def apply_birthday_warning(base_comment: str, *, booking_source: str | None, bir
 
 
 def _birthday_settings(database_path: str) -> dict[str, object]:
-    repo = AppSettingsRepository(database_path)
-    enabled = repo.get_bool("birthday", default=True)
-    days_before = BIRTHDAY_SEND_DAYS_BEFORE
-    try:
-        raw = repo.get_text("birthday_settings", default="")  # type: ignore[attr-defined]
-    except AttributeError:
-        raw = ""
-    if raw:
-        try:
-            data = json.loads(raw)
-            days_before = int(data.get("send_days_before") or days_before)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            days_before = BIRTHDAY_SEND_DAYS_BEFORE
-    return {"enabled": enabled, "send_days_before": days_before}
+    settings = AppSettingsRepository(database_path).get_automation_setting("birthday")
+    return {
+        "enabled": bool(settings.get("enabled", True)),
+        "send_days_before": int(settings.get("send_days_before") or BIRTHDAY_SEND_DAYS_BEFORE),
+        "message_text": str(settings.get("message_text") or BIRTHDAY_MESSAGE_TEXT),
+        "gift_text": str(settings.get("gift_text") or ""),
+    }
 
 
 def _recipient(user: User) -> tuple[str, str | None]:

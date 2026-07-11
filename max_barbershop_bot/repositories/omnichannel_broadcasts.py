@@ -102,27 +102,69 @@ class OmnichannelBroadcastRepository:
             connection.commit()
 
 
-    def list_recent_broadcasts(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list_recent_broadcasts(self, limit: int = 20, filter_key: str | None = None, offset: int = 0) -> list[dict[str, Any]]:
         """Return recent manual omnichannel broadcasts for admin history/effectiveness."""
 
         safe_limit = max(1, min(int(limit), 100))
+        safe_offset = max(0, int(offset))
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
                 SELECT b.*,
                        SUM(CASE WHEN d.delivery_status = 'sent' THEN 1 ELSE 0 END) AS sent_count,
                        SUM(CASE WHEN d.delivery_status IN ('skipped_no_tg_id', 'skipped_unsubscribed', 'skipped_media_unsupported', 'skipped_sender_unavailable') THEN 1 ELSE 0 END) AS skipped_count,
-                       SUM(CASE WHEN d.delivery_status IN ('failed', 'blocked', 'skipped_invalid') THEN 1 ELSE 0 END) AS failed_count,
+                       SUM(CASE WHEN d.delivery_status IN ('failed', 'skipped_invalid') THEN 1 ELSE 0 END) AS failed_count,
+                       SUM(CASE WHEN d.delivery_status = 'blocked' THEN 1 ELSE 0 END) AS blocked_count,
                        COUNT(d.id) AS delivery_count
                 FROM omnichannel_broadcasts b
                 LEFT JOIN omnichannel_broadcast_delivery d ON d.broadcast_id = b.broadcast_id
+                WHERE ? IN ('all', 'manual_broadcast')
                 GROUP BY b.broadcast_id
                 ORDER BY COALESCE(b.finished_at, b.started_at, b.updated_at, b.created_at) DESC
                 LIMIT ?
+                OFFSET ?
                 """,
-                (safe_limit,),
+                (filter_key or "manual_broadcast", safe_limit, safe_offset),
             ).fetchall()
         return [{key: row[key] for key in row.keys()} for row in rows]
+
+    def get_broadcast_detail(self, broadcast_id: str) -> dict[str, Any] | None:
+        """Return one broadcast with Telegram report counters from delivery rows."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT b.*,
+                       SUM(CASE WHEN d.delivery_status = 'sent' THEN 1 ELSE 0 END) AS sent_count,
+                       SUM(CASE WHEN d.delivery_status IN ('skipped_no_tg_id', 'skipped_unsubscribed', 'skipped_media_unsupported', 'skipped_sender_unavailable') THEN 1 ELSE 0 END) AS skipped_count,
+                       SUM(CASE WHEN d.delivery_status IN ('failed', 'skipped_invalid') THEN 1 ELSE 0 END) AS failed_count,
+                       SUM(CASE WHEN d.delivery_status = 'blocked' THEN 1 ELSE 0 END) AS blocked_count,
+                       COUNT(d.id) AS delivery_count
+                FROM omnichannel_broadcasts b
+                LEFT JOIN omnichannel_broadcast_delivery d ON d.broadcast_id = b.broadcast_id
+                WHERE b.broadcast_id = ?
+                GROUP BY b.broadcast_id
+                """,
+                (broadcast_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {key: row[key] for key in row.keys()}
+
+    def count_delivery_statuses_for_broadcast(self, broadcast_id: str) -> dict[str, int]:
+        """Return delivery status counters for one broadcast."""
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT delivery_status, COUNT(*) AS count
+                FROM omnichannel_broadcast_delivery
+                WHERE broadcast_id = ?
+                GROUP BY delivery_status
+                """,
+                (broadcast_id,),
+            ).fetchall()
+        return {str(row["delivery_status"]): int(row["count"] or 0) for row in rows}
 
     def count_delivery_statuses(self) -> dict[str, int]:
         """Return delivery status counters for broadcast effectiveness."""
