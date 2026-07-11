@@ -60,6 +60,12 @@ async def _show_start_screen(context: RouterContext) -> None:
         await start_registration(context, force_first_step=True)
         return
 
+    from max_barbershop_bot.services.registration import is_registered
+
+    if not is_registered(user):
+        await start_registration(context)
+        return
+
     state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
     screen = main_menu_screen(
         role,
