@@ -39,7 +39,7 @@ from max_barbershop_bot.repositories.repeat_visit_events import RepeatVisitEvent
 from max_barbershop_bot.flows.staff import handle_staff_menu
 from max_barbershop_bot.flows.yclients_settings import handle_connection_check, handle_yclients_menu
 from max_barbershop_bot.flows.support import render_support_message
-from max_barbershop_bot.repositories.app_settings import AppSettingsRepository
+from max_barbershop_bot.repositories.app_settings import AUTOMATION_SETTINGS_DEFAULTS, AppSettingsRepository
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.support_settings import (
     SupportSettingsRepository,
@@ -1252,16 +1252,7 @@ async def handle_settings_notification_history(context: RouterContext) -> None:
     await handle_notification_history(context)
 
 
-AUTOMATION_DEFAULTS: dict[str, dict[str, object]] = {
-    "post_visit_review": {"enabled": True, "delay_hours": 2, "message_text": "Как прошёл ваш визит?\n\nОцените, пожалуйста, от 1 до 5 ⭐", "rating_scale": "1-5", "high_rating_behavior": "4-5: ask_public_review", "low_rating_behavior": "1-3: ask_comment_notify_admin"},
-    "cancellation_return": {"enabled": True, "delay_hours": 2, "message_text": "Видим, что вы отменили запись 😔\n\nМожем подобрать другое удобное время.", "exclude_has_future_booking": True},
-    "lost_clients": {"enabled": True, "threshold_days": [30, 60, 90], "exclude_has_future_booking": True, "text_30": "Давно вас не видели 😊\n\nСамое время обновить стрижку.", "text_60": "Похоже, вы давно не заглядывали к нам.\n\nПодберём удобное время?", "text_90": "Мы скучаем 😄\n\nДля вас есть специальное предложение на возвращение."},
-    "birthday": {"enabled": True, "send_days_before": 7, "once_per_year": True, "message_text": "Скоро ваш день рождения, поздравляем 🎉 😊\n\nХотим сделать вам приятный подарок - покажите это сообщение администратору при оплате.", "gift_text": "Покажите это сообщение администратору при оплате."},
-    "repeat_visit": {"enabled": True, "delay_days": 30, "exclude_has_future_booking": True, "respect_marketing_unsubscribe": True, "respect_anti_spam": True, "respect_working_hours": True, "templates": ["Пора обновить стрижку? 😊\n\nОбычно к этому времени форма уже начинает теряться.", "Кажется, самое время снова заглянуть к нам ✂️\n\nПодберём удобное окно для визита?", "Ваша стрижка уже могла немного потерять форму 😊\n\nСамое время освежить образ.", "Давно не виделись ✂️\n\nМожем подобрать удобное время к вашему мастеру.", "Хотите снова выглядеть свежо? 😊\n\nЗапишитесь на удобное время — мы всё подготовим."], "service_rules": []},
-    "anti_spam": {"enabled": True, "max_weekly_marketing": 2, "min_interval_hours": 48, "respect_marketing_unsubscribe": True, "service_notifications_ignore_marketing_unsubscribe": True, "block_duplicate_same_event": True},
-    "review_links": {"yandex_url": "", "two_gis_url": ""},
-    "quiet_hours": {"enabled": True, "start": "21:00", "end": "09:00", "outside_allowed_behavior": "postpone_to_next_allowed", "working_hours_source": "yclients"},
-}
+AUTOMATION_DEFAULTS = AUTOMATION_SETTINGS_DEFAULTS
 AUTOMATION_KEYS = tuple(AUTOMATION_DEFAULTS)
 MAX_AUTOMATION_TEXT_LEN = 1000
 
@@ -1269,7 +1260,10 @@ def get_automation_setting(key: str, repository: AppSettingsRepository | None = 
     if key not in AUTOMATION_DEFAULTS:
         return {}
     merged = copy.deepcopy(AUTOMATION_DEFAULTS[key])
-    stored = (repository or AppSettingsRepository(_database_path())).get_json(f"automation:{key}")
+    repo = repository or AppSettingsRepository(_database_path())
+    stored = repo.get_json(key)
+    if stored is None:
+        stored = repo.get_json(f"automation:{key}")
     if stored:
         merged.update(stored)
     return merged
@@ -1277,7 +1271,7 @@ def get_automation_setting(key: str, repository: AppSettingsRepository | None = 
 def upsert_automation_setting(key: str, value: dict[str, object], repository: AppSettingsRepository | None = None) -> None:
     if key not in AUTOMATION_DEFAULTS:
         return
-    (repository or AppSettingsRepository(_database_path())).set_json(f"automation:{key}", value)
+    (repository or AppSettingsRepository(_database_path())).set_json(key, value)
 
 def automation_edit_prompt(key: str, field: str, current: object) -> str:
     hints = {"delay_hours": "Введите положительное число часов:", "min_interval_hours": "Введите положительное число часов:", "delay_days": "Введите положительное число дней:", "send_days_before": "Введите положительное число дней:", "max_weekly_marketing": "Введите положительное число сообщений в неделю:", "threshold_days": "Введите три срока через /, например 30/60/90:", "range": "Введите интервал в формате HH:MM-HH:MM, например 21:00-09:00:", "yandex_url": "Введите ссылку Яндекс или отправьте пустое значение для очистки:", "two_gis_url": "Введите ссылку 2ГИС или отправьте пустое значение для очистки:"}
@@ -1367,7 +1361,7 @@ async def handle_settings_automation_input(context: RouterContext) -> None:
         start, end = raw.split("-"); setting["start"] = start; setting["end"] = end
     else: setting[field] = value
     upsert_automation_setting(key, setting)
-    _audit(context, actor_role, action="automation_setting_changed", section="automation", metadata={"setting_key": key, "field": field})
+    _audit(context, actor_role, action="automation_setting_changed", section="automation", metadata={"setting_key": key, "field": field, "value_type": type(value).__name__, "value_length": len(str(value)) if value is not None else 0})
     await context.send_text("Сохранено ✅"); await _show_automation_module(context, key)
 
 def _parse_automation_value(key: str, field: str, raw: str, setting: dict[str, object]) -> object:

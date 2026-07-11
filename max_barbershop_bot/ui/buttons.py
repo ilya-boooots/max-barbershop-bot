@@ -595,7 +595,7 @@ def settings_automation_module_keyboard(key: str, *, enabled: bool = False) -> M
     }
     for label, field in mapping.get(key, []):
         rows.append([MaxButton(text=label, payload=f"{SETTINGS_AUTOMATION_EDIT_PREFIX}{key}:{field}")])
-    rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_AUTOMATION_ROOT_PAYLOAD if key == "lost_clients" else SETTINGS_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_AUTOMATION_ROOT_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 

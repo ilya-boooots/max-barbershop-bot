@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
 from contextlib import closing
@@ -10,6 +11,70 @@ from datetime import UTC, datetime
 
 NOTIFICATIONS_ENABLED_KEY = "notifications_enabled"
 DEFAULT_NOTIFICATIONS_ENABLED = True
+
+AUTOMATION_SETTINGS_DEFAULTS: dict[str, dict[str, object]] = {
+    "post_visit_review": {
+        "enabled": True,
+        "delay_hours": 2,
+        "message_text": "Как прошёл ваш визит?\n\nОцените, пожалуйста, от 1 до 5 ⭐",
+        "rating_scale": "1-5",
+        "high_rating_behavior": "4-5: ask_public_review",
+        "low_rating_behavior": "1-3: ask_comment_notify_admin",
+    },
+    "cancellation_return": {
+        "enabled": True,
+        "delay_hours": 2,
+        "message_text": "Видим, что вы отменили запись 😔\n\nМожем подобрать другое удобное время.",
+        "exclude_has_future_booking": True,
+    },
+    "lost_clients": {
+        "enabled": True,
+        "threshold_days": [30, 60, 90],
+        "exclude_has_future_booking": True,
+        "text_30": "Давно вас не видели 😊\n\nСамое время обновить стрижку.",
+        "text_60": "Похоже, вы давно не заглядывали к нам.\n\nПодберём удобное время?",
+        "text_90": "Мы скучаем 😄\n\nДля вас есть специальное предложение на возвращение.",
+    },
+    "birthday": {
+        "enabled": True,
+        "send_days_before": 7,
+        "once_per_year": True,
+        "message_text": "Скоро ваш день рождения, поздравляем 🎉 😊\n\nХотим сделать вам приятный подарок - покажите это сообщение администратору при оплате.",
+        "gift_text": "Покажите это сообщение администратору при оплате.",
+    },
+    "repeat_visit": {
+        "enabled": True,
+        "delay_days": 30,
+        "exclude_has_future_booking": True,
+        "respect_marketing_unsubscribe": True,
+        "respect_anti_spam": True,
+        "respect_working_hours": True,
+        "templates": [
+            "Пора обновить стрижку? 😊\n\nОбычно к этому времени форма уже начинает теряться.",
+            "Кажется, самое время снова заглянуть к нам ✂️\n\nПодберём удобное окно для визита?",
+            "Ваша стрижка уже могла немного потерять форму 😊\n\nСамое время освежить образ.",
+            "Давно не виделись ✂️\n\nМожем подобрать удобное время к вашему мастеру.",
+            "Хотите снова выглядеть свежо? 😊\n\nЗапишитесь на удобное время — мы всё подготовим.",
+        ],
+        "service_rules": [],
+    },
+    "anti_spam": {
+        "enabled": True,
+        "max_weekly_marketing": 2,
+        "min_interval_hours": 48,
+        "respect_marketing_unsubscribe": True,
+        "service_notifications_ignore_marketing_unsubscribe": True,
+        "block_duplicate_same_event": True,
+    },
+    "review_links": {"yandex_url": "", "two_gis_url": ""},
+    "quiet_hours": {
+        "enabled": True,
+        "start": "21:00",
+        "end": "09:00",
+        "outside_allowed_behavior": "postpone_to_next_allowed",
+        "working_hours_source": "yclients",
+    },
+}
 
 
 class AppSettingsRepository:
@@ -26,7 +91,14 @@ class AppSettingsRepository:
             ).fetchone()
         if row is None or row["value"] is None:
             return bool(default)
-        return _value_to_bool(row["value"], default=default)
+        raw_value = row["value"]
+        try:
+            payload = json.loads(str(raw_value))
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict) and isinstance(payload.get("enabled"), bool):
+            return bool(payload["enabled"])
+        return _value_to_bool(raw_value, default=default)
 
     def set_bool(self, key: str, enabled: bool) -> None:
         now = datetime.now(UTC).isoformat()
@@ -68,6 +140,20 @@ class AppSettingsRepository:
                 (str(key), json.dumps(dict(value), ensure_ascii=False, sort_keys=True), now, now),
             )
             connection.commit()
+
+
+    def get_automation_setting(self, key: str) -> dict[str, object]:
+        default = AUTOMATION_SETTINGS_DEFAULTS.get(str(key), {})
+        merged = copy.deepcopy(default)
+        stored = self.get_json(str(key))
+        if stored is None:
+            stored = self.get_json(f"automation:{key}")
+        if stored:
+            merged.update(stored)
+        return merged
+
+    def set_automation_setting(self, key: str, value: dict[str, object]) -> None:
+        self.set_json(str(key), value)
 
     def notifications_enabled(self) -> bool:
         """Return global notification switch; missing means enabled."""
