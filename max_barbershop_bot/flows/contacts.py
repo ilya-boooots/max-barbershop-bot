@@ -8,7 +8,7 @@ from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
-from max_barbershop_bot.services.contacts import ContactsService, build_route_links, format_contacts_text
+from max_barbershop_bot.services.contacts import ContactsService, format_contacts_text
 from max_barbershop_bot.ui.buttons import MENU_CONTACTS_PAYLOAD, contacts_keyboard
 
 
@@ -28,7 +28,7 @@ async def handle_contacts(context: RouterContext) -> None:
     contact_info = await service.get_contacts()
     await context.send_text(
         format_contacts_text(contact_info),
-        keyboard=contacts_keyboard(build_route_links(contact_info)),
+        keyboard=contacts_keyboard(),
     )
 
 

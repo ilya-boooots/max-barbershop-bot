@@ -1087,17 +1087,15 @@ def booking_stale_keyboard() -> MaxInlineKeyboard:
     )
 
 
-def contacts_keyboard(route_links: dict[str, str]) -> MaxInlineKeyboard:
-    """Build contacts route buttons plus Back/Home navigation."""
+def contacts_keyboard() -> MaxInlineKeyboard:
+    """Build the public contacts keyboard matching active Telegram Back/Home navigation."""
 
-    rows: list[list[MaxButton]] = []
-    for label in ("Яндекс Карты", "2GIS", "Google Maps"):
-        url = str(route_links.get(label) or "").strip()
-        if url.startswith(("https://", "http://")):
-            rows.append([MaxButton(text=label, type="link", url=url)])
-    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
-    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
-    return MaxInlineKeyboard.from_rows(rows)
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
 
 
 def feedback_public_review_links_keyboard(*, yandex_url: str, two_gis_url: str) -> MaxInlineKeyboard:
