@@ -55,6 +55,14 @@ SETTINGS_ROLES_PAYLOAD = "settings:roles"
 SETTINGS_DIAGNOSTICS_PAYLOAD = "settings:diagnostics"
 SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD = "settings:diagnostics:notification_history"
 SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD = "settings:diagnostics:yclients_check"
+SETTINGS_PROFILE_PAYLOAD = "settings:profile"
+SETTINGS_PROFILE_EDIT_NAME_PAYLOAD = "settings:profile:name"
+SETTINGS_PROFILE_SAVE_NAME_PAYLOAD = "settings:profile:name:save"
+SETTINGS_PROFILE_RETRY_NAME_PAYLOAD = "settings:profile:name:retry"
+SETTINGS_PROFILE_EDIT_PHONE_PAYLOAD = "settings:profile:phone"
+SETTINGS_PROFILE_SAVE_PHONE_PAYLOAD = "settings:profile:phone:save"
+SETTINGS_PROFILE_RETRY_PHONE_PAYLOAD = "settings:profile:phone:retry"
+SETTINGS_PROFILE_BACK_PAYLOAD = "settings:profile:back"
 DEV_DIAGNOSTICS_REFRESH_PAYLOAD = "devdiag:refresh"
 DEV_DIAGNOSTICS_FAILED_NOTIFICATIONS_PAYLOAD = "devdiag:notif_failed"
 DEV_DIAGNOSTICS_BOT_LOGS_PAYLOAD = "devdiag:bot_logs"
@@ -358,7 +366,7 @@ def settings_menu_keyboard(role: str | None = None, *, protected_developer: bool
     """Build settings hub buttons for the current role."""
 
     normalized_role = normalize_role(role)
-    rows: list[list[MaxButton]] = []
+    rows: list[list[MaxButton]] = [[MaxButton(text="👤 Мои данные", payload=SETTINGS_PROFILE_PAYLOAD)]]
     if can_view_yclients_settings(normalized_role):
         rows.append([MaxButton(text="🧩 YClients", payload=SETTINGS_YCLIENTS_PAYLOAD)])
     if can_view_contacts_settings(normalized_role):
@@ -374,6 +382,56 @@ def settings_menu_keyboard(role: str | None = None, *, protected_developer: bool
     rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
+
+
+def settings_profile_root_keyboard() -> MaxInlineKeyboard:
+    """Build user profile settings buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✏️ Изменить имя", payload=SETTINGS_PROFILE_EDIT_NAME_PAYLOAD)],
+            [MaxButton(text="📱 Изменить телефон", payload=SETTINGS_PROFILE_EDIT_PHONE_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_PROFILE_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def settings_profile_name_confirm_keyboard() -> MaxInlineKeyboard:
+    """Build name update confirmation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Сохранить", payload=SETTINGS_PROFILE_SAVE_NAME_PAYLOAD)],
+            [MaxButton(text="✏️ Ввести заново", payload=SETTINGS_PROFILE_RETRY_NAME_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_PROFILE_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def settings_profile_phone_confirm_keyboard() -> MaxInlineKeyboard:
+    """Build phone update confirmation buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="✅ Сохранить", payload=SETTINGS_PROFILE_SAVE_PHONE_PAYLOAD)],
+            [MaxButton(text="📱 Ввести заново", payload=SETTINGS_PROFILE_RETRY_PHONE_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_PROFILE_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
+
+
+def settings_profile_input_keyboard() -> MaxInlineKeyboard:
+    """Build profile input Back/Home buttons."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_PROFILE_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
+        ]
+    )
 
 
 

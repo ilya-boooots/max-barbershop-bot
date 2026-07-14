@@ -294,6 +294,29 @@ SETTINGS_MENU_TEXT = """⚙️ Настройки
 
 Выберите раздел 👇"""
 SETTINGS_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу."
+SETTINGS_REGISTRATION_REQUIRED_TEXT = "Сначала пройдите регистрацию: нажмите /start"
+SETTINGS_PROFILE_TEXT = """👤 Мои данные
+
+Имя: {name}
+Телефон: {phone}
+
+Эти данные используются для записи."""
+SETTINGS_PROFILE_NAME_PROMPT_TEXT = """👤 Текущее имя: {name}
+
+Введите новое имя:"""
+SETTINGS_PROFILE_NAME_INVALID_TEXT = "⚠️ Укажите корректное имя (от 2 до 60 символов)."
+SETTINGS_PROFILE_NAME_CONFIRM_TEXT = """Проверьте новое имя:
+{name}"""
+SETTINGS_PROFILE_NAME_SAVED_TEXT = "✅ Имя обновлено, {name}"
+SETTINGS_PROFILE_PHONE_PROMPT_TEXT = """📱 Текущий телефон: {phone}
+Отправьте новый номер телефона или введите его вручную."""
+SETTINGS_PROFILE_PHONE_INVALID_TEXT = """⚠️ Номер телефона указан некорректно.
+Проверьте номер и попробуйте ещё раз."""
+SETTINGS_PROFILE_PHONE_DUPLICATE_TEXT = "⚠️ Этот номер уже привязан к другому пользователю. Укажите другой телефон."
+SETTINGS_PROFILE_PHONE_CONFIRM_TEXT = """Проверьте данные перед сохранением:
+Текущий телефон: {current_phone}
+Новый телефон: {new_phone}"""
+SETTINGS_PROFILE_PHONE_SAVED_TEXT = "✅ Телефон обновлён"
 SETTINGS_CONTACTS_EDIT_SOON_TEXT = "Редактирование контактов добавим отдельным шагом 🔧"
 SETTINGS_NOTIFICATIONS_EDIT_SOON_TEXT = "Управление уведомлениями добавим отдельным шагом 🔧"
 
