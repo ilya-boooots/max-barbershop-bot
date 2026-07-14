@@ -215,7 +215,7 @@ def contact_info_from_yclients(
         title=title,
         address=_first_text(company, "address", "short_address"),
         phone=_first_text(company, "phone", "phones", "phone_number"),
-        schedule=_first_text(company, "schedule", "working_hours", "work_schedule", "timetable"),
+        schedule=_first_text(company, "schedule", "schedule_text", "work_time", "working_hours", "work_schedule"),
         website=_first_text(company, "website", "site", "url"),
         map_url=_first_text(company, "map_url", "maps_url", "map", "route_url"),
         telegram=_first_text(company, "telegram"),
