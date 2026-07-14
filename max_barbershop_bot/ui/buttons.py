@@ -1442,10 +1442,12 @@ def _my_booking_button_label(item: object, *, index: int, timezone_name: str | N
     return label[:80]
 
 
-def my_booking_entry_keyboard(*, can_cancel: bool = True, show_all: bool = False) -> MaxInlineKeyboard:
+def my_booking_entry_keyboard(*, can_cancel: bool = True, show_all: bool = False, can_reschedule: bool = True) -> MaxInlineKeyboard:
     """Build Telegram-reference actions for the nearest My bookings card."""
 
-    rows: list[list[MaxButton]] = [[MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)]]
+    rows: list[list[MaxButton]] = []
+    if can_reschedule:
+        rows.append([MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)])
     rows.append([MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
     rows.append([MaxButton(text="🔂 Повторить запись", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)])
     if show_all:
@@ -1456,7 +1458,7 @@ def my_booking_entry_keyboard(*, can_cancel: bool = True, show_all: bool = False
     return MaxInlineKeyboard.from_rows(rows)
 
 
-def my_booking_active_card_keyboard(*, index: int, total: int, can_cancel: bool = True) -> MaxInlineKeyboard:
+def my_booking_active_card_keyboard(*, index: int, total: int, can_cancel: bool = True, can_reschedule: bool = True) -> MaxInlineKeyboard:
     """Build Telegram-reference carousel controls for active bookings."""
 
     safe_index = min(max(index, 0), max(total - 1, 0))
@@ -1468,7 +1470,8 @@ def my_booking_active_card_keyboard(*, index: int, total: int, can_cancel: bool 
         pager.append(MaxButton(text="▶️", payload=f"{MY_BOOKINGS_ACTIVE_PAGE_PAYLOAD_PREFIX}{safe_index + 1}"))
 
     rows: list[list[MaxButton]] = [pager]
-    rows.append([MaxButton(text="🔁 Перенести", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)])
+    if can_reschedule:
+        rows.append([MaxButton(text="🔁 Перенести", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)])
     rows.append([MaxButton(text="❌ Отменить", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
     rows.append([MaxButton(text="🔂 Повторить", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=MENU_MY_BOOKINGS_PAYLOAD)])
@@ -1504,12 +1507,14 @@ def my_bookings_empty_keyboard(*, show_history: bool = False) -> MaxInlineKeyboa
     return MaxInlineKeyboard.from_rows(rows)
 
 
-def my_booking_details_keyboard(*, can_cancel: bool = True, is_active: bool = True) -> MaxInlineKeyboard:
+def my_booking_details_keyboard(*, can_cancel: bool = True, is_active: bool = True, can_reschedule: bool | None = None) -> MaxInlineKeyboard:
     """Build selected booking actions."""
 
     rows: list[list[MaxButton]] = []
-    if is_active:
+    show_reschedule = is_active if can_reschedule is None else can_reschedule
+    if show_reschedule:
         rows.append([MaxButton(text="🔁 Перенести запись", payload=MY_BOOKINGS_RESCHEDULE_START_PAYLOAD)])
+    if is_active:
         rows.append([MaxButton(text="❌ Отменить запись", payload=MY_BOOKINGS_CANCEL_START_PAYLOAD)])
     rows.append([MaxButton(text="🔂 Повторить запись", payload=MY_BOOKINGS_REPEAT_START_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=MY_BOOKINGS_BACK_PAYLOAD)])

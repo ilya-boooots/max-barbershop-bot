@@ -37,6 +37,7 @@ from max_barbershop_bot.services.my_bookings import (
     MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT,
     MY_BOOKING_RESCHEDULE_NO_DATES_TEXT,
     MY_BOOKING_RESCHEDULE_STALE_SLOT_TEXT,
+    MY_BOOKING_RESCHEDULE_STALE_DATE_TEXT,
     MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT,
     MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT,
     MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT,
@@ -64,6 +65,7 @@ from max_barbershop_bot.services.my_bookings import (
     build_new_datetime_iso,
     format_reschedule_success_text,
     is_booking_cancelable,
+    is_booking_reschedulable,
     is_future_booking,
     is_visible_my_booking,
     split_bookings_by_period,
@@ -204,9 +206,10 @@ async def _show_active_booking_page(context: RouterContext, *, page: int) -> Non
     state.set_state_data_value(platform_user_id, chat_id, _ACTIVE_BOOKING_INDEX_STATE_KEY, index)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
     can_cancel = is_booking_cancelable(booking, timezone_name=timezone_name)
+    can_reschedule = is_booking_reschedulable(booking, timezone_name=timezone_name)
     await context.send_text(
         format_booking_details_text(booking, timezone_name=timezone_name, title="📋 Активная запись"),
-        keyboard=my_booking_active_card_keyboard(index=index, total=len(active), can_cancel=can_cancel),
+        keyboard=my_booking_active_card_keyboard(index=index, total=len(active), can_cancel=can_cancel, can_reschedule=can_reschedule),
         attachments=_booking_master_photo_attachment(booking),
     )
 
@@ -287,11 +290,12 @@ async def handle_my_booking_details(context: RouterContext) -> None:
         return
     can_cancel = is_booking_cancelable(booking, timezone_name=timezone_name)
     is_active = is_future_booking(booking, timezone_name=timezone_name)
+    can_reschedule = is_booking_reschedulable(booking, timezone_name=timezone_name)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking_display_data(booking, timezone_name=timezone_name))
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
     await context.send_text(
         format_booking_details_text(booking, timezone_name=timezone_name),
-        keyboard=my_booking_details_keyboard(can_cancel=can_cancel, is_active=is_active),
+        keyboard=my_booking_details_keyboard(can_cancel=can_cancel, is_active=is_active, can_reschedule=can_reschedule),
         attachments=_booking_master_photo_attachment(booking),
     )
 
@@ -576,6 +580,12 @@ async def handle_my_booking_reschedule_date(context: RouterContext) -> None:
     dates = _reschedule_dates(context)
     if index is None or index < 0 or index >= len(dates):
         await context.answer_callback()
+        reschedule_context = _reschedule_context(context)
+        if reschedule_context:
+            await context.send_text(MY_BOOKING_RESCHEDULE_STALE_DATE_TEXT)
+            await _reload_reschedule_dates(context, reschedule_context)
+        else:
+            await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
     new_booking_date = dates[index]
     reschedule_context = _reschedule_context(context)
@@ -651,6 +661,13 @@ async def handle_my_booking_reschedule_slot(context: RouterContext) -> None:
     slots = _reschedule_slots(context)
     if index is None or index < 0 or index >= len(slots):
         await context.answer_callback()
+        await context.send_text(MY_BOOKING_RESCHEDULE_STALE_SLOT_TEXT)
+        new_booking_date = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY))
+        reschedule_context = _reschedule_context(context)
+        if new_booking_date and reschedule_context:
+            await _show_reschedule_slots_from_state(context)
+        elif reschedule_context:
+            await _reload_reschedule_dates(context, reschedule_context)
         return
     selected_slot = slots[index]
     slot_time = _clean_state_text(getattr(selected_slot, "time", None))
@@ -668,6 +685,8 @@ async def handle_my_booking_reschedule_slot(context: RouterContext) -> None:
         "new_date": format_display_date(new_booking_date, timezone_name=str(reschedule_context.get("branch_timezone") or _timezone_from_state(context))),
         "new_time": slot_time,
         "new_datetime": new_datetime,
+        "service_name": reschedule_context.get("service_name"),
+        "staff_name": reschedule_context.get("staff_name"),
     }
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, confirmation_data)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_CONFIRM_SCREEN)
@@ -821,6 +840,7 @@ async def handle_my_bookings_back(context: RouterContext) -> None:
                 keyboard=my_booking_details_keyboard(
                     can_cancel=is_booking_cancelable(booking, timezone_name=timezone_name),
                     is_active=is_future_booking(booking, timezone_name=timezone_name),
+                    can_reschedule=is_booking_reschedulable(booking, timezone_name=timezone_name),
                 ),
                 attachments=_booking_master_photo_attachment(booking),
             )
@@ -928,6 +948,7 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
         keyboard=my_booking_entry_keyboard(
             can_cancel=is_booking_cancelable(nearest_booking, timezone_name=result.branch_timezone),
             show_all=len(active_state_items) > 1,
+            can_reschedule=is_booking_reschedulable(nearest_booking, timezone_name=result.branch_timezone),
         ),
         attachments=_booking_master_photo_attachment(nearest_booking),
     )
