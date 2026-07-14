@@ -162,6 +162,60 @@ _ENTRY_MODE_STAFF_FIRST = "staff_first"
 _ENTRY_MODE_DATETIME_FIRST = "datetime_first"
 _ENTRY_MODE_REPEAT = "repeat_booking"
 _REPEAT_SOURCE_SCREEN_STATE_KEY = "repeat_source_screen"
+_BOOKING_STATE_KEYS = (
+    _CATALOG_STATE_KEY,
+    _CATEGORY_MAP_STATE_KEY,
+    _SERVICE_MAP_STATE_KEY,
+    _MASTER_MAP_STATE_KEY,
+    _DATE_MAP_STATE_KEY,
+    _SLOT_MAP_STATE_KEY,
+    _MASTERS_STATE_KEY,
+    _DATES_STATE_KEY,
+    _SLOTS_STATE_KEY,
+    _ELIGIBLE_SERVICE_IDS_STATE_KEY,
+    _ELIGIBLE_MASTER_IDS_STATE_KEY,
+    _CATEGORY_PAGE_STATE_KEY,
+    _SERVICE_PAGE_STATE_KEY,
+    _MASTER_PAGE_STATE_KEY,
+    _DATE_PAGE_STATE_KEY,
+    _SLOT_PAGE_STATE_KEY,
+    _SELECTED_CATEGORY_STATE_KEY,
+    _SELECTED_CATEGORY_NAME_STATE_KEY,
+    _SELECTED_SERVICE_STATE_KEY,
+    _SELECTED_SERVICE_NAME_STATE_KEY,
+    _SELECTED_SERVICE_PRICE_STATE_KEY,
+    _SELECTED_SERVICE_DURATION_STATE_KEY,
+    _SELECTED_MASTER_STATE_KEY,
+    _SELECTED_MASTER_NAME_STATE_KEY,
+    _SELECTED_MASTER_SPECIALIZATION_STATE_KEY,
+    _SELECTED_MASTER_RATING_STATE_KEY,
+    _SELECTED_DATE_STATE_KEY,
+    _SELECTED_SLOT_TIME_STATE_KEY,
+    _SELECTED_SLOT_DATETIME_STATE_KEY,
+    _SELECTED_SLOT_RAW_STATE_KEY,
+    _BOOKING_DATE_STATE_KEY,
+    _BOOKING_SLOT_STATE_KEY,
+    _BOOKING_CREATION_IN_PROGRESS_STATE_KEY,
+    _BOOKING_COMPLETED_RECORD_ID_STATE_KEY,
+    _BOOKING_PHONE_STATE_KEY,
+    _BOOKING_PHONE_SOURCE_STATE_KEY,
+    _ENTRY_MODE_STATE_KEY,
+    _REPEAT_SOURCE_SCREEN_STATE_KEY,
+    "booking_source",
+    "booking_origin",
+    "booking_origin_type",
+    "birthday_event_id",
+    "birthday_discount_context",
+    "birthday_is_test",
+    "birthday_source",
+    "birthday_claimed_at_utc",
+    "repeat_visit_event_id",
+    "cancellation_recovery_event_id",
+    "notification_event_id",
+    "notification_is_test",
+    "notification_source",
+    "yclients_client_id",
+)
 
 
 def apply_lost_client_discount_comment(base_comment: str, *, booking_origin_type: str | None, lost_days: int | None) -> str:
@@ -416,6 +470,7 @@ async def handle_booking_category(context: RouterContext) -> None:
     category_id = _mapped_value(context, _CATEGORY_MAP_STATE_KEY, context.event.callback_payload)
     catalog = _catalog(context)
     if not category_id or catalog is None:
+        await context.send_text("😔 Список категорий уже обновился. Показываю актуальные категории 🙂")
         await _open_booking_catalog(context, push_current=False)
         return
 
@@ -436,11 +491,13 @@ async def handle_booking_service(context: RouterContext) -> None:
     service_id = _mapped_value(context, _SERVICE_MAP_STATE_KEY, context.event.callback_payload)
     catalog = _catalog(context)
     if not service_id or catalog is None:
+        await context.send_text("😔 Список услуг уже обновился. Показываю актуальные услуги 🙂")
         await _open_booking_catalog(context, push_current=False)
         return
 
     service = next((item for item in catalog.services if item.yclients_service_id == service_id), None)
     if service is None:
+        await context.send_text("😔 Эта услуга уже недоступна. Показываю актуальные услуги 🙂")
         await _open_booking_catalog(context, push_current=False)
         return
     eligible_service_ids = _state_value(context, _ELIGIBLE_SERVICE_IDS_STATE_KEY)
@@ -1167,7 +1224,8 @@ async def _booking_hub_text() -> str:
 
 
 def _clear_booking_state(context: RouterContext) -> None:
-    state.clear_state_data(_user_id(context), _chat_id(context))
+    for key in _BOOKING_STATE_KEYS:
+        state.set_state_data_value(_user_id(context), _chat_id(context), key, None)
 
 
 def _set_cancellation_recovery_attribution(context: RouterContext, *, event_id: int, event: object) -> None:
