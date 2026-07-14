@@ -47,10 +47,11 @@ from max_barbershop_bot.repositories.support_settings import (
     display_support_username,
     effective_support_settings,
 )
-from max_barbershop_bot.repositories.users import PLATFORM_MAX
+from max_barbershop_bot.repositories.users import PLATFORM_MAX, User, UserProfileUpdate, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactInfo, ContactsService
 from max_barbershop_bot.services.navigation import go_back, show_home
+from max_barbershop_bot.services.registration import extract_contact_phone, is_registered, normalize_phone
 from max_barbershop_bot.services.reminder_lifecycle import (
     get_lifecycle_status,
     start_reminder_lifecycle,
@@ -97,6 +98,14 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_DIAGNOSTICS_HISTORY_PAYLOAD,
     SETTINGS_DIAGNOSTICS_PAYLOAD,
     SETTINGS_DIAGNOSTICS_YCLIENTS_CHECK_PAYLOAD,
+    SETTINGS_PROFILE_BACK_PAYLOAD,
+    SETTINGS_PROFILE_EDIT_NAME_PAYLOAD,
+    SETTINGS_PROFILE_EDIT_PHONE_PAYLOAD,
+    SETTINGS_PROFILE_PAYLOAD,
+    SETTINGS_PROFILE_RETRY_NAME_PAYLOAD,
+    SETTINGS_PROFILE_RETRY_PHONE_PAYLOAD,
+    SETTINGS_PROFILE_SAVE_NAME_PAYLOAD,
+    SETTINGS_PROFILE_SAVE_PHONE_PAYLOAD,
     SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD,
     SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD,
     SETTINGS_SUPPORT_PAYLOAD,
@@ -129,6 +138,10 @@ from max_barbershop_bot.ui.buttons import (
     settings_automation_module_keyboard,
     settings_automation_input_keyboard,
     settings_notification_tests_keyboard,
+    settings_profile_input_keyboard,
+    settings_profile_name_confirm_keyboard,
+    settings_profile_phone_confirm_keyboard,
+    settings_profile_root_keyboard,
     dev_tests_cleanup_confirm_keyboard,
     cancellation_recovery_keyboard,
     lost_client_booking_keyboard,
@@ -139,6 +152,17 @@ from max_barbershop_bot.ui.buttons import (
 from max_barbershop_bot.ui.texts import (
     SETTINGS_MENU_TEXT,
     SETTINGS_NO_ACCESS_TEXT,
+    SETTINGS_PROFILE_NAME_CONFIRM_TEXT,
+    SETTINGS_PROFILE_NAME_INVALID_TEXT,
+    SETTINGS_PROFILE_NAME_PROMPT_TEXT,
+    SETTINGS_PROFILE_NAME_SAVED_TEXT,
+    SETTINGS_PROFILE_PHONE_CONFIRM_TEXT,
+    SETTINGS_PROFILE_PHONE_DUPLICATE_TEXT,
+    SETTINGS_PROFILE_PHONE_INVALID_TEXT,
+    SETTINGS_PROFILE_PHONE_PROMPT_TEXT,
+    SETTINGS_PROFILE_PHONE_SAVED_TEXT,
+    SETTINGS_PROFILE_TEXT,
+    SETTINGS_REGISTRATION_REQUIRED_TEXT,
     CANCELLATION_RECOVERY_TEXT,
 )
 from max_barbershop_bot.services.developer_diagnostics import (
@@ -154,6 +178,13 @@ LOG_LINES_LIMIT = 200
 LOG_CHUNK_LIMIT = 3000
 STATE_LOG_PAGES_KEY = "devdiag_log_pages"
 STATE_LOG_PAGE_INDEX_KEY = "devdiag_log_page_index"
+SETTINGS_PROFILE_SCREEN = "settings_profile"
+SETTINGS_PROFILE_NAME_INPUT_SCREEN = "settings_profile_name_input"
+SETTINGS_PROFILE_NAME_CONFIRM_SCREEN = "settings_profile_name_confirm"
+SETTINGS_PROFILE_PHONE_INPUT_SCREEN = "settings_profile_phone_input"
+SETTINGS_PROFILE_PHONE_CONFIRM_SCREEN = "settings_profile_phone_confirm"
+SETTINGS_PROFILE_PENDING_NAME_KEY = "settings_profile_pending_name"
+SETTINGS_PROFILE_PENDING_PHONE_KEY = "settings_profile_pending_phone"
 logger = logging.getLogger(__name__)
 
 
@@ -196,6 +227,14 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback_prefix(DEV_TESTS_PAYLOAD_PREFIX, handle_settings_notifications_run_test)
     router.on_callback(SETTINGS_ROLES_PAYLOAD, handle_settings_roles)
     router.on_callback(SETTINGS_DIAGNOSTICS_PAYLOAD, handle_settings_diagnostics)
+    router.on_callback(SETTINGS_PROFILE_PAYLOAD, handle_settings_profile)
+    router.on_callback(SETTINGS_PROFILE_EDIT_NAME_PAYLOAD, handle_settings_profile_edit_name)
+    router.on_callback(SETTINGS_PROFILE_RETRY_NAME_PAYLOAD, handle_settings_profile_edit_name)
+    router.on_callback(SETTINGS_PROFILE_SAVE_NAME_PAYLOAD, handle_settings_profile_save_name)
+    router.on_callback(SETTINGS_PROFILE_EDIT_PHONE_PAYLOAD, handle_settings_profile_edit_phone)
+    router.on_callback(SETTINGS_PROFILE_RETRY_PHONE_PAYLOAD, handle_settings_profile_edit_phone)
+    router.on_callback(SETTINGS_PROFILE_SAVE_PHONE_PAYLOAD, handle_settings_profile_save_phone)
+    router.on_callback(SETTINGS_PROFILE_BACK_PAYLOAD, handle_settings_profile_back)
     router.on_callback(DEV_DIAGNOSTICS_REFRESH_PAYLOAD, handle_settings_diagnostics_refresh)
     router.on_callback(DEV_DIAGNOSTICS_BOT_LOGS_PAYLOAD, handle_settings_diagnostics_bot_logs)
     router.on_callback(DEV_DIAGNOSTICS_LOGS_PREV_PAYLOAD, handle_settings_diagnostics_log_pagination)
@@ -223,18 +262,178 @@ def register_settings_routes(router: Router) -> None:
     router.on_screen_text("settings_automation_edit", handle_settings_automation_input)
     router.on_screen_text(state.SETTINGS_DIAGNOSTICS_USER_LOGS_INPUT_SCREEN, handle_settings_diagnostics_user_logs_input)
     router.on_screen_text(state.SETTINGS_DIAGNOSTICS_EVENT_SEARCH_INPUT_SCREEN, handle_settings_diagnostics_event_search_input)
+    router.on_screen_text(SETTINGS_PROFILE_NAME_INPUT_SCREEN, handle_settings_profile_name_input)
+    router.on_screen_text(SETTINGS_PROFILE_PHONE_INPUT_SCREEN, handle_settings_profile_phone_input)
 
 
 async def handle_settings_menu(context: RouterContext) -> None:
     """Open role-based settings hub."""
 
     actor_role = _actor_role(context)
-    if not can_view_settings(actor_role):
-        await _send_no_access(context)
+    if not _can_open_settings_root(context, actor_role):
+        await _send_registration_required(context)
         return
     await _answer_callback_if_needed(context)
     _push_current_screen(context, state.SETTINGS_MENU_SCREEN)
     _audit(context, actor_role, action="settings_opened", section="settings")
+    await _show_settings_menu(context, actor_role)
+
+
+async def handle_settings_profile(context: RouterContext) -> None:
+    """Open ordinary user profile settings."""
+
+    user = _current_user(context)
+    if not _can_open_profile_settings(context, user):
+        await _send_registration_required(context)
+        return
+    await _answer_callback_if_needed(context)
+    _push_current_screen(context, SETTINGS_PROFILE_SCREEN)
+    await _show_profile_root(context, user)
+
+
+async def handle_settings_profile_edit_name(context: RouterContext) -> None:
+    """Ask for a new profile name."""
+
+    user = _current_user(context)
+    if not _can_open_profile_settings(context, user):
+        await _send_registration_required(context)
+        return
+    await _answer_callback_if_needed(context)
+    state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), SETTINGS_PROFILE_NAME_INPUT_SCREEN)
+    await context.send_text(
+        SETTINGS_PROFILE_NAME_PROMPT_TEXT.format(name=_profile_name(user)),
+        keyboard=settings_profile_input_keyboard(),
+    )
+
+
+async def handle_settings_profile_name_input(context: RouterContext) -> None:
+    """Validate and confirm a new profile name."""
+
+    user = _current_user(context)
+    if not _can_open_profile_settings(context, user):
+        await _send_registration_required(context)
+        return
+    new_name = _validate_profile_name(context.event.text)
+    if new_name is None:
+        await context.send_text(SETTINGS_PROFILE_NAME_INVALID_TEXT, keyboard=settings_profile_input_keyboard())
+        return
+    chat_id = _settings_state_chat_id(context)
+    state.set_state_data_value(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PENDING_NAME_KEY, new_name)
+    state.set_current_screen(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_NAME_CONFIRM_SCREEN)
+    await context.send_text(
+        SETTINGS_PROFILE_NAME_CONFIRM_TEXT.format(name=new_name),
+        keyboard=settings_profile_name_confirm_keyboard(),
+    )
+
+
+async def handle_settings_profile_save_name(context: RouterContext) -> None:
+    """Persist the confirmed profile name locally."""
+
+    user = _current_user(context)
+    if not _can_open_profile_settings(context, user):
+        await _send_registration_required(context)
+        return
+    await _answer_callback_if_needed(context)
+    chat_id = _settings_state_chat_id(context)
+    new_name = _validate_profile_name(state.get_state_data_value(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PENDING_NAME_KEY))
+    if new_name is None:
+        state.set_current_screen(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_NAME_INPUT_SCREEN)
+        await context.send_text(SETTINGS_PROFILE_NAME_INVALID_TEXT, keyboard=settings_profile_input_keyboard())
+        return
+    updated = UsersRepository(_database_path()).update_profile(
+        str(context.event.platform_user_id),
+        UserProfileUpdate(first_name=new_name, display_name=new_name),
+        platform=PLATFORM_MAX,
+    )
+    if updated is None:
+        await _send_registration_required(context)
+        return
+    state.set_state_data_value(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PENDING_NAME_KEY, "")
+    await context.send_text(SETTINGS_PROFILE_NAME_SAVED_TEXT.format(name=new_name))
+    state.set_current_screen(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_SCREEN)
+    await _show_profile_root(context, updated)
+
+
+async def handle_settings_profile_edit_phone(context: RouterContext) -> None:
+    """Ask for a new profile phone."""
+
+    user = _current_user(context)
+    if not _can_open_profile_settings(context, user):
+        await _send_registration_required(context)
+        return
+    await _answer_callback_if_needed(context)
+    state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), SETTINGS_PROFILE_PHONE_INPUT_SCREEN)
+    await context.send_text(
+        SETTINGS_PROFILE_PHONE_PROMPT_TEXT.format(phone=_profile_phone(user)),
+        keyboard=settings_profile_input_keyboard(),
+    )
+
+
+async def handle_settings_profile_phone_input(context: RouterContext) -> None:
+    """Validate and confirm a new profile phone."""
+
+    user = _current_user(context)
+    if not _can_open_profile_settings(context, user):
+        await _send_registration_required(context)
+        return
+    new_phone = _extract_profile_phone(context)
+    if new_phone is None:
+        await context.send_text(SETTINGS_PROFILE_PHONE_INVALID_TEXT, keyboard=settings_profile_input_keyboard())
+        return
+    duplicate = _find_duplicate_profile_phone(context, new_phone)
+    if duplicate is not None:
+        await context.send_text(SETTINGS_PROFILE_PHONE_DUPLICATE_TEXT, keyboard=settings_profile_input_keyboard())
+        return
+    chat_id = _settings_state_chat_id(context)
+    state.set_state_data_value(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PENDING_PHONE_KEY, new_phone)
+    state.set_current_screen(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PHONE_CONFIRM_SCREEN)
+    await context.send_text(
+        SETTINGS_PROFILE_PHONE_CONFIRM_TEXT.format(current_phone=_profile_phone(user), new_phone=new_phone),
+        keyboard=settings_profile_phone_confirm_keyboard(),
+    )
+
+
+async def handle_settings_profile_save_phone(context: RouterContext) -> None:
+    """Persist the confirmed profile phone locally."""
+
+    user = _current_user(context)
+    if not _can_open_profile_settings(context, user):
+        await _send_registration_required(context)
+        return
+    await _answer_callback_if_needed(context)
+    chat_id = _settings_state_chat_id(context)
+    new_phone = normalize_phone(str(state.get_state_data_value(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PENDING_PHONE_KEY) or ""))
+    if new_phone is None:
+        state.set_current_screen(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PHONE_INPUT_SCREEN)
+        await context.send_text(SETTINGS_PROFILE_PHONE_INVALID_TEXT, keyboard=settings_profile_input_keyboard())
+        return
+    if _find_duplicate_profile_phone(context, new_phone) is not None:
+        state.set_current_screen(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PHONE_INPUT_SCREEN)
+        await context.send_text(SETTINGS_PROFILE_PHONE_DUPLICATE_TEXT, keyboard=settings_profile_input_keyboard())
+        return
+    updated = UsersRepository(_database_path()).update_profile(
+        str(context.event.platform_user_id),
+        UserProfileUpdate(phone=new_phone),
+        platform=PLATFORM_MAX,
+    )
+    if updated is None:
+        await _send_registration_required(context)
+        return
+    state.set_state_data_value(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_PENDING_PHONE_KEY, "")
+    await context.send_text(SETTINGS_PROFILE_PHONE_SAVED_TEXT)
+    state.set_current_screen(context.event.platform_user_id, chat_id, SETTINGS_PROFILE_SCREEN)
+    await _show_profile_root(context, updated)
+
+
+async def handle_settings_profile_back(context: RouterContext) -> None:
+    """Return from profile settings to the settings root."""
+
+    actor_role = _actor_role(context)
+    if not _can_open_settings_root(context, actor_role):
+        await _send_registration_required(context)
+        return
+    await _answer_callback_if_needed(context)
+    _push_current_screen(context, state.SETTINGS_MENU_SCREEN)
     await _show_settings_menu(context, actor_role)
 
 
@@ -1388,11 +1587,17 @@ async def handle_settings_back(context: RouterContext) -> None:
     """Return from a settings subsection to the hub, or from hub to previous screen."""
 
     actor_role = _actor_role(context)
-    if not can_view_settings(actor_role):
-        await _send_no_access(context)
+    if not _can_open_settings_root(context, actor_role):
+        await _send_registration_required(context)
         return
     await _answer_callback_if_needed(context)
     current = state.get_current_screen(context.event.platform_user_id, _settings_state_chat_id(context))
+    if current in {SETTINGS_PROFILE_NAME_INPUT_SCREEN, SETTINGS_PROFILE_NAME_CONFIRM_SCREEN, SETTINGS_PROFILE_PHONE_INPUT_SCREEN, SETTINGS_PROFILE_PHONE_CONFIRM_SCREEN}:
+        await _show_profile_root(context)
+        return
+    if current == SETTINGS_PROFILE_SCREEN:
+        await _show_settings_menu(context, actor_role)
+        return
     if current in {state.SETTINGS_CONTACTS_MAP_SCREEN, state.SETTINGS_CONTACTS_EDIT_ADDRESS_SCREEN, state.SETTINGS_CONTACTS_EDIT_PHONE_SCREEN, state.SETTINGS_CONTACTS_EDIT_SCHEDULE_SCREEN, state.SETTINGS_CONTACTS_EDIT_YANDEX_MAPS_SCREEN, state.SETTINGS_CONTACTS_EDIT_TWOGIS_SCREEN, state.SETTINGS_CONTACTS_EDIT_GOOGLE_MAPS_SCREEN}:
         await _show_contacts_editor(context)
         return
@@ -1422,6 +1627,88 @@ async def _show_settings_menu(context: RouterContext, actor_role: str) -> None:
         SETTINGS_MENU_TEXT,
         keyboard=settings_menu_keyboard(actor_role, protected_developer=_is_protected_developer(context)),
     )
+
+
+async def _show_profile_root(context: RouterContext, user: User | None = None) -> None:
+    if user is None:
+        user = _current_user(context)
+    if not _can_open_profile_settings(context, user):
+        await _send_registration_required(context)
+        return
+    state.set_current_screen(context.event.platform_user_id, _settings_state_chat_id(context), SETTINGS_PROFILE_SCREEN)
+    await context.send_text(
+        SETTINGS_PROFILE_TEXT.format(name=_profile_name(user), phone=_profile_phone(user)),
+        keyboard=settings_profile_root_keyboard(),
+    )
+
+
+def _can_open_settings_root(context: RouterContext, actor_role: str) -> bool:
+    if can_view_settings(actor_role):
+        return True
+    return is_registered(_current_user(context))
+
+
+def _can_open_profile_settings(context: RouterContext, user: User | None) -> bool:
+    actor_role = _actor_role(context)
+    if can_view_settings(actor_role):
+        return True
+    return is_registered(user)
+
+
+async def _send_registration_required(context: RouterContext) -> None:
+    await _answer_callback_if_needed(context)
+    await context.send_text(SETTINGS_REGISTRATION_REQUIRED_TEXT)
+
+
+def _current_user(context: RouterContext) -> User | None:
+    platform_user_id = context.event.platform_user_id
+    if platform_user_id is None:
+        return None
+    return UsersRepository(_database_path()).find_by_platform_user_id(platform_user_id, platform=PLATFORM_MAX)
+
+
+def _profile_name(user: User | None) -> str:
+    if user is None:
+        return "—"
+    return (user.display_name or user.first_name or "—").strip() or "—"
+
+
+def _profile_phone(user: User | None) -> str:
+    if user is None:
+        return "—"
+    return (user.phone or "—").strip() or "—"
+
+
+def _validate_profile_name(raw_name: object) -> str | None:
+    if raw_name is None:
+        return None
+    name = " ".join(str(raw_name).strip().split())
+    if not (2 <= len(name) <= 60):
+        return None
+    if name == "Пользователь":
+        return None
+    if not any(character.isalpha() for character in name):
+        return None
+    return name
+
+
+def _extract_profile_phone(context: RouterContext) -> str | None:
+    contact_phone = extract_contact_phone(context.event.attachments)
+    return normalize_phone(contact_phone or context.event.text)
+
+
+def _find_duplicate_profile_phone(context: RouterContext, phone: str) -> User | None:
+    from max_barbershop_bot.services.phone_normalization import build_phone_match_keys
+
+    current_platform_user_id = str(context.event.platform_user_id or "")
+    repository = UsersRepository(_database_path())
+    for user in repository.list_by_phone_keys(build_phone_match_keys(phone), platform=None):
+        if user.platform != PLATFORM_MAX:
+            continue
+        if str(user.platform_user_id) == current_platform_user_id:
+            continue
+        return user
+    return None
 
 
 async def _show_contacts_editor(context: RouterContext) -> None:
