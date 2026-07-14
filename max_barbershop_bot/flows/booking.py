@@ -673,6 +673,7 @@ async def handle_booking_master(context: RouterContext) -> None:
     master_id = _mapped_value(context, _MASTER_MAP_STATE_KEY, context.event.callback_payload)
     masters = _masters(context)
     if not master_id or masters is None:
+        await context.send_text("😔 Список мастеров уже обновился. Показываю актуальных мастеров 🙂")
         service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
         if isinstance(service_id, str) and service_id:
             await _open_booking_masters(context, service_id, push_current=False)
@@ -1061,6 +1062,13 @@ async def handle_booking_back(context: RouterContext) -> None:
         await _show_booking_hub(context, push_current=False)
         return
     if current_screen == state.BOOKING_SERVICES_SCREEN:
+        if entry_mode == _ENTRY_MODE_STAFF_FIRST and _state_value(context, _SELECTED_MASTER_STATE_KEY):
+            masters = _masters(context)
+            if masters is not None:
+                await _show_masters(context, masters, push_current=False)
+                return
+            await _open_staff_first_masters(context, push_current=False)
+            return
         catalog = _catalog(context)
         if catalog and catalog.categories:
             await _show_categories(context, catalog.categories, push_current=False)
@@ -2042,6 +2050,9 @@ async def _show_dates(
     else:
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_DATES_SCREEN)
     attachment = _selected_master_photo_attachment(context)
+    if not display_dates:
+        await context.send_text(BOOKING_DATES_EMPTY_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        return
     await context.send_text(
         _booking_step_text(context, tail=tail, include_selected_date=include_selected_date),
         keyboard=booking_dates_keyboard(
@@ -2078,7 +2089,7 @@ async def _show_slots(
         state.set_current_screen(_user_id(context), _chat_id(context), state.BOOKING_SLOTS_SCREEN)
     attachment = _selected_master_photo_attachment(context)
     if not display_slots:
-        await _refresh_dates_after_stale_slot(context, stale_text=BOOKING_STALE_DATE_TEXT, push_current=push_current)
+        await context.send_text(BOOKING_STALE_DATE_TEXT, keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
         return
     await context.send_text(
         _booking_step_text(context, tail=tail),
