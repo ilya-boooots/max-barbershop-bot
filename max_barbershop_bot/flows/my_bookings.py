@@ -127,6 +127,8 @@ _MAX_BOOKING_BUTTONS = 10
 _MAX_RESCHEDULE_DATES = DATE_LOOKAHEAD_DAYS
 _MAX_RESCHEDULE_SLOTS = 30
 _CANCELLATION_MARKER_PREFIX = "Клиент отменил запись из MAX бота"
+MY_BOOKINGS_HISTORY_SCREEN = "my_bookings_history"
+_SUPPORTED_REPEAT_SOURCE_SCREENS = {state.MY_BOOKING_DETAILS_SCREEN, MY_BOOKINGS_HISTORY_SCREEN}
 
 
 def register_my_bookings_routes(router: Router) -> None:
@@ -184,6 +186,10 @@ async def handle_my_bookings_history(context: RouterContext) -> None:
     page = min(max(page, 0), max_page)
     start = page * page_size
     end = start + page_size
+    platform_user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    state.set_state_data_value(platform_user_id, chat_id, "my_bookings_history_page", page)
+    state.set_current_screen(platform_user_id, chat_id, MY_BOOKINGS_HISTORY_SCREEN)
     await context.send_text(
         format_visit_history_screen(past, timezone_name=timezone_name, page=page, page_size=page_size),
         keyboard=my_bookings_history_keyboard(page=page, has_next=end < len(past), include_repeat=bool(past)),
@@ -437,7 +443,10 @@ async def handle_my_booking_repeat_start(context: RouterContext) -> None:
     """Start repeat booking for the selected YClients record."""
 
     await context.answer_callback()
-    booking = _selected_booking(context)
+    source_screen = _repeat_source_screen(context)
+    booking = _repeat_booking_from_history(context) if source_screen == MY_BOOKINGS_HISTORY_SCREEN else _selected_booking(context)
+    if booking is not None:
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_BOOKING_STATE_KEY, booking)
     if booking is None:
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
         return
@@ -474,16 +483,21 @@ async def handle_my_booking_repeat_start(context: RouterContext) -> None:
         )
         await context.send_text(MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
+    except Exception as exc:  # noqa: BLE001 - never expose raw YClients/runtime details to users.
+        logger.warning(
+            "MAX booking repeat unexpected diagnostic: platform_user_id_present=%s source_record_id_present=%s error_class=%s",
+            bool(platform_user_id),
+            bool(record_id),
+            type(exc).__name__,
+        )
+        await context.send_text(MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
+        return
 
     service_id = _clean_state_text(repeat_context.get("service_id"))
     staff_id = _clean_state_text(repeat_context.get("staff_id"))
     if not service_id:
         await context.send_text(MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
-    if not staff_id:
-        await context.send_text(MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT, keyboard=my_booking_reschedule_result_keyboard())
-        return
-
     state.set_current_screen(platform_user_id, _chat_id(context), state.MY_BOOKING_DETAILS_SCREEN)
     await start_repeat_booking_with_prefill(
         context,
@@ -491,8 +505,13 @@ async def handle_my_booking_repeat_start(context: RouterContext) -> None:
         service_name=_clean_state_text(repeat_context.get("service_name")) or _clean_state_text(booking.get("service_name")) or "Услуга",
         master_id=staff_id,
         master_name=_clean_state_text(repeat_context.get("staff_name")) or _clean_state_text(booking.get("master_name")) or None,
-        service_price=_clean_state_text(booking.get("price")) or None,
-        service_duration=f"{_clean_state_text(booking.get('duration_minutes'))} мин" if _clean_state_text(booking.get("duration_minutes")) else None,
+        service_price=_clean_state_text(repeat_context.get("price")) or _clean_state_text(booking.get("price")) or None,
+        service_duration=(
+            f"{_clean_state_text(repeat_context.get('duration_minutes'))} мин"
+            if _clean_state_text(repeat_context.get("duration_minutes"))
+            else (f"{_clean_state_text(booking.get('duration_minutes'))} мин" if _clean_state_text(booking.get("duration_minutes")) else None)
+        ),
+        source_screen=source_screen,
     )
 
 
@@ -903,6 +922,7 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
         state.MY_BOOKINGS_SCREEN,
         state.MY_BOOKINGS_EMPTY_SCREEN,
         state.MY_BOOKINGS_ERROR_SCREEN,
+        MY_BOOKINGS_HISTORY_SCREEN,
         state.MY_BOOKING_DETAILS_SCREEN,
         state.MY_BOOKING_CANCEL_CONFIRM_SCREEN,
         state.MY_BOOKING_CANCEL_SUCCESS_SCREEN,
@@ -1275,6 +1295,17 @@ def _booking_by_payload(context: RouterContext) -> Any | None:
         return None
     return bookings[index]
 
+
+def _repeat_source_screen(context: RouterContext) -> str:
+    current = state.get_current_screen(_user_id(context), _chat_id(context))
+    return current if current in _SUPPORTED_REPEAT_SOURCE_SCREENS else state.MY_BOOKING_DETAILS_SCREEN
+
+
+def _repeat_booking_from_history(context: RouterContext) -> Any | None:
+    for item in reversed(_bookings_from_state(context)):
+        if _booking_record_id(item):
+            return item
+    return None
 
 def _selected_booking(context: RouterContext) -> Any | None:
     value = state.get_state_data_value(_user_id(context), _chat_id(context), _SELECTED_BOOKING_STATE_KEY)
