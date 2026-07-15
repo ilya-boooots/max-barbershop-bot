@@ -9,10 +9,16 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.permissions import effective_role, is_protected_developer
 from max_barbershop_bot.core.router import RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
+from max_barbershop_bot.repositories.support_settings import (
+    SupportSettingsRepository,
+    build_max_support_url,
+    display_support_username,
+    effective_support_settings,
+)
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.services.registration import is_registered
 from max_barbershop_bot.services.user_names import get_user_display_name, join_profile_name
-from max_barbershop_bot.ui.buttons import booking_stale_keyboard, stale_screen_keyboard
+from max_barbershop_bot.ui.buttons import booking_stale_keyboard, settings_support_keyboard, stale_screen_keyboard
 from max_barbershop_bot.ui.screens import main_menu_screen, placeholder_screen, settings_menu_screen, staff_menu_screen
 from max_barbershop_bot.ui.texts import BOOKING_STALE_CALLBACK_TEXT, STALE_SCREEN_TEXT
 
@@ -70,9 +76,34 @@ async def show_booking_stale_callback(context: RouterContext) -> None:
     await context.send_text(BOOKING_STALE_CALLBACK_TEXT, keyboard=booking_stale_keyboard())
 
 
+async def show_support_settings_editor(context: RouterContext) -> None:
+    """Render the support settings editor from its normal and Back paths."""
+
+    try:
+        support_settings = effective_support_settings(
+            SupportSettingsRepository(_database_path()).get_active()
+        )
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text("⚠️ Не удалось загрузить настройки поддержки. Попробуйте ещё раз.")
+        return
+    username = display_support_username(support_settings.support_max_username) or "—"
+    support_url = build_max_support_url(support_settings.support_max_username) or "—"
+    text = (
+        '🛠 Настройка раздела "Поддержка"\n\n'
+        f"📝 Текущее описание:\n{support_settings.support_description}\n\n"
+        f"👤 Текущий аккаунт: {username}\n"
+        f"🔗 Ссылка: {support_url}"
+    )
+    state.set_current_screen(_user_id(context), _chat_id(context), state.SETTINGS_SUPPORT_SCREEN)
+    await context.send_text(text, keyboard=settings_support_keyboard())
+
+
 async def render_screen(context: RouterContext, screen_id: str) -> None:
     """Render a known screen id."""
 
+    if screen_id == state.SETTINGS_SUPPORT_SCREEN:
+        await show_support_settings_editor(context)
+        return
     if screen_id == state.MAIN_MENU_SCREEN:
         user = _current_user(context)
         screen = main_menu_screen(

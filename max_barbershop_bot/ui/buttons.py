@@ -93,6 +93,7 @@ SETTINGS_SUPPORT_PAYLOAD = "settings:support"
 SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD = "settings:support:username"
 SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD = "settings:support:description"
 SETTINGS_SUPPORT_PREVIEW_PAYLOAD = "settings:support:preview"
+SETTINGS_SUPPORT_RESET_PAYLOAD = "settings:support:reset"
 MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX = "settings:mp:select:"
 MASTER_PHOTOS_UPLOAD_PAYLOAD = "settings:mp:upload"
 MASTER_PHOTOS_DELETE_PAYLOAD = "settings:mp:delete"
@@ -568,9 +569,10 @@ def settings_support_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="👤 Изменить username", payload=SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD)],
-            [MaxButton(text="📝 Изменить текст", payload=SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD)],
+            [MaxButton(text="✏️ Изменить описание", payload=SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD)],
+            [MaxButton(text="👤 Изменить аккаунт поддержки", payload=SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD)],
             [MaxButton(text="👁️ Предпросмотр", payload=SETTINGS_SUPPORT_PREVIEW_PAYLOAD)],
+            [MaxButton(text="♻️ Сбросить к значениям по умолчанию", payload=SETTINGS_SUPPORT_RESET_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)],
         ]

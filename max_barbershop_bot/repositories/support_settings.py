@@ -66,13 +66,22 @@ class SupportSettingsRepository:
                 settings_id = int(cursor.lastrowid)
             else:
                 settings_id = current
+                current_settings = self._get_by_id(connection, settings_id)
+                if (
+                    current_settings is not None
+                    and current_settings.support_username == username
+                    and current_settings.support_max_username == username
+                    and current_settings.support_description == description
+                ):
+                    return current_settings
                 connection.execute(
                     """
                     UPDATE support_settings
-                    SET support_username = ?, support_description = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+                    SET support_username = ?, support_max_username = ?, support_description = ?,
+                        is_active = 1, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
-                    (username, description, settings_id),
+                    (username, username, description, settings_id),
                 )
             connection.commit()
             return self._get_by_id(connection, settings_id) or SupportSettings(
@@ -81,6 +90,45 @@ class SupportSettingsRepository:
                 support_max_username=username,
                 support_description=description,
             )
+
+    def reset_active(self) -> tuple[SupportSettings, bool]:
+        """Restore Telegram defaults and report whether storage changed."""
+
+        current = self.get_active()
+        if (
+            current is not None
+            and current.support_username == DEFAULT_SUPPORT_USERNAME
+            and current.support_max_username == DEFAULT_SUPPORT_MAX_USERNAME
+            and current.support_description == DEFAULT_SUPPORT_DESCRIPTION
+        ):
+            return current, False
+        return self.upsert_active(DEFAULT_SUPPORT_USERNAME, DEFAULT_SUPPORT_DESCRIPTION), True
+
+    def update_description(self, support_description: str) -> tuple[SupportSettings, bool]:
+        """Update only the description, preserving both platform destinations."""
+
+        description = _support_description_or_default(support_description)
+        current = self.get_active()
+        if current is None:
+            return self.upsert_active(DEFAULT_SUPPORT_USERNAME, description), True
+        if current.support_description == description:
+            return current, False
+        if current.id is None:
+            raise RuntimeError("Active support settings row has no id")
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE support_settings
+                SET support_description = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (description, current.id),
+            )
+            connection.commit()
+            updated = self._get_by_id(connection, current.id)
+        if updated is None:
+            raise RuntimeError("Support settings row disappeared during description update")
+        return updated, True
 
     def _get_active_id(self, connection: sqlite3.Connection) -> int | None:
         row = connection.execute(
@@ -116,6 +164,8 @@ def normalize_support_username(raw: str | None) -> str | None:
         value = value[len("http://"):]
     if value.lower().startswith("t.me/"):
         value = value[5:]
+    elif value.lower().startswith("max.ru/"):
+        value = value[7:]
     value = value.lstrip("@").strip()
     if not value or any(ch.isspace() for ch in value):
         return None

@@ -44,13 +44,13 @@ from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.support_settings import (
     SupportSettingsRepository,
     build_max_support_url,
-    display_support_username,
     effective_support_settings,
+    normalize_support_username,
 )
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, User, UserProfileUpdate, UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.contacts import ContactInfo, ContactsService
-from max_barbershop_bot.services.navigation import go_back, show_home
+from max_barbershop_bot.services.navigation import go_back, show_home, show_support_settings_editor
 from max_barbershop_bot.services.registration import extract_contact_phone, is_registered, normalize_phone
 from max_barbershop_bot.services.reminder_lifecycle import (
     get_lifecycle_status,
@@ -110,6 +110,7 @@ from max_barbershop_bot.ui.buttons import (
     SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD,
     SETTINGS_SUPPORT_PAYLOAD,
     SETTINGS_SUPPORT_PREVIEW_PAYLOAD,
+    SETTINGS_SUPPORT_RESET_PAYLOAD,
     SETTINGS_HOME_PAYLOAD,
     SETTINGS_NOTIFICATIONS_PAYLOAD,
     SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD,
@@ -147,7 +148,7 @@ from max_barbershop_bot.ui.buttons import (
     lost_client_booking_keyboard,
     settings_status_keyboard,
     settings_support_input_keyboard,
-    settings_support_keyboard,
+    support_screen_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
     SETTINGS_MENU_TEXT,
@@ -210,6 +211,7 @@ def register_settings_routes(router: Router) -> None:
     router.on_callback(SETTINGS_SUPPORT_EDIT_USERNAME_PAYLOAD, handle_settings_support_edit_username)
     router.on_callback(SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD, handle_settings_support_edit_description)
     router.on_callback(SETTINGS_SUPPORT_PREVIEW_PAYLOAD, handle_settings_support_preview)
+    router.on_callback(SETTINGS_SUPPORT_RESET_PAYLOAD, handle_settings_support_reset)
     router.on_callback(SETTINGS_NOTIFICATIONS_PAYLOAD, handle_settings_notifications)
     router.on_callback(SETTINGS_NOTIFICATIONS_ENABLE_PAYLOAD, handle_settings_notifications_toggle)
     router.on_callback(SETTINGS_NOTIFICATIONS_DISABLE_PAYLOAD, handle_settings_notifications_toggle)
@@ -650,13 +652,21 @@ async def handle_settings_support(context: RouterContext) -> None:
 async def handle_settings_support_edit_username(context: RouterContext) -> None:
     """Ask for support username."""
 
-    await _start_support_edit(context, state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN, "👤 Введите username поддержки в Telegram, например @flowbots1sup:")
+    await _start_support_edit(
+        context,
+        state.SETTINGS_SUPPORT_EDIT_USERNAME_SCREEN,
+        "👤 Введите username аккаунта поддержки (можно с @):",
+    )
 
 
 async def handle_settings_support_edit_description(context: RouterContext) -> None:
     """Ask for support description."""
 
-    await _start_support_edit(context, state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN, "📝 Введите текст поддержки:")
+    await _start_support_edit(
+        context,
+        state.SETTINGS_SUPPORT_EDIT_DESCRIPTION_SCREEN,
+        "✏️ Введите новое описание для раздела поддержки:",
+    )
 
 
 async def handle_settings_support_preview(context: RouterContext) -> None:
@@ -667,9 +677,45 @@ async def handle_settings_support_preview(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context)
-    settings = _support_settings()
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_SUPPORT_SCREEN)
-    await context.send_text(render_support_message(settings), keyboard=settings_support_keyboard())
+    try:
+        support_settings = _support_settings()
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text("⚠️ Не удалось загрузить настройки поддержки. Попробуйте ещё раз.")
+        return
+    current_screen = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
+    if current_screen != state.SUPPORT_SCREEN:
+        state.push_screen(context.event.platform_user_id, context.event.chat_id, current_screen)
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SUPPORT_SCREEN)
+    await context.send_text(
+        render_support_message(support_settings),
+        keyboard=support_screen_keyboard(
+            support_url=build_max_support_url(support_settings.support_max_username)
+        ),
+    )
+
+
+async def handle_settings_support_reset(context: RouterContext) -> None:
+    """Restore support description and destination defaults."""
+
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    try:
+        _, changed = SupportSettingsRepository(_database_path()).reset_active()
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text("⚠️ Не удалось сбросить настройки поддержки. Попробуйте ещё раз.")
+        return
+    if changed:
+        _audit(
+            context,
+            actor_role,
+            action="support_reset",
+            section="support",
+        )
+    await context.send_text('♻️ Раздел "Поддержка" сброшен к значениям по умолчанию.')
+    await _show_support_editor(context)
 
 
 async def handle_settings_support_username_input(context: RouterContext) -> None:
@@ -1769,17 +1815,7 @@ async def _show_contacts_editor(context: RouterContext) -> None:
 
 
 async def _show_support_editor(context: RouterContext) -> None:
-    settings = _support_settings()
-    username = display_support_username(settings.support_username) or "—"
-    support_url = build_max_support_url(settings.support_max_username) or "—"
-    text = (
-        "🆘 Редактирование поддержки\n\n"
-        f"👤 Username: {username}\n"
-        f"🔗 MAX-кнопка: {support_url}\n"
-        f"📝 Текст: {settings.support_description or '—'}"
-    )
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_SUPPORT_SCREEN)
-    await context.send_text(text, keyboard=settings_support_keyboard())
+    await show_support_settings_editor(context)
 
 
 async def _start_support_edit(context: RouterContext, screen_id: str, prompt: str) -> None:
@@ -1804,29 +1840,59 @@ async def _save_support_settings(
         return
 
     repository = SupportSettingsRepository(_database_path())
-    current = _support_settings()
-    if support_username is not None and not support_username.strip():
-        await context.send_text("Введите username в формате @username 🙏", keyboard=settings_support_input_keyboard())
-        return
-    if support_description is not None and not support_description.strip():
-        await context.send_text("📝 Текст поддержки не может быть пустым. Введите текст поддержки:", keyboard=settings_support_input_keyboard())
-        return
+    is_username_update = support_username is not None
+    if is_username_update:
+        normalized_username = normalize_support_username(support_username)
+        if normalized_username is None:
+            await context.send_text(
+                "⚠️ Некорректный username. Укажите MAX username (5-32 символа, латиница/цифры/_)",
+                keyboard=settings_support_input_keyboard(),
+            )
+            return
+    else:
+        normalized_username = None
+        description = (support_description or "").strip()
+        if not description:
+            await context.send_text(
+                "⚠️ Описание не может быть пустым. Введите текст ещё раз.",
+                keyboard=settings_support_input_keyboard(),
+            )
+            return
 
-    username = support_username.strip() if support_username is not None else current.support_username
-    description = support_description.strip() if support_description is not None else current.support_description
     try:
-        repository.upsert_active(username, description)
+        if is_username_update:
+            current = effective_support_settings(repository.get_active())
+            changed = (
+                current.support_username != normalized_username
+                or current.support_max_username != normalized_username
+            )
+            repository.upsert_active(normalized_username, current.support_description)
+        else:
+            _, changed = repository.update_description(description)
     except ValueError:
-        await context.send_text("Введите username в формате @username 🙏", keyboard=settings_support_input_keyboard())
+        await context.send_text(
+            "⚠️ Некорректный username. Укажите MAX username (5-32 символа, латиница/цифры/_)",
+            keyboard=settings_support_input_keyboard(),
+        )
         return
-    _audit(
-        context,
-        actor_role,
-        action="support_settings_updated",
-        section="support",
-        metadata={"field": "username" if support_username is not None else "description"},
-    )
-    await context.send_text("✅ Настройки поддержки обновлены")
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text(
+            "⚠️ Не удалось сохранить настройки поддержки. Попробуйте ещё раз.",
+            keyboard=settings_support_input_keyboard(),
+        )
+        return
+    if changed:
+        _audit(
+            context,
+            actor_role,
+            action="support_account_changed" if is_username_update else "support_description_changed",
+            section="support",
+        )
+    if is_username_update:
+        await context.send_text(f"✅ Аккаунт поддержки обновлён: @{normalized_username}")
+        state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
+    else:
+        await context.send_text("✅ Описание поддержки обновлено")
     await _show_support_editor(context)
 
 
