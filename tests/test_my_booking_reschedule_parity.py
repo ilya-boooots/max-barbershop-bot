@@ -83,7 +83,7 @@ def test_router_payloads_are_registered_and_not_placeholders() -> None:
     assert "SECTION_SOON_TEXT" not in flow[flow.index("async def handle_my_booking_reschedule_start"):flow.index("async def handle_my_booking_reschedule_date")]
 
 
-@pytest.mark.parametrize("status", ["active", "confirmed", "approve", "approved", "pending", "new", ""])
+@pytest.mark.parametrize("status", ["active", "confirmed", "approve", "approved", "pending", "new", "", "booked", "created", "reserved", "mystery"])
 def test_reschedule_button_visible_for_telegram_allowed_statuses(status: str) -> None:
     row = future_row(status=status)
     assert svc.is_booking_reschedulable(row, timezone_name="Europe/Samara") is True
@@ -91,7 +91,7 @@ def test_reschedule_button_visible_for_telegram_allowed_statuses(status: str) ->
     assert any("Перенести" in button.text for row_buttons in keyboard.rows for button in row_buttons)
 
 
-@pytest.mark.parametrize("status", ["cancelled", "canceled", "done", "completed", "visit", "no_show", "booked", "created", "reserved"])
+@pytest.mark.parametrize("status", ["cancelled", "canceled", "done", "completed", "visit", "no_show"])
 def test_reschedule_button_hidden_for_telegram_forbidden_statuses(status: str) -> None:
     row = future_row(status=status)
     assert svc.is_booking_reschedulable(row, timezone_name="Europe/Samara") is False
