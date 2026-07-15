@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sqlite3
 from pathlib import Path
 
@@ -121,7 +120,7 @@ def test_title_count_roles_duplicates_order_dates_issuer_and_no_extra_phone_user
     assert "👤 manager_name" in text
     assert "📅 С 03.01.2026 11:00" in text
     assert "🛠 Выдал: Главный" in text
-    assert "🛠 Выдал: Без имени" in text
+    assert "🛠 Выдал: Разработчик" in text
     assert "@admin_name" not in text
     assert "Телефон:" not in text
     assert "+79991234567" not in text
@@ -153,6 +152,7 @@ def test_staff_card_valid_protected_stale_and_no_mutation_buttons(db: Path) -> N
     text = _texts(sender)[0]
     assert "<b>Карточка сотрудника</b>" in text
     assert "👤 Имя: Protected" in text
+    assert "🆔 MAX ID: dev" in text
     assert "🎖 Роль: 💻 Разработчик" in text
     assert "🔒 Защищённый системный разработчик" in text
     buttons = _buttons(sender.messages[0][1])
@@ -173,7 +173,7 @@ def test_display_name_missing_linked_user_and_malformed_callback_safe(db: Path) 
     ctx, sender = _ctx(STAFF_LIST_PAYLOAD, user="dev")
     asyncio.run(handle_staff_list(ctx))
     assert "👤 Без имени" in _texts(sender)[0]
-    assert "🛠 Выдал: Без имени" in _texts(sender)[0]
+    assert "🛠 Выдал: Разработчик" in _texts(sender)[0]
 
     malformed_ctx, malformed_sender = _ctx(STAFF_CARD_PAYLOAD_PREFIX, user="dev")
     asyncio.run(handle_staff_card(malformed_ctx))

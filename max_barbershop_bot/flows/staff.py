@@ -398,7 +398,7 @@ def _build_staff_list_items() -> list[_StaffListItem]:
                 role_assigned_at=staff_role.updated_at or staff_role.created_at,
                 assigned_by_platform_user_id=staff_role.assigned_by_platform_user_id,
                 display_name=_display_name(user) or "Без имени",
-                assigned_by_name=_display_name(issuer) or "Без имени",
+                assigned_by_name=_staff_issuer_name(issuer),
                 protected_developer=_is_protected_staff_member(staff_role.platform_user_id, user),
             )
         )
@@ -428,6 +428,7 @@ def _build_staff_card_text(item: _StaffListItem) -> str:
     lines = [
         STAFF_CARD_TITLE_TEXT,
         f"👤 Имя: {item.display_name}",
+        f"🆔 MAX ID: {item.platform_user_id}",
         f"🎖 Роль: {_role_label(item.role)}",
         f"🗓 Роль с: {_format_staff_assigned_at(item.role_assigned_at)}",
         f"👤 Выдал: {item.assigned_by_name}",
@@ -534,6 +535,10 @@ def _display_name(user: User | None) -> str | None:
         if value and value.strip():
             return value.strip()
     return None
+
+
+def _staff_issuer_name(user: User | None) -> str:
+    return _display_name(user) or "Разработчик"
 
 
 def _is_protected_target(user: User) -> bool:
