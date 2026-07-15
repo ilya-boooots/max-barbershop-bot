@@ -121,16 +121,24 @@ class MasterPhotosService:
         except Exception as exc:  # noqa: BLE001 - keep transport details out of admin UX.
             raise MasterPhotosLoadError(MASTER_PHOTOS_LOAD_ERROR_TEXT) from exc
 
-        masters = [
-            MasterPhotoStaff(
-                yclients_staff_id=item.id,
-                name=item.name or "—",
-                specialization=item.specialization,
-                has_photo=self._photo_repository.has_photo(item.id),
-            )
-            for item in staff
-            if item.id and item.name and item.bookable is not False
-        ]
+        try:
+            masters = []
+            for item in staff:
+                name = _clean_text(item.name or item.raw.get("fullname") or item.raw.get("title"))
+                if not item.id or not name:
+                    continue
+                if item.raw.get("is_deleted") is True or item.raw.get("active") is False:
+                    continue
+                masters.append(
+                    MasterPhotoStaff(
+                        yclients_staff_id=item.id,
+                        name=name,
+                        specialization=item.specialization,
+                        has_photo=self._photo_repository.has_photo(item.id),
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001 - keep storage details out of admin UX.
+            raise MasterPhotosLoadError(MASTER_PHOTOS_LOAD_ERROR_TEXT) from exc
         return sorted(masters, key=lambda item: item.name.lower())
 
     def format_master_card_text(self, master_name: str, *, has_photo: bool) -> str:

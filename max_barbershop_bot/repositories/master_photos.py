@@ -62,8 +62,21 @@ class MasterPhotosRepository:
         """Create or replace an active photo reference for a YClients staff id."""
 
         staff_id = _required_text(yclients_staff_id)
-        if not any(_optional_text(value) for value in (photo_file_id, photo_url, photo_attachment_json)):
+        normalized_name = _optional_text(master_name)
+        normalized_file_id = _optional_text(photo_file_id)
+        normalized_url = _optional_text(photo_url)
+        normalized_attachment = _optional_text(photo_attachment_json)
+        if not any((normalized_file_id, normalized_url, normalized_attachment)):
             raise ValueError("Master photo reference must not be empty")
+        current = self.get_by_staff_id(staff_id)
+        if (
+            current is not None
+            and current.master_name == normalized_name
+            and current.photo_file_id == normalized_file_id
+            and current.photo_url == normalized_url
+            and current.photo_attachment_json == normalized_attachment
+        ):
+            return current
         with closing(self._connect()) as connection:
             cursor = connection.execute(
                 """
@@ -85,10 +98,10 @@ class MasterPhotosRepository:
                 (
                     self._platform,
                     staff_id,
-                    _optional_text(master_name),
-                    _optional_text(photo_file_id),
-                    _optional_text(photo_url),
-                    _optional_text(photo_attachment_json),
+                    normalized_name,
+                    normalized_file_id,
+                    normalized_url,
+                    normalized_attachment,
                     _optional_text(actor_platform_user_id),
                     _optional_text(actor_platform_user_id),
                 ),
@@ -101,22 +114,25 @@ class MasterPhotosRepository:
                 raise RuntimeError("Saved master photo row was not found")
             return record
 
-    def delete_photo(self, yclients_staff_id: str, *, actor_platform_user_id: str | None = None) -> None:
-        """Deactivate a master photo without storing binary data."""
+    def delete_photo(self, yclients_staff_id: str, *, actor_platform_user_id: str | None = None) -> bool:
+        """Deactivate an active photo once and report whether storage changed."""
 
         staff_id = _required_text(yclients_staff_id)
+        if self.get_by_staff_id(staff_id) is None:
+            return False
         with closing(self._connect()) as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE master_photos
                 SET is_active = 0,
                     updated_by_platform_user_id = ?,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE platform = ? AND yclients_staff_id = ?
+                WHERE platform = ? AND yclients_staff_id = ? AND is_active = 1
                 """,
                 (_optional_text(actor_platform_user_id), self._platform, staff_id),
             )
             connection.commit()
+            return cursor.rowcount > 0
 
     def list_all(self) -> list[MasterPhoto]:
         """List all active master photo rows."""

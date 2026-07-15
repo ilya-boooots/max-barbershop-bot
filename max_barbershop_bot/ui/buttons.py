@@ -95,11 +95,9 @@ SETTINGS_SUPPORT_EDIT_DESCRIPTION_PAYLOAD = "settings:support:description"
 SETTINGS_SUPPORT_PREVIEW_PAYLOAD = "settings:support:preview"
 SETTINGS_SUPPORT_RESET_PAYLOAD = "settings:support:reset"
 MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX = "settings:mp:select:"
-MASTER_PHOTOS_UPLOAD_PAYLOAD = "settings:mp:upload"
-MASTER_PHOTOS_DELETE_PAYLOAD = "settings:mp:delete"
-MASTER_PHOTOS_DELETE_CONFIRM_PAYLOAD = "settings:mp:delete:confirm"
-MASTER_PHOTOS_BACK_PAYLOAD = "settings:mp:back"
-MASTER_PHOTOS_HOME_PAYLOAD = "settings:mp:home"
+MASTER_PHOTOS_UPLOAD_PAYLOAD_PREFIX = "settings:mp:upload:"
+MASTER_PHOTOS_DELETE_PAYLOAD_PREFIX = "settings:mp:delete:"
+MASTER_PHOTOS_PAGE_PAYLOAD_PREFIX = "settings:mp:page:"
 
 STATISTICS_TODAY_PAYLOAD = "stats:today"
 STATISTICS_7_DAYS_PAYLOAD = "stats:7"
@@ -365,7 +363,12 @@ def _mask_clients_directory_phone(phone: str | None) -> str:
     return f"+{'*' * max(1, len(digits) - 4)}{digits[-4:]}"
 
 
-def settings_menu_keyboard(role: str | None = None, *, protected_developer: bool = False) -> MaxInlineKeyboard:
+def settings_menu_keyboard(
+    role: str | None = None,
+    *,
+    protected_developer: bool = False,
+    home_payload: str = SETTINGS_HOME_PAYLOAD,
+) -> MaxInlineKeyboard:
     """Build settings hub buttons for the current role."""
 
     normalized_role = normalize_role(role)
@@ -383,7 +386,7 @@ def settings_menu_keyboard(role: str | None = None, *, protected_developer: bool
     if protected_developer:
         rows.append([MaxButton(text="🛠 Диагностика", payload=SETTINGS_DIAGNOSTICS_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)])
-    rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=home_payload)])
     return MaxInlineKeyboard.from_rows(rows)
 
 
@@ -438,62 +441,58 @@ def settings_profile_input_keyboard() -> MaxInlineKeyboard:
 
 
 
-def master_photos_list_keyboard(masters: list[object]) -> MaxInlineKeyboard:
+def master_photos_list_keyboard(masters: list[object], *, page: int = 0) -> MaxInlineKeyboard:
     """Build master photo settings master list."""
 
+    page_size = 28 if len(masters) <= 28 else 27
+    page_count = max(1, (len(masters) + page_size - 1) // page_size)
+    current_page = min(max(page, 0), page_count - 1)
+    start = current_page * page_size
     rows = [
         [
             MaxButton(
                 text=_master_photo_button_text(master),
-                payload=indexed_payload(MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX, index),
+                payload=f"{MASTER_PHOTOS_SELECT_PAYLOAD_PREFIX}{getattr(master, 'yclients_staff_id', '')}",
             )
         ]
-        for index, master in enumerate(masters[:20])
+        for master in masters[start : start + page_size]
     ]
-    rows.append([MaxButton(text="⬅️ Назад", payload=SETTINGS_BACK_PAYLOAD)])
-    rows.append([MaxButton(text="🏠 Главное меню", payload=SETTINGS_HOME_PAYLOAD)])
+    if page_count > 1:
+        pagination: list[MaxButton] = []
+        if current_page > 0:
+            pagination.append(
+                MaxButton(
+                    text="◀️ Назад",
+                    payload=f"{MASTER_PHOTOS_PAGE_PAYLOAD_PREFIX}{current_page - 1}",
+                )
+            )
+        if current_page + 1 < page_count:
+            pagination.append(
+                MaxButton(
+                    text="Далее ▶️",
+                    payload=f"{MASTER_PHOTOS_PAGE_PAYLOAD_PREFIX}{current_page + 1}",
+                )
+            )
+        rows.append(pagination)
+    rows.append([MaxButton(text="⬅️ Назад", payload=ADMIN_SETTINGS_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
 
 
 def _master_photo_button_text(master: object) -> str:
-    name = str(getattr(master, "name", "—") or "—").strip() or "—"
-    specialization = str(getattr(master, "specialization", "") or "").strip()
-    status = "✅" if getattr(master, "has_photo", False) else "—"
-    title = f"{name} · {specialization}" if specialization else name
-    return f"{title} {status}"
+    return str(getattr(master, "name", "—") or "—").strip() or "—"
 
-def master_photo_detail_keyboard(*, has_photo: bool) -> MaxInlineKeyboard:
+def master_photo_detail_keyboard(*, yclients_staff_id: str) -> MaxInlineKeyboard:
     """Build actions for one master photo card."""
 
-    upload_text = "📤 Загрузить / заменить фото"
-    rows = [[MaxButton(text=upload_text, payload=MASTER_PHOTOS_UPLOAD_PAYLOAD)]]
-    if has_photo:
-        rows.append([MaxButton(text="🗑️ Удалить фото", payload=MASTER_PHOTOS_DELETE_PAYLOAD)])
-    rows.append([MaxButton(text="⬅️ Назад", payload=MASTER_PHOTOS_BACK_PAYLOAD)])
-    rows.append([MaxButton(text="🏠 Главное меню", payload=MASTER_PHOTOS_HOME_PAYLOAD)])
-    return MaxInlineKeyboard.from_rows(rows)
-
-
-def master_photo_wait_keyboard() -> MaxInlineKeyboard:
-    """Build navigation while waiting for a master photo upload."""
-
+    staff_id = str(yclients_staff_id).strip()
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="⬅️ Назад", payload=MASTER_PHOTOS_BACK_PAYLOAD)],
-            [MaxButton(text="🏠 Главное меню", payload=MASTER_PHOTOS_HOME_PAYLOAD)],
-        ]
-    )
-
-
-def master_photo_delete_confirm_keyboard() -> MaxInlineKeyboard:
-    """Build master photo deletion confirmation buttons."""
-
-    return MaxInlineKeyboard.from_rows(
-        [
-            [MaxButton(text="✅ Удалить", payload=MASTER_PHOTOS_DELETE_CONFIRM_PAYLOAD)],
-            [MaxButton(text="⬅️ Назад", payload=MASTER_PHOTOS_BACK_PAYLOAD)],
-            [MaxButton(text="🏠 Главное меню", payload=MASTER_PHOTOS_HOME_PAYLOAD)],
+            [MaxButton(text="📤 Загрузить / заменить фото", payload=f"{MASTER_PHOTOS_UPLOAD_PAYLOAD_PREFIX}{staff_id}")],
+            [MaxButton(text="🗑️ Удалить фото", payload=f"{MASTER_PHOTOS_DELETE_PAYLOAD_PREFIX}{staff_id}")],
+            [MaxButton(text="⬅️ Назад", payload=SETTINGS_MASTER_PHOTOS_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
 
