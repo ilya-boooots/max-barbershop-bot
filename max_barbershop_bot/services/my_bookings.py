@@ -755,21 +755,80 @@ class MyBookingsService:
         yclients_record_id: str,
         platform_user_id: str | None = None,
     ) -> dict[str, Any]:
-        """Load selected YClients record and return service/master for repeat booking."""
+        """Load selected YClients record and return Telegram-compatible repeat prefill."""
 
-        context = await self.prepare_reschedule_context(
-            user,
-            yclients_record_id=yclients_record_id,
-            platform_user_id=platform_user_id,
-        )
+        record_id = _clean_text(yclients_record_id)
+        if not record_id:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_NOT_FOUND_TEXT)
+        yclients_client_id = _clean_text(user.yclients_client_id if user else None)
+        attribution_rows = _platform_user_attributions(self._settings_repository.database_path, platform_user_id)
+        known_phones = collect_known_user_phones(user, attribution_rows)
+        attributed_record_ids = set(_attributed_record_ids(attribution_rows))
+        if not yclients_client_id and not known_phones and not attributed_record_ids:
+            raise MyBookingsProfileMissingError(MY_BOOKINGS_NO_PROFILE_TEXT)
+
+        settings = self._active_settings_for_reschedule(platform_user_id=platform_user_id, record_id=record_id)
+        timezone_name = _timezone_name(settings.branch_timezone)
+        try:
+            async with build_yclients_client_from_active_settings(settings) as client:
+                yclients = YClientsServiceLayer(client, company_id=settings.company_id)
+                details = await yclients.get_booking_details(
+                    company_id=settings.company_id,
+                    yclients_record_id=record_id,
+                )
+        except YClientsNotFoundError as exc:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_NOT_FOUND_TEXT) from exc
+        except YClientsError as exc:
+            logger.warning(
+                "Booking repeat details failed: operation=prepare_repeat platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s status_code=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+                exc.status_code,
+            )
+            raise MyBookingReschedulePrepareError(MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT) from exc
+        except Exception as exc:  # noqa: BLE001 - keep raw details away from users.
+            logger.warning(
+                "Booking repeat details unexpected error: operation=prepare_repeat platform_user_id=%s "
+                "yclients_record_id=%s error_class=%s",
+                platform_user_id,
+                record_id,
+                type(exc).__name__,
+            )
+            raise MyBookingReschedulePrepareError(MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT) from exc
+
+        row = _extract_record_detail_row(details)
+        if not row:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT)
+        if ownership_source_for_record(row, yclients_client_id=yclients_client_id, attributed_record_ids=attributed_record_ids, known_phones=known_phones) == "none":
+            raise MyBookingReschedulePrepareError(MY_BOOKING_NOT_FOUND_TEXT)
+
+        selected_booking = _booking_from_payload(row, timezone_name=timezone_name)
+        service_ids = _extract_service_ids(row)
+        service_name = _extract_service_name(row)
+        staff_id = _extract_staff_id(row)
+        staff_name = _extract_master_name(row)
+        duration = _extract_seance_length(row)
+        price = _extract_price(row)
+        if selected_booking is not None:
+            service_name = selected_booking.service_name or service_name
+            staff_name = selected_booking.master_name or staff_name
+            staff_id = staff_id or selected_booking.yclients_staff_id
+            duration = duration or selected_booking.duration_minutes
+            price = price or selected_booking.price
+        if not service_ids:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT)
         return {
-            "yclients_record_id": context.get("yclients_record_id"),
-            "service_id": context.get("service_id"),
-            "service_ids": context.get("service_ids"),
-            "staff_id": context.get("staff_id"),
-            "service_name": None,
-            "staff_name": None,
-            "branch_timezone": context.get("branch_timezone"),
+            "yclients_record_id": record_id,
+            "service_ids": service_ids,
+            "service_id": service_ids[0],
+            "service_name": service_name,
+            "staff_id": staff_id,
+            "staff_name": staff_name,
+            "price": price,
+            "duration_minutes": duration,
+            "branch_timezone": timezone_name,
         }
 
     async def revalidate_reschedule_source(
