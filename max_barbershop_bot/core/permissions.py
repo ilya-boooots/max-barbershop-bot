@@ -138,15 +138,12 @@ def can_view_clients_directory(role: str) -> bool:
 
 
 def can_assign_role(actor_role: str, target_role: str) -> bool:
-    """Check whether an actor role may assign a target role."""
+    """Match the role choices visible in the Telegram assignment picker."""
 
     actor = normalize_role(actor_role)
     target = normalize_role(target_role)
-    if actor == ROLE_DEVELOPER:
-        return target in {ROLE_DEVELOPER, ROLE_ADMIN, ROLE_MANAGER}
-    if actor == ROLE_MANAGER:
-        return target in {ROLE_ADMIN, ROLE_MANAGER}
-    return False
+    assignable_roles = {ROLE_DEVELOPER, ROLE_ADMIN, ROLE_MANAGER}
+    return target in assignable_roles and ROLE_PRIORITY[actor] > ROLE_PRIORITY[target]
 
 
 def can_remove_role(actor_role: str, target_role: str) -> bool:
