@@ -37,6 +37,8 @@ from max_barbershop_bot.services.my_bookings import (
     MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT,
     MY_BOOKING_RESCHEDULE_NO_DATES_TEXT,
     MY_BOOKING_RESCHEDULE_STALE_SLOT_TEXT,
+    MY_BOOKING_RESCHEDULE_STALE_DATE_TEXT,
+    MY_BOOKING_RESCHEDULE_SAME_SLOT_TEXT,
     MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT,
     MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT,
     MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT,
@@ -63,7 +65,9 @@ from max_barbershop_bot.services.my_bookings import (
     format_reschedule_confirmation_text,
     build_new_datetime_iso,
     format_reschedule_success_text,
+    parse_booking_datetime,
     is_booking_cancelable,
+    is_booking_reschedulable,
     is_future_booking,
     is_visible_my_booking,
     split_bookings_by_period,
@@ -119,6 +123,10 @@ _ACTIVE_BOOKING_INDEX_STATE_KEY = "my_bookings_active_index"
 _PAST_BOOKINGS_STATE_KEY = "my_bookings_past_items"
 _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY = "reschedule_completed_old_record_id"
 _RESCHEDULE_NEW_RECORD_STATE_KEY = "reschedule_new_record_id"
+_RESCHEDULE_OUTCOME_STATE_KEY = "my_booking_reschedule_outcome"
+_RESCHEDULE_RESULT_STATE_KEY = "my_booking_reschedule_result"
+_RESCHEDULE_OUTCOME_SUCCESS = "success"
+_RESCHEDULE_OUTCOME_PARTIAL_FAILURE = "partial_failure"
 _MAX_BOOKING_BUTTONS = 10
 _MAX_RESCHEDULE_DATES = DATE_LOOKAHEAD_DAYS
 _MAX_RESCHEDULE_SLOTS = 30
@@ -204,9 +212,10 @@ async def _show_active_booking_page(context: RouterContext, *, page: int) -> Non
     state.set_state_data_value(platform_user_id, chat_id, _ACTIVE_BOOKING_INDEX_STATE_KEY, index)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
     can_cancel = is_booking_cancelable(booking, timezone_name=timezone_name)
+    can_reschedule = is_booking_reschedulable(booking, timezone_name=timezone_name)
     await context.send_text(
         format_booking_details_text(booking, timezone_name=timezone_name, title="📋 Активная запись"),
-        keyboard=my_booking_active_card_keyboard(index=index, total=len(active), can_cancel=can_cancel),
+        keyboard=my_booking_active_card_keyboard(index=index, total=len(active), can_cancel=can_cancel, can_reschedule=can_reschedule),
         attachments=_booking_master_photo_attachment(booking),
     )
 
@@ -287,11 +296,12 @@ async def handle_my_booking_details(context: RouterContext) -> None:
         return
     can_cancel = is_booking_cancelable(booking, timezone_name=timezone_name)
     is_active = is_future_booking(booking, timezone_name=timezone_name)
+    can_reschedule = is_booking_reschedulable(booking, timezone_name=timezone_name)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, booking_display_data(booking, timezone_name=timezone_name))
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_DETAILS_SCREEN)
     await context.send_text(
         format_booking_details_text(booking, timezone_name=timezone_name),
-        keyboard=my_booking_details_keyboard(can_cancel=can_cancel, is_active=is_active),
+        keyboard=my_booking_details_keyboard(can_cancel=can_cancel, is_active=is_active, can_reschedule=can_reschedule),
         attachments=_booking_master_photo_attachment(booking),
     )
 
@@ -505,6 +515,7 @@ async def handle_my_booking_reschedule_start(context: RouterContext) -> None:
 
     platform_user_id = _user_id(context)
     chat_id = _chat_id(context)
+    _clear_persisted_reschedule_outcome(platform_user_id, chat_id)
     service = MyBookingsService(YClientsSettingsRepository(_database_path()))
     try:
         reschedule_context = await service.prepare_reschedule_context(
@@ -576,6 +587,12 @@ async def handle_my_booking_reschedule_date(context: RouterContext) -> None:
     dates = _reschedule_dates(context)
     if index is None or index < 0 or index >= len(dates):
         await context.answer_callback()
+        reschedule_context = _reschedule_context(context)
+        if reschedule_context:
+            await context.send_text(MY_BOOKING_RESCHEDULE_STALE_DATE_TEXT)
+            await _reload_reschedule_dates(context, reschedule_context)
+        else:
+            await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
     new_booking_date = dates[index]
     reschedule_context = _reschedule_context(context)
@@ -651,6 +668,13 @@ async def handle_my_booking_reschedule_slot(context: RouterContext) -> None:
     slots = _reschedule_slots(context)
     if index is None or index < 0 or index >= len(slots):
         await context.answer_callback()
+        await context.send_text(MY_BOOKING_RESCHEDULE_STALE_SLOT_TEXT)
+        new_booking_date = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY))
+        reschedule_context = _reschedule_context(context)
+        if new_booking_date and reschedule_context:
+            await _reload_reschedule_slots(context, reschedule_context, new_booking_date)
+        elif reschedule_context:
+            await _reload_reschedule_dates(context, reschedule_context)
         return
     selected_slot = slots[index]
     slot_time = _clean_state_text(getattr(selected_slot, "time", None))
@@ -662,12 +686,20 @@ async def handle_my_booking_reschedule_slot(context: RouterContext) -> None:
     new_booking_date = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY))
     selected_datetime = _clean_state_text(getattr(selected_slot, "datetime_iso", None))
     new_datetime = build_new_datetime_iso(new_booking_date, slot_time, selected_datetime=selected_datetime)
+    if _is_same_reschedule_datetime(new_datetime, reschedule_context, timezone_name=str(reschedule_context.get("branch_timezone") or _timezone_from_state(context))):
+        await context.answer_callback()
+        await context.send_text(MY_BOOKING_RESCHEDULE_SAME_SLOT_TEXT)
+        await _reload_reschedule_slots(context, reschedule_context, new_booking_date)
+        return
+
     confirmation_data = {
         "old_date": reschedule_context.get("old_date"),
         "old_time": reschedule_context.get("old_time"),
         "new_date": format_display_date(new_booking_date, timezone_name=str(reschedule_context.get("branch_timezone") or _timezone_from_state(context))),
         "new_time": slot_time,
         "new_datetime": new_datetime,
+        "service_name": reschedule_context.get("service_name"),
+        "staff_name": reschedule_context.get("staff_name"),
     }
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, confirmation_data)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_CONFIRM_SCREEN)
@@ -684,6 +716,14 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
         await context.answer_callback()
         await context.send_text(MY_BOOKING_RESCHEDULE_IN_PROGRESS_TEXT)
         return
+    persisted_result = _persisted_reschedule_result(context)
+    if persisted_result:
+        await context.answer_callback()
+        await context.send_text(
+            _clean_state_text(persisted_result.get("text")) or MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT,
+            keyboard=my_booking_reschedule_result_keyboard(),
+        )
+        return
     reschedule_context = _reschedule_context(context)
     slot_data = _reschedule_new_slot_data(context)
     selected_booking = _selected_booking(context)
@@ -697,16 +737,6 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
         await context.answer_callback()
         await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
-    completed_old_id = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY))
-    if completed_old_id == record_id:
-        await context.answer_callback()
-        await context.send_text(
-            _format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)),
-            keyboard=my_booking_reschedule_result_keyboard(),
-            attachments=_booking_master_photo_attachment(selected_booking),
-        )
-        return
-
     lock_key = f"booking:reschedule:{platform_user_id or 'unknown'}:{record_id}"
     if not acquire_action_lock(lock_key, ttl_seconds=DEFAULT_ACTION_LOCK_TTL_SECONDS):
         logger.info(
@@ -736,7 +766,31 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
             exc.diagnostic.get("trace_id") if hasattr(exc, "diagnostic") else None,
         )
         await context.answer_callback()
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
+        release_action_lock(lock_key)
         await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
+        return
+    service = MyBookingsService(YClientsSettingsRepository(_database_path()))
+    try:
+        reschedule_context = await service.revalidate_reschedule_source(
+            _current_user(context),
+            reschedule_context=reschedule_context,
+            platform_user_id=platform_user_id,
+        )
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_CONTEXT_STATE_KEY, reschedule_context)
+    except (MyBookingsProfileMissingError, MyBookingReschedulePrepareError, MyBookingRescheduleError) as exc:
+        await context.answer_callback()
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
+        release_action_lock(lock_key)
+        state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_ERROR_SCREEN)
+        await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
+        return
+    if _is_same_reschedule_datetime(new_datetime, reschedule_context, timezone_name=str(reschedule_context.get("branch_timezone") or _timezone_from_state(context))):
+        await context.answer_callback()
+        state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
+        release_action_lock(lock_key)
+        await context.send_text(MY_BOOKING_RESCHEDULE_SAME_SLOT_TEXT)
+        await _reload_reschedule_slots(context, reschedule_context, new_date)
         return
     if not _slot_available(current_slots, new_time, new_datetime):
         await context.answer_callback()
@@ -751,16 +805,13 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
             bool(record_id), bool(service_id), bool(staff_id), bool(new_date), bool(new_time),
             reschedule_context.get("branch_timezone"), 0, 0, len(current_slots), len(current_slots), True, None, None, None,
         )
+        release_action_lock(lock_key)
         await context.send_text(MY_BOOKING_RESCHEDULE_STALE_SLOT_TEXT)
-        if current_slots:
-            await _show_reschedule_slots_from_state(context)
-        else:
-            await _reload_reschedule_dates(context, reschedule_context)
+        await _reload_reschedule_slots(context, reschedule_context, new_date)
         return
 
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, True)
     await context.answer_callback()
-    service = MyBookingsService(YClientsSettingsRepository(_database_path()))
     try:
         result = await service.reschedule_booking_for_user(
             _current_user(context),
@@ -778,6 +829,18 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
             type(exc).__name__,
         )
         state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
+        partial_new_id = _clean_state_text(getattr(exc, "diagnostic", {}).get("new_record_id") if hasattr(exc, "diagnostic") else None)
+        if partial_new_id:
+            state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY, record_id)
+            state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_RECORD_STATE_KEY, partial_new_id)
+            _store_reschedule_outcome(
+                platform_user_id,
+                chat_id,
+                outcome=_RESCHEDULE_OUTCOME_PARTIAL_FAILURE,
+                text=exc.user_message,
+                old_record_id=record_id,
+                new_record_id=partial_new_id,
+            )
         release_action_lock(lock_key)
         state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_ERROR_SCREEN)
         await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
@@ -791,16 +854,25 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
         user=_current_user(context),
         timezone_name=_timezone_from_state(context),
     )
+    success_text = _format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context))
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY, record_id)
     state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_RECORD_STATE_KEY, new_record_id)
-    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
-    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_CONTEXT_STATE_KEY, None)
-    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, None)
+    _store_reschedule_outcome(
+        platform_user_id,
+        chat_id,
+        outcome=_RESCHEDULE_OUTCOME_SUCCESS,
+        text=success_text,
+        old_record_id=record_id,
+        new_record_id=new_record_id,
+    )
+    _clear_transient_reschedule_state(platform_user_id, chat_id)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _BOOKINGS_STATE_KEY, [])
     state.set_state_data_value(platform_user_id, chat_id, _BOOKINGS_PAGE_STATE_KEY, 0)
+    release_action_lock(lock_key)
     state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_SUCCESS_SCREEN)
     await context.send_text(
-        _format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)),
+        success_text,
         keyboard=my_booking_reschedule_result_keyboard(),
         attachments=_booking_master_photo_attachment(selected_booking),
     )
@@ -821,6 +893,7 @@ async def handle_my_bookings_back(context: RouterContext) -> None:
                 keyboard=my_booking_details_keyboard(
                     can_cancel=is_booking_cancelable(booking, timezone_name=timezone_name),
                     is_active=is_future_booking(booking, timezone_name=timezone_name),
+                    can_reschedule=is_booking_reschedulable(booking, timezone_name=timezone_name),
                 ),
                 attachments=_booking_master_photo_attachment(booking),
             )
@@ -928,6 +1001,7 @@ async def _show_my_bookings(context: RouterContext, *, push_current: bool = True
         keyboard=my_booking_entry_keyboard(
             can_cancel=is_booking_cancelable(nearest_booking, timezone_name=result.branch_timezone),
             show_all=len(active_state_items) > 1,
+            can_reschedule=is_booking_reschedulable(nearest_booking, timezone_name=result.branch_timezone),
         ),
         attachments=_booking_master_photo_attachment(nearest_booking),
     )
@@ -1024,6 +1098,49 @@ async def _show_reschedule_dates_from_state(context: RouterContext) -> None:
     )
 
 
+async def _reload_reschedule_slots(context: RouterContext, reschedule_context: dict[str, Any], selected_date: str) -> None:
+    platform_user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    service_id = _clean_state_text(reschedule_context.get("service_id"))
+    staff_id = _clean_state_text(reschedule_context.get("staff_id"))
+    if not service_id or not staff_id or not selected_date:
+        state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_ERROR_SCREEN)
+        await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
+        return
+    booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    try:
+        slots = await booking_service.get_available_slots(
+            yclients_service_id=service_id,
+            yclients_master_id=staff_id,
+            booking_date=selected_date,
+        )
+    except BookingServiceError as exc:
+        state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_ERROR_SCREEN)
+        await context.send_text(exc.user_message, keyboard=my_booking_reschedule_result_keyboard())
+        return
+    fresh_slots = _normalize_reschedule_slots(slots)[:_MAX_RESCHEDULE_SLOTS]
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY, selected_date)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_SLOTS_STATE_KEY, fresh_slots)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, None)
+    state.set_current_screen(platform_user_id, chat_id, state.MY_BOOKING_RESCHEDULE_SLOTS_SCREEN)
+    await context.send_text(
+        MY_BOOKING_RESCHEDULE_SLOTS_TEXT if fresh_slots else MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT,
+        keyboard=my_booking_reschedule_slots_keyboard(fresh_slots, format_slot_button),
+    )
+
+
+def _normalize_reschedule_slots(slots: list[Any]) -> list[Any]:
+    seen: set[str] = set()
+    result: list[Any] = []
+    for slot in slots:
+        key = _slot_time_from_values(_slot_value(slot, "time"), _slot_value(slot, "datetime_iso") or _slot_value(slot, "datetime"))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(slot)
+    return sorted(result, key=lambda item: _slot_time_from_values(_slot_value(item, "time"), _slot_value(item, "datetime_iso") or _slot_value(item, "datetime")))
+
+
 async def _show_reschedule_slots_from_state(context: RouterContext) -> None:
     slots = _reschedule_slots(context)
     state.set_current_screen(_user_id(context), _chat_id(context), state.MY_BOOKING_RESCHEDULE_SLOTS_SCREEN)
@@ -1032,6 +1149,78 @@ async def _show_reschedule_slots_from_state(context: RouterContext) -> None:
 
 
 
+
+def _is_same_reschedule_datetime(new_datetime: str, reschedule_context: dict[str, Any], *, timezone_name: str) -> bool:
+    old_raw = _clean_state_text(reschedule_context.get("old_datetime") or reschedule_context.get("datetime"))
+    if not old_raw or not new_datetime:
+        return False
+    old_dt = _parse_reschedule_datetime(old_raw, timezone_name=timezone_name)
+    new_dt = _parse_reschedule_datetime(new_datetime, timezone_name=timezone_name)
+    if old_dt is None or new_dt is None:
+        return False
+    return old_dt.replace(second=0, microsecond=0) == new_dt.replace(second=0, microsecond=0)
+
+
+def _parse_reschedule_datetime(value: str, *, timezone_name: str):
+    parsed = parse_booking_datetime({"datetime": value}, timezone_name=timezone_name)
+    return parsed
+
+
+def _clear_transient_reschedule_state(platform_user_id: str | None, chat_id: str | None) -> None:
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_IN_PROGRESS_STATE_KEY, False)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_CONTEXT_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_DATES_STATE_KEY, [])
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_SLOTS_STATE_KEY, [])
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_SLOT_STATE_KEY, None)
+
+
+
+def _persisted_reschedule_result(context: RouterContext) -> dict[str, Any] | None:
+    platform_user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    outcome = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_OUTCOME_STATE_KEY))
+    result = state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_RESULT_STATE_KEY)
+    if outcome not in {_RESCHEDULE_OUTCOME_SUCCESS, _RESCHEDULE_OUTCOME_PARTIAL_FAILURE}:
+        return None
+    if not isinstance(result, dict):
+        return None
+    text = _clean_state_text(result.get("text"))
+    if not text:
+        return None
+    if _clean_state_text(result.get("outcome")) != outcome:
+        return None
+    return result
+
+
+def _store_reschedule_outcome(
+    platform_user_id: str | None,
+    chat_id: str | None,
+    *,
+    outcome: str,
+    text: str,
+    old_record_id: str,
+    new_record_id: str,
+) -> None:
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_OUTCOME_STATE_KEY, outcome)
+    state.set_state_data_value(
+        platform_user_id,
+        chat_id,
+        _RESCHEDULE_RESULT_STATE_KEY,
+        {
+            "outcome": outcome,
+            "text": text,
+            "old_record_id": old_record_id,
+            "new_record_id": new_record_id,
+        },
+    )
+
+
+def _clear_persisted_reschedule_outcome(platform_user_id: str | None, chat_id: str | None) -> None:
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_OUTCOME_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_RESULT_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_RECORD_STATE_KEY, None)
 
 def _booking_master_photo_attachment(booking: Any) -> list[dict[str, object]] | None:
     """Return configured MAX master photo attachment for a booking details card."""

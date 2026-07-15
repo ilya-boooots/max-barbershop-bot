@@ -62,6 +62,13 @@ MY_BOOKING_RESCHEDULE_SLOTS_TEXT = "🔁 Перенос записи\n\nВыбе
 MY_BOOKING_RESCHEDULE_NO_SLOTS_TEXT = "На эту дату свободного времени нет 🙏\n\nВыберите другой день."
 MY_BOOKING_RESCHEDULE_NO_DATES_TEXT = "Пока нет доступных дат для переноса 🙏\n\nПопробуйте позже или напишите администратору."
 MY_BOOKING_RESCHEDULE_STALE_SLOT_TEXT = "Это время уже недоступно 🙏\n\nПожалуйста, выберите другое время."
+MY_BOOKING_RESCHEDULE_STALE_DATE_TEXT = "На эту дату пока нет свободных окон 🙏\n\nВыберите другую дату."
+MY_BOOKING_RESCHEDULE_RATE_LIMIT_TEXT = "⏳ Слишком много запросов. Попробуйте через минуту 🙂"
+MY_BOOKING_RESCHEDULE_AUTH_ERROR_TEXT = "⚙️ Не удалось перенести запись из-за временной ошибки интеграции 🙏\n\nПожалуйста, попробуйте позже или напишите администратору."
+MY_BOOKING_RESCHEDULE_STALE_SOURCE_TEXT = "Эта запись уже неактуальна 🙏\n\nОткройте список записей заново."
+MY_BOOKING_RESCHEDULE_CONFLICT_TEXT = "Это время уже заняли 🙏\n\nПожалуйста, выберите другой слот."
+MY_BOOKING_RESCHEDULE_TEMPORARY_ERROR_TEXT = "YClients временно недоступен 🙏\n\nПопробуйте чуть позже."
+MY_BOOKING_RESCHEDULE_SAME_SLOT_TEXT = "Вы выбрали текущее время записи 🙏\n\nПожалуйста, выберите другое время."
 MY_BOOKING_REPEAT_PREPARE_ERROR_TEXT = "Не получилось подготовить повтор записи 🙏\n\nПожалуйста, попробуйте позже."
 MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT = "Эта услуга сейчас недоступна 🙏\n\nВыберите другую услугу для записи."
 MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT = "Этот мастер сейчас недоступен для повторной записи 🙏\n\nВыберите другого мастера или услугу."
@@ -86,6 +93,7 @@ _CANCELLED_STATUSES = {"cancelled", "canceled", "cancel", "deleted", "delete", "
 _COMPLETED_VISIT_STATUSES = {"done", "completed", "complete", "visit", "visited", "arrived", "paid", "finished"}
 _NO_SHOW_STATUSES = {"no_show", "noshow", "not_come", "did_not_come"}
 _ACTIVE_BOOKING_STATUSES = {"active", "confirmed", "approve", "approved", "pending", "new", "booked", "created", "reserved"}
+_TELEGRAM_RESCHEDULE_STATUSES = {"active", "confirmed", "approve", "approved", "pending", "new"}
 _CANCELLED_OR_PAST_STATUSES = _CANCELLED_STATUSES | _COMPLETED_VISIT_STATUSES | _NO_SHOW_STATUSES
 _ACTIVE_CANCELABLE_STATUSES = _ACTIVE_BOOKING_STATUSES
 _CANCEL_CUTOFF_MINUTES = 10
@@ -696,11 +704,19 @@ class MyBookingsService:
         if not is_record_visible_active(row, datetime.now(_zoneinfo(timezone_name)), timezone_name=timezone_name):
             raise MyBookingReschedulePrepareError(MY_BOOKING_NOT_FOUND_TEXT)
 
+        selected_booking = _booking_from_payload(row, timezone_name=timezone_name)
         service_ids = _extract_service_ids(row)
         staff_id = _extract_staff_id(row)
         client_data = _extract_client_data(row)
         seance_length = _extract_seance_length(row)
         old_datetime = parse_booking_datetime(row, timezone_name=timezone_name)
+        service_name = _extract_service_name(row)
+        staff_name = _extract_master_name(row)
+        if selected_booking is not None:
+            service_name = selected_booking.service_name or service_name
+            staff_name = selected_booking.master_name or staff_name
+            staff_id = staff_id or selected_booking.yclients_staff_id
+            seance_length = seance_length or selected_booking.duration_minutes
         if not service_ids or not staff_id or not client_data or not seance_length or old_datetime is None:
             logger.info(
                 "Booking reschedule context incomplete: operation=prepare_reschedule platform_user_id=%s "
@@ -721,7 +737,9 @@ class MyBookingsService:
             "yclients_record_id": record_id,
             "service_ids": service_ids,
             "service_id": service_ids[0],
+            "service_name": service_name,
             "staff_id": staff_id,
+            "staff_name": staff_name,
             "client_data": client_data,
             "seance_length": seance_length,
             "old_date": old_local.strftime("%d.%m.%Y"),
@@ -753,6 +771,35 @@ class MyBookingsService:
             "staff_name": None,
             "branch_timezone": context.get("branch_timezone"),
         }
+
+    async def revalidate_reschedule_source(
+        self,
+        user: User | None,
+        *,
+        reschedule_context: dict[str, Any],
+        platform_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Refresh and verify the source record before a reschedule mutation."""
+
+        record_id = _clean_text(reschedule_context.get("yclients_record_id"))
+        if not record_id:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT)
+        fresh = await self.prepare_reschedule_context(
+            user,
+            yclients_record_id=record_id,
+            platform_user_id=platform_user_id,
+        )
+        if _clean_text(fresh.get("yclients_record_id")) != record_id:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_STALE_SOURCE_TEXT)
+        old_service = _clean_text(reschedule_context.get("service_id"))
+        old_staff = _clean_text(reschedule_context.get("staff_id"))
+        fresh_service = _clean_text(fresh.get("service_id"))
+        fresh_staff = _clean_text(fresh.get("staff_id"))
+        if old_service and fresh_service and old_service != fresh_service:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT)
+        if old_staff and fresh_staff and old_staff != fresh_staff:
+            raise MyBookingReschedulePrepareError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT)
+        return {**reschedule_context, **fresh}
 
     async def reschedule_booking_for_user(
         self,
@@ -807,16 +854,22 @@ class MyBookingsService:
                     cancellation_marker=cancel_marker,
                 )
                 cancel_success = True
-        except (YClientsValidationError, YClientsNotFoundError) as exc:
+        except YClientsError as exc:
             self._log_reschedule_diagnostic(platform_user_id, record_id, created_record_id, datetime_iso, cancel_success, exc)
             if created_record_id and not cancel_success:
-                raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_CANCEL_OLD_FAILED_TEXT) from exc
-            raise MyBookingRescheduleNotAllowedError(MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT) from exc
-        except (YClientsAuthError, YClientsRateLimitError, YClientsServerError, YClientsTransportError, YClientsError) as exc:
+                raise MyBookingRescheduleError(
+                    MY_BOOKING_RESCHEDULE_CANCEL_OLD_FAILED_TEXT,
+                    diagnostic={"old_record_id": record_id, "new_record_id": created_record_id, "partial_failure": True},
+                ) from exc
+            raise _map_reschedule_yclients_error(exc) from exc
+        except Exception as exc:  # noqa: BLE001 - malformed integration responses must stay friendly.
             self._log_reschedule_diagnostic(platform_user_id, record_id, created_record_id, datetime_iso, cancel_success, exc)
             if created_record_id and not cancel_success:
-                raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_CANCEL_OLD_FAILED_TEXT) from exc
-            raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT) from exc
+                raise MyBookingRescheduleError(
+                    MY_BOOKING_RESCHEDULE_CANCEL_OLD_FAILED_TEXT,
+                    diagnostic={"old_record_id": record_id, "new_record_id": created_record_id, "partial_failure": True},
+                ) from exc
+            raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT) from exc
 
         self._log_reschedule_diagnostic(platform_user_id, record_id, created_record_id, datetime_iso, cancel_success, None)
         return {"old_record_id": record_id, "new_record_id": created_record_id, "new_datetime": datetime_iso}
@@ -877,6 +930,25 @@ class MyBookingsService:
             raise MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT)
         return settings
 
+
+
+def _map_reschedule_yclients_error(exc: YClientsError) -> MyBookingRescheduleError:
+    status = getattr(exc, "status_code", None)
+    if isinstance(exc, YClientsRateLimitError) or status == 429:
+        return MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_RATE_LIMIT_TEXT)
+    if isinstance(exc, YClientsNotFoundError) or status == 404:
+        return MyBookingRescheduleNotAllowedError(MY_BOOKING_RESCHEDULE_STALE_SOURCE_TEXT)
+    if status == 409:
+        return MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_CONFLICT_TEXT)
+    if isinstance(exc, YClientsValidationError) or status in {400, 422}:
+        return MyBookingRescheduleNotAllowedError(MY_BOOKING_RESCHEDULE_NOT_ALLOWED_TEXT)
+    if isinstance(exc, YClientsAuthError) or status in {401, 403}:
+        return MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_AUTH_ERROR_TEXT)
+    if isinstance(exc, YClientsServerError) or (isinstance(status, int) and status >= 500):
+        return MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_TEMPORARY_ERROR_TEXT)
+    if isinstance(exc, YClientsTransportError):
+        return MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_TEMPORARY_ERROR_TEXT)
+    return MyBookingRescheduleError(MY_BOOKING_RESCHEDULE_ERROR_TEXT)
 
 def _build_reschedule_cancel_marker(timezone_name: str) -> str:
     return build_yclients_action_comment(
@@ -1007,6 +1079,37 @@ def is_booking_cancelable(
     if parsed - current <= timedelta(minutes=_CANCEL_CUTOFF_MINUTES):
         return False
     return _is_yclients_record_active(item)
+
+
+def is_booking_reschedulable(
+    item: dict[str, Any] | MyBookingItem,
+    *,
+    timezone_name: str = DEFAULT_BRANCH_TIMEZONE,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether Telegram would show the My Bookings reschedule action."""
+
+    raw = item.raw if isinstance(item, MyBookingItem) else item
+    raw_status = item.raw_status if isinstance(item, MyBookingItem) else _clean_text(raw.get("raw_status") or raw.get("status") or raw.get("record_status") or raw.get("state"))
+    if _has_deleted_flag(raw) or _is_explicitly_inactive_status(raw_status):
+        return False
+    attendance = _extract_attendance(raw)
+    if attendance in {"-1", "1"}:
+        return False
+    parsed = parse_booking_datetime(item, timezone_name=timezone_name)
+    if parsed is None:
+        return False
+    current = now or datetime.now(_zoneinfo(timezone_name))
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_zoneinfo(timezone_name))
+    if parsed < current.astimezone(_zoneinfo(timezone_name)) - timedelta(minutes=5):
+        return False
+    normalized = _normalize_status(raw_status)
+    if not normalized:
+        return True
+    if normalized in _TELEGRAM_RESCHEDULE_STATUSES:
+        return True
+    return normalized not in _CANCELLED_OR_PAST_STATUSES
 
 
 def sort_bookings_by_datetime(
@@ -1223,6 +1326,9 @@ def format_reschedule_confirmation_text(data: dict[str, Any]) -> str:
     return "\n".join(
         [
             "Проверьте перенос записи 🔁",
+            "",
+            f"✂️ Услуга: {_clean_text(data.get('service_name')) or 'Услуга'}",
+            f"👤 Мастер: {_clean_text(data.get('staff_name')) or 'Любой мастер'}",
             "",
             "Было:",
             f"🗓 {_clean_text(data.get('old_date')) or '—'}",
