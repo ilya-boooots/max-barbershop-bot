@@ -89,6 +89,7 @@ from max_barbershop_bot.ui.buttons import (
     booking_phone_keyboard,
     booking_success_keyboard,
     my_booking_details_keyboard,
+    my_bookings_history_keyboard,
     navigation_keyboard,
 )
 from max_barbershop_bot.ui.texts import (
@@ -278,6 +279,7 @@ async def start_repeat_booking_with_prefill(
     master_name: str | None,
     service_price: str | None = None,
     service_duration: str | None = None,
+    source_screen: str,
 ) -> None:
     """Start repeat booking with Telegram-compatible prefill/fallback."""
 
@@ -286,7 +288,7 @@ async def start_repeat_booking_with_prefill(
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
     _clear_booking_state(context)
     state.set_state_data_value(platform_user_id, chat_id, _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_REPEAT)
-    state.set_state_data_value(platform_user_id, chat_id, _REPEAT_SOURCE_SCREEN_STATE_KEY, state.MY_BOOKING_DETAILS_SCREEN)
+    state.set_state_data_value(platform_user_id, chat_id, _REPEAT_SOURCE_SCREEN_STATE_KEY, source_screen or state.MY_BOOKING_DETAILS_SCREEN)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_DATE_STATE_KEY, None)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_TIME_STATE_KEY, None)
     state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_DATETIME_STATE_KEY, None)
@@ -342,7 +344,7 @@ async def start_repeat_booking_with_prefill(
         return
 
     if not master_id:
-        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_STATE_KEY, None)
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_STATE_KEY, "0")
         state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_NAME_STATE_KEY, master_name or "Любой мастер")
         await _show_booking_dates(context)
         return
@@ -1048,7 +1050,7 @@ async def handle_booking_home(context: RouterContext) -> None:
     """Handle Home from booking hub with Telegram-style booking state cleanup."""
 
     await context.answer_callback()
-    if state.get_current_screen(_user_id(context), _chat_id(context)) == state.BOOKING_HUB_SCREEN:
+    if _is_active_booking_screen(context):
         _clear_booking_state(context)
     await show_home(context)
 
@@ -1064,6 +1066,9 @@ async def handle_booking_back(context: RouterContext) -> None:
         await show_home(context)
         return
     if current_screen == state.BOOKING_CATEGORIES_SCREEN:
+        if entry_mode == _ENTRY_MODE_REPEAT:
+            await _show_repeat_source_screen(context)
+            return
         if entry_mode == _ENTRY_MODE_STAFF_FIRST:
             masters = _masters(context)
             if masters is not None:
@@ -1085,6 +1090,9 @@ async def handle_booking_back(context: RouterContext) -> None:
         await _show_booking_hub(context, push_current=False)
         return
     if current_screen == state.BOOKING_SERVICES_SCREEN:
+        if entry_mode == _ENTRY_MODE_REPEAT:
+            await _show_repeat_source_screen(context)
+            return
         if entry_mode == _ENTRY_MODE_STAFF_FIRST and _state_value(context, _SELECTED_MASTER_STATE_KEY):
             masters = _masters(context)
             if masters is not None:
@@ -1104,6 +1112,9 @@ async def handle_booking_back(context: RouterContext) -> None:
         await show_home(context)
         return
     if current_screen == state.BOOKING_MASTERS_SCREEN:
+        if entry_mode == _ENTRY_MODE_REPEAT:
+            await _show_repeat_source_screen(context)
+            return
         if entry_mode == _ENTRY_MODE_STAFF_FIRST and not _state_value(context, _SELECTED_SERVICE_STATE_KEY):
             await _show_booking_hub(context, push_current=False)
             return
@@ -1111,18 +1122,7 @@ async def handle_booking_back(context: RouterContext) -> None:
         return
     if current_screen == state.BOOKING_DATES_SCREEN:
         if entry_mode == _ENTRY_MODE_REPEAT:
-            source_booking = state.get_state_data_value(_user_id(context), _chat_id(context), "my_bookings_selected_booking")
-            timezone_name = state.get_state_data_value(_user_id(context), _chat_id(context), "my_bookings_branch_timezone")
-            if isinstance(source_booking, dict):
-                from max_barbershop_bot.services.my_bookings import format_booking_details_text
-
-                state.set_current_screen(_user_id(context), _chat_id(context), state.MY_BOOKING_DETAILS_SCREEN)
-                await context.send_text(
-                    format_booking_details_text(source_booking, timezone_name=normalize_branch_timezone(str(timezone_name or DEFAULT_BRANCH_TIMEZONE), flow="booking", operation="repeat_back")),
-                    keyboard=my_booking_details_keyboard(),
-                )
-                return
-            await show_home(context)
+            await _show_repeat_source_screen(context)
             return
         if entry_mode == _ENTRY_MODE_DATETIME_FIRST and not _state_value(context, _SELECTED_SERVICE_STATE_KEY):
             await _show_booking_hub(context, push_current=False)
@@ -1168,6 +1168,54 @@ async def handle_booking_back(context: RouterContext) -> None:
         return
     await show_home(context)
 
+
+async def _show_repeat_source_screen(context: RouterContext) -> None:
+    source_screen = state.get_state_data_value(_user_id(context), _chat_id(context), _REPEAT_SOURCE_SCREEN_STATE_KEY)
+    if source_screen == "my_bookings_history":
+        await _show_repeat_history_source_screen(context)
+        return
+
+    source_booking = state.get_state_data_value(_user_id(context), _chat_id(context), "my_bookings_selected_booking")
+    timezone_name = state.get_state_data_value(_user_id(context), _chat_id(context), "my_bookings_branch_timezone")
+    if isinstance(source_booking, dict):
+        from max_barbershop_bot.services.my_bookings import format_booking_details_text, is_booking_cancelable, is_booking_reschedulable, is_future_booking
+
+        normalized_timezone = normalize_branch_timezone(str(timezone_name or DEFAULT_BRANCH_TIMEZONE), flow="booking", operation="repeat_back")
+        state.set_current_screen(_user_id(context), _chat_id(context), state.MY_BOOKING_DETAILS_SCREEN)
+        await context.send_text(
+            format_booking_details_text(source_booking, timezone_name=normalized_timezone),
+            keyboard=my_booking_details_keyboard(
+                can_cancel=is_booking_cancelable(source_booking, timezone_name=normalized_timezone),
+                is_active=is_future_booking(source_booking, timezone_name=normalized_timezone),
+                can_reschedule=is_booking_reschedulable(source_booking, timezone_name=normalized_timezone),
+            ),
+        )
+        return
+    await show_home(context)
+
+
+async def _show_repeat_history_source_screen(context: RouterContext) -> None:
+    from max_barbershop_bot.services.my_bookings import format_visit_history_screen
+
+    platform_user_id = _user_id(context)
+    chat_id = _chat_id(context)
+    past_value = state.get_state_data_value(platform_user_id, chat_id, "my_bookings_past_items")
+    past = [item for item in past_value if isinstance(item, dict)] if isinstance(past_value, list) else []
+    raw_page = state.get_state_data_value(platform_user_id, chat_id, "my_bookings_history_page")
+    page = raw_page if isinstance(raw_page, int) else 0
+    page_size = 5
+    max_page = max((len(past) - 1) // page_size, 0) if past else 0
+    page = min(max(page, 0), max_page)
+    timezone_name = state.get_state_data_value(platform_user_id, chat_id, "my_bookings_branch_timezone")
+    normalized_timezone = normalize_branch_timezone(str(timezone_name or DEFAULT_BRANCH_TIMEZONE), flow="booking", operation="repeat_history_back")
+    start = page * page_size
+    end = start + page_size
+    state.set_state_data_value(platform_user_id, chat_id, "my_bookings_history_page", page)
+    state.set_current_screen(platform_user_id, chat_id, "my_bookings_history")
+    await context.send_text(
+        format_visit_history_screen(past, timezone_name=normalized_timezone, page=page, page_size=page_size),
+        keyboard=my_bookings_history_keyboard(page=page, has_next=end < len(past), include_repeat=bool(past)),
+    )
 
 def _is_active_booking_screen(context: RouterContext) -> bool:
     return state.get_current_screen(_user_id(context), _chat_id(context)) in {
@@ -1614,7 +1662,7 @@ async def _show_booking_dates(context: RouterContext, *, push_current: bool = Tr
     try:
         dates = await booking_service.get_available_dates_for_selection(
             yclients_service_id=service_id,
-            yclients_master_id=master_id if isinstance(master_id, str) and master_id else None,
+            yclients_master_id=None if master_id == "0" else (master_id if isinstance(master_id, str) and master_id else None),
             days=DATE_LOOKAHEAD_DAYS,
         )
     except BookingServiceError as exc:
@@ -1657,7 +1705,7 @@ async def _open_booking_slots(context: RouterContext, booking_date: str, *, push
     try:
         slots = await booking_service.get_available_slots(
             yclients_service_id=service_id,
-            yclients_master_id=master_id if isinstance(master_id, str) and master_id else None,
+            yclients_master_id=None if master_id == "0" else (master_id if isinstance(master_id, str) and master_id else None),
             booking_date=booking_date,
         )
     except BookingServiceError as exc:
