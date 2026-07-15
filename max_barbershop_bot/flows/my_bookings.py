@@ -484,10 +484,6 @@ async def handle_my_booking_repeat_start(context: RouterContext) -> None:
     if not service_id:
         await context.send_text(MY_BOOKING_REPEAT_SERVICE_UNAVAILABLE_TEXT, keyboard=my_booking_reschedule_result_keyboard())
         return
-    if not staff_id:
-        await context.send_text(MY_BOOKING_REPEAT_MASTER_UNAVAILABLE_TEXT, keyboard=my_booking_reschedule_result_keyboard())
-        return
-
     state.set_current_screen(platform_user_id, _chat_id(context), state.MY_BOOKING_DETAILS_SCREEN)
     await start_repeat_booking_with_prefill(
         context,
@@ -495,8 +491,12 @@ async def handle_my_booking_repeat_start(context: RouterContext) -> None:
         service_name=_clean_state_text(repeat_context.get("service_name")) or _clean_state_text(booking.get("service_name")) or "Услуга",
         master_id=staff_id,
         master_name=_clean_state_text(repeat_context.get("staff_name")) or _clean_state_text(booking.get("master_name")) or None,
-        service_price=_clean_state_text(booking.get("price")) or None,
-        service_duration=f"{_clean_state_text(booking.get('duration_minutes'))} мин" if _clean_state_text(booking.get("duration_minutes")) else None,
+        service_price=_clean_state_text(repeat_context.get("price")) or _clean_state_text(booking.get("price")) or None,
+        service_duration=(
+            f"{_clean_state_text(repeat_context.get('duration_minutes'))} мин"
+            if _clean_state_text(repeat_context.get("duration_minutes"))
+            else (f"{_clean_state_text(booking.get('duration_minutes'))} мин" if _clean_state_text(booking.get("duration_minutes")) else None)
+        ),
     )
 
 

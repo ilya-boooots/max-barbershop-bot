@@ -274,81 +274,86 @@ async def start_repeat_booking_with_prefill(
     *,
     service_id: str,
     service_name: str,
-    master_id: str,
+    master_id: str | None,
     master_name: str | None,
     service_price: str | None = None,
     service_duration: str | None = None,
 ) -> None:
-    """Start repeat booking with service/master prefilled and validated against YClients."""
+    """Start repeat booking with Telegram-compatible prefill/fallback."""
 
     platform_user_id = _user_id(context)
     chat_id = _chat_id(context)
     booking_service = BookingService(YClientsSettingsRepository(_database_path()))
+    _clear_booking_state(context)
+    state.set_state_data_value(platform_user_id, chat_id, _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_REPEAT)
+    state.set_state_data_value(platform_user_id, chat_id, _REPEAT_SOURCE_SCREEN_STATE_KEY, state.MY_BOOKING_DETAILS_SCREEN)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_DATE_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_TIME_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_DATETIME_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_RAW_STATE_KEY, None)
     try:
-        catalog = await booking_service.get_valid_categories_for_entry_mode(entry_mode=_entry_mode(context))
+        catalog = await booking_service.get_valid_categories_for_entry_mode(entry_mode=_ENTRY_MODE_SERVICE_FIRST)
     except BookingServiceError as exc:
         logger.warning(
             "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s "
             "selected_service_id_present=%s selected_master_id_present=%s service_available=%s "
             "master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s http_status=%s trace_id=%s",
-            bool(platform_user_id),
-            True,
-            bool(service_id),
-            bool(master_id),
-            False,
-            False,
-            0,
-            False,
-            False,
-            type(exc).__name__,
-            getattr(exc, "status_code", None),
-            getattr(exc, "trace_id", None),
+            bool(platform_user_id), True, bool(service_id), bool(master_id), False, False, 0, False, False,
+            type(exc).__name__, getattr(exc, "status_code", None), getattr(exc, "trace_id", None),
         )
         await context.send_text("Эта услуга сейчас недоступна 🙏\n\nВыберите другую услугу для записи.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
         return
 
+    state.set_state_data_value(platform_user_id, chat_id, _CATALOG_STATE_KEY, catalog)
     service = next((item for item in catalog.services if item.yclients_service_id == str(service_id)), None)
     if service is None:
         logger.info(
             "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s selected_service_id_present=%s selected_master_id_present=%s service_available=%s master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s",
             bool(platform_user_id), True, bool(service_id), bool(master_id), False, False, 0, False, False, "none",
         )
-        await context.send_text("Эта услуга сейчас недоступна 🙏\n\nВыберите другую услугу для записи.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _show_categories(context, catalog.categories, push_current=False)
         return
+
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_CATEGORY_STATE_KEY, service.yclients_category_id)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_CATEGORY_NAME_STATE_KEY, service.category_title)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_STATE_KEY, service.yclients_service_id)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_NAME_STATE_KEY, service.title or service_name)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_PRICE_STATE_KEY, service_price or _service_price_text(service))
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_DURATION_STATE_KEY, service_duration or service.duration)
     try:
         masters = await booking_service.get_available_masters_for_service(service.yclients_service_id, service=service)
     except BookingServiceError as exc:
         logger.warning(
             "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s selected_service_id_present=%s selected_master_id_present=%s service_available=%s master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s http_status=%s trace_id=%s",
-            bool(platform_user_id), True, bool(service_id), bool(master_id), True, False, 0, False, False, type(exc).__name__, getattr(exc, "status_code", None), getattr(exc, "trace_id", None),
+            bool(platform_user_id), True, bool(service_id), bool(master_id), True, False, 0, False, False,
+            type(exc).__name__, getattr(exc, "status_code", None), getattr(exc, "trace_id", None),
         )
-        await context.send_text("Этот мастер сейчас недоступен для повторной записи 🙏\n\nВыберите другого мастера или услугу.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+        await _show_selected_category_services(context)
         return
-    master = next((item for item in masters if item.yclients_master_id == str(master_id)), None)
-    if master is None:
-        logger.info(
-            "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s selected_service_id_present=%s selected_master_id_present=%s service_available=%s master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s",
-            bool(platform_user_id), True, bool(service_id), bool(master_id), True, False, 0, False, False, "none",
-        )
-        await context.send_text("Этот мастер сейчас недоступен для повторной записи 🙏\n\nВыберите другого мастера или услугу.", keyboard=navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+    state.set_state_data_value(platform_user_id, chat_id, _MASTERS_STATE_KEY, masters)
+
+    master = next((item for item in masters if master_id and item.yclients_master_id == str(master_id)), None)
+    if master is not None:
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_STATE_KEY, master.yclients_master_id)
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_NAME_STATE_KEY, master.title or master_name or "Любой мастер")
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_SPECIALIZATION_STATE_KEY, master.specialization)
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_RATING_STATE_KEY, master.rating)
+        await _show_booking_dates(context)
         return
 
-    state.set_state_data_value(platform_user_id, chat_id, _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_REPEAT)
-    state.set_state_data_value(platform_user_id, chat_id, _REPEAT_SOURCE_SCREEN_STATE_KEY, state.MY_BOOKING_DETAILS_SCREEN)
-    state.set_state_data_value(platform_user_id, chat_id, _CATALOG_STATE_KEY, catalog)
-    state.set_state_data_value(platform_user_id, chat_id, _MASTERS_STATE_KEY, masters)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_STATE_KEY, service.yclients_service_id)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_NAME_STATE_KEY, service.title or service_name)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_PRICE_STATE_KEY, service_price or _format_price(service))
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SERVICE_DURATION_STATE_KEY, service_duration or service.duration)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_STATE_KEY, master.yclients_master_id)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_NAME_STATE_KEY, master.title or master_name or "Любой мастер")
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_SPECIALIZATION_STATE_KEY, master.specialization)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_RATING_STATE_KEY, master.rating)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_DATE_STATE_KEY, None)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_TIME_STATE_KEY, None)
-    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_SLOT_DATETIME_STATE_KEY, None)
-    await _show_booking_dates(context)
+    if not master_id:
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_STATE_KEY, None)
+        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_NAME_STATE_KEY, master_name or "Любой мастер")
+        await _show_booking_dates(context)
+        return
+
+    logger.info(
+        "MAX booking repeat diagnostic: platform_user_id_present=%s source_record_id_present=%s selected_service_id_present=%s selected_master_id_present=%s service_available=%s master_available=%s slots_count=%s create_success=%s yclients_record_id_present=%s error_class=%s",
+        bool(platform_user_id), True, bool(service_id), bool(master_id), True, False, 0, False, False, "none",
+    )
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_STATE_KEY, None)
+    state.set_state_data_value(platform_user_id, chat_id, _SELECTED_MASTER_NAME_STATE_KEY, None)
+    await _show_masters(context, masters, push_current=False)
 
 
 async def start_staff_first_booking_with_master(context: RouterContext, master: BookingMasterItem) -> None:
@@ -1597,7 +1602,10 @@ async def _open_booking_masters(context: RouterContext, yclients_service_id: str
 async def _show_booking_dates(context: RouterContext, *, push_current: bool = True) -> None:
     service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
     master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
-    if not isinstance(service_id, str) or not service_id or not isinstance(master_id, str) or not master_id:
+    if not isinstance(service_id, str) or not service_id:
+        await _open_booking_catalog(context, push_current=push_current)
+        return
+    if (not isinstance(master_id, str) or not master_id) and _entry_mode(context) != _ENTRY_MODE_REPEAT:
         await _open_booking_catalog(context, push_current=push_current)
         return
 
@@ -1606,7 +1614,7 @@ async def _show_booking_dates(context: RouterContext, *, push_current: bool = Tr
     try:
         dates = await booking_service.get_available_dates_for_selection(
             yclients_service_id=service_id,
-            yclients_master_id=master_id,
+            yclients_master_id=master_id if isinstance(master_id, str) and master_id else None,
             days=DATE_LOOKAHEAD_DAYS,
         )
     except BookingServiceError as exc:
@@ -1638,7 +1646,10 @@ async def _show_booking_dates(context: RouterContext, *, push_current: bool = Tr
 async def _open_booking_slots(context: RouterContext, booking_date: str, *, push_current: bool = True, stale_if_empty: bool = False) -> None:
     service_id = _state_value(context, _SELECTED_SERVICE_STATE_KEY)
     master_id = _state_value(context, _SELECTED_MASTER_STATE_KEY)
-    if not isinstance(service_id, str) or not service_id or not isinstance(master_id, str) or not master_id:
+    if not isinstance(service_id, str) or not service_id:
+        await _show_booking_dates(context, push_current=False)
+        return
+    if (not isinstance(master_id, str) or not master_id) and _entry_mode(context) != _ENTRY_MODE_REPEAT:
         await _show_booking_dates(context, push_current=False)
         return
 
@@ -1646,7 +1657,7 @@ async def _open_booking_slots(context: RouterContext, booking_date: str, *, push
     try:
         slots = await booking_service.get_available_slots(
             yclients_service_id=service_id,
-            yclients_master_id=master_id,
+            yclients_master_id=master_id if isinstance(master_id, str) and master_id else None,
             booking_date=booking_date,
         )
     except BookingServiceError as exc:
@@ -2225,7 +2236,7 @@ def _service_price_text(service: BookingServiceItem) -> str | None:
 
 def _entry_mode(context: RouterContext) -> str:
     value = _state_value(context, _ENTRY_MODE_STATE_KEY)
-    if value in {_ENTRY_MODE_SERVICE_FIRST, _ENTRY_MODE_STAFF_FIRST, _ENTRY_MODE_DATETIME_FIRST}:
+    if value in {_ENTRY_MODE_SERVICE_FIRST, _ENTRY_MODE_STAFF_FIRST, _ENTRY_MODE_DATETIME_FIRST, _ENTRY_MODE_REPEAT}:
         return str(value)
     return _ENTRY_MODE_SERVICE_FIRST
 
