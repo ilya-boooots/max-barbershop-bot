@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from os import getenv
+
+from max_barbershop_bot.services.company_time import CompanyTimeService
+from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
@@ -34,12 +38,15 @@ from max_barbershop_bot.ui.buttons import (
     STAFF_ASSIGN_DEVELOPER_PAYLOAD,
     STAFF_ASSIGN_MANAGER_PAYLOAD,
     STAFF_ASSIGN_START_PAYLOAD,
+    STAFF_CARD_PAYLOAD_PREFIX,
     STAFF_LIST_PAYLOAD,
     STAFF_REMOVE_ADMIN_PAYLOAD,
     STAFF_REMOVE_DEVELOPER_PAYLOAD,
     STAFF_REMOVE_MANAGER_PAYLOAD,
     STAFF_REMOVE_START_PAYLOAD,
     navigation_keyboard,
+    staff_card_keyboard,
+    staff_list_keyboard,
     staff_role_assign_keyboard,
     staff_role_remove_keyboard,
 )
@@ -47,9 +54,13 @@ from max_barbershop_bot.ui.screens import staff_menu_screen
 from max_barbershop_bot.ui.texts import (
     STAFF_ASSIGN_IDENTIFIER_TEXT,
     STAFF_ASSIGN_ROLE_TEXT,
+    STAFF_CARD_STALE_TEXT,
+    STAFF_CARD_TITLE_TEXT,
     STAFF_LIST_EMPTY_TEXT,
+    STAFF_LIST_TITLE_TEXT,
     STAFF_NO_ACCESS_TEXT,
     STAFF_NO_EXTRA_ROLES_TEXT,
+    STAFF_PROTECTED_DEVELOPER_LIST_TEXT,
     STAFF_PROTECTED_DEVELOPER_ROLE_TEXT,
     STAFF_REMOVE_IDENTIFIER_TEXT,
     STAFF_ROLE_ASSIGNED_TEXT,
@@ -86,6 +97,7 @@ def register_staff_routes(router: Router) -> None:
 
     router.on_callback(ADMIN_STAFF_PAYLOAD, handle_staff_menu)
     router.on_callback(STAFF_LIST_PAYLOAD, handle_staff_list)
+    router.on_callback_prefix(STAFF_CARD_PAYLOAD_PREFIX, handle_staff_card)
     router.on_callback(STAFF_ASSIGN_START_PAYLOAD, handle_assign_start)
     router.on_callback(STAFF_REMOVE_START_PAYLOAD, handle_remove_start)
     for payload in _ASSIGN_PAYLOAD_ROLES:
@@ -117,9 +129,29 @@ async def handle_staff_list(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context)
+    _push_staff_list_screen(context)
+    items = _build_staff_list_items()
+    await context.send_text(_build_staff_list_text(items), keyboard=staff_list_keyboard(_staff_list_buttons(items)))
+
+
+async def handle_staff_card(context: RouterContext) -> None:
+    """Open a read-only staff card from the personnel list."""
+
+    actor_role = _actor_role(context)
+    if not can_view_staff(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    target_id = _staff_card_platform_user_id(context.event.callback_payload)
+    if target_id is None:
+        await context.send_text(STAFF_CARD_STALE_TEXT, keyboard=staff_list_keyboard(_staff_list_buttons(_build_staff_list_items())))
+        return
+    item = _staff_list_item_by_platform_user_id(target_id)
+    if item is None:
+        await context.send_text(STAFF_CARD_STALE_TEXT, keyboard=staff_list_keyboard(_staff_list_buttons(_build_staff_list_items())))
+        return
     _push_current_screen(context, state.STAFF_LIST_SCREEN)
-    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.STAFF_LIST_SCREEN)
-    await context.send_text(_build_staff_list_text(), keyboard=navigation_keyboard())
+    await context.send_text(_build_staff_card_text(item), keyboard=staff_card_keyboard())
 
 
 async def handle_assign_start(context: RouterContext) -> None:
@@ -323,30 +355,137 @@ async def _show_staff_menu(context: RouterContext) -> None:
     await context.send_text(screen.text, keyboard=screen.keyboard)
 
 
-def _build_staff_list_text() -> str:
-    staff = _staff_repository().list_staff(platform=PLATFORM_MAX)
-    if not staff:
+@dataclass(frozen=True)
+class _StaffListItem:
+    platform_user_id: str
+    role: str
+    role_assigned_at: str | None
+    assigned_by_platform_user_id: str | None
+    display_name: str
+    assigned_by_name: str
+    protected_developer: bool
+
+
+def _build_staff_list_text(items: list[_StaffListItem] | None = None) -> str:
+    staff_items = _build_staff_list_items() if items is None else items
+    if not staff_items:
         return STAFF_LIST_EMPTY_TEXT
-    users = _users_repository()
-    lines = ["👥 Персонал", f"Всего: {len(staff)}", ""]
-    for idx, staff_role in enumerate(staff, start=1):
-        user = users.find_by_platform_user_id(staff_role.platform_user_id, platform=PLATFORM_MAX)
-        lines.extend(_staff_role_lines(idx, staff_role, user))
+    lines = [STAFF_LIST_TITLE_TEXT, f"Всего: {len(staff_items)}", ""]
+    for idx, item in enumerate(staff_items, start=1):
+        lines.extend(_staff_role_lines(idx, item))
         lines.append("")
     return "\n".join(lines).strip()
 
 
-def _staff_role_lines(idx: int, staff_role: StaffRole, user: User | None) -> list[str]:
-    name = _display_name(user) or "Без имени"
-    lines = [f"{idx}) {_role_label(staff_role.role)}", f"👤 {name}"]
-    if user is not None and user.username:
-        lines.append(f"@{user.username.lstrip('@')}")
-    if user is not None and user.phone:
-        lines.append(f"Телефон: {mask_phone(user.phone)}")
-    assigned_at = staff_role.updated_at or staff_role.created_at
-    if assigned_at:
-        lines.append(f"📅 С {assigned_at}")
+def _build_staff_list_items() -> list[_StaffListItem]:
+    roles = _staff_repository().list_staff(platform=PLATFORM_MAX)
+    users = _users_repository()
+    by_user: dict[str, StaffRole] = {}
+    for staff_role in roles:
+        current = by_user.get(staff_role.platform_user_id)
+        if current is None or _staff_role_sort_key(staff_role) < _staff_role_sort_key(current):
+            by_user[staff_role.platform_user_id] = staff_role
+    items: list[_StaffListItem] = []
+    for staff_role in by_user.values():
+        user = users.find_by_platform_user_id(staff_role.platform_user_id, platform=PLATFORM_MAX)
+        issuer = None
+        if staff_role.assigned_by_platform_user_id:
+            issuer = users.find_by_platform_user_id(staff_role.assigned_by_platform_user_id, platform=PLATFORM_MAX)
+        items.append(
+            _StaffListItem(
+                platform_user_id=staff_role.platform_user_id,
+                role=_effective_staff_role(staff_role),
+                role_assigned_at=staff_role.updated_at or staff_role.created_at,
+                assigned_by_platform_user_id=staff_role.assigned_by_platform_user_id,
+                display_name=_display_name(user) or "Без имени",
+                assigned_by_name=_staff_issuer_name(issuer),
+                protected_developer=_is_protected_staff_member(staff_role.platform_user_id, user),
+            )
+        )
+    return sorted(items, key=_staff_item_sort_key)
+
+
+def _staff_list_item_by_platform_user_id(platform_user_id: str) -> _StaffListItem | None:
+    for item in _build_staff_list_items():
+        if item.platform_user_id == platform_user_id:
+            return item
+    return None
+
+
+def _staff_role_lines(idx: int, item: _StaffListItem) -> list[str]:
+    lines = [
+        f"{idx}) {_role_label(item.role)}",
+        f"👤 {item.display_name}",
+        f"📅 С {_format_staff_assigned_at(item.role_assigned_at)}",
+        f"🛠 Выдал: {item.assigned_by_name}",
+    ]
+    if item.protected_developer:
+        lines.append(STAFF_PROTECTED_DEVELOPER_LIST_TEXT)
     return lines
+
+
+def _build_staff_card_text(item: _StaffListItem) -> str:
+    lines = [
+        STAFF_CARD_TITLE_TEXT,
+        f"👤 Имя: {item.display_name}",
+        f"🆔 MAX ID: {item.platform_user_id}",
+        f"🎖 Роль: {_role_label(item.role)}",
+        f"🗓 Роль с: {_format_staff_assigned_at(item.role_assigned_at)}",
+        f"👤 Выдал: {item.assigned_by_name}",
+    ]
+    if item.protected_developer:
+        lines.append(STAFF_PROTECTED_DEVELOPER_LIST_TEXT)
+    return "\n".join(lines)
+
+
+def _staff_list_buttons(items: list[_StaffListItem]) -> list[tuple[str, str]]:
+    return [(item.platform_user_id, f"{_short_name(item.display_name)} ({_role_label(item.role)})") for item in items]
+
+
+def _staff_card_platform_user_id(payload: str | None) -> str | None:
+    if not payload or not payload.startswith(STAFF_CARD_PAYLOAD_PREFIX):
+        return None
+    value = payload.removeprefix(STAFF_CARD_PAYLOAD_PREFIX).strip()
+    return value or None
+
+
+def _effective_staff_role(staff_role: StaffRole) -> str:
+    if _is_protected_staff_member(staff_role.platform_user_id, None):
+        return ROLE_DEVELOPER
+    return normalize_role(staff_role.role)
+
+
+def _staff_role_sort_key(staff_role: StaffRole) -> tuple[int, str, str]:
+    role_priority = {ROLE_DEVELOPER: 0, ROLE_ADMIN: 1, ROLE_MANAGER: 2}.get(_effective_staff_role(staff_role), 9)
+    assigned_at = staff_role.updated_at or staff_role.created_at or ""
+    return (role_priority, _reverse_text_key(assigned_at), staff_role.platform_user_id)
+
+
+def _staff_item_sort_key(item: _StaffListItem) -> tuple[int, str, str]:
+    role_priority = {ROLE_DEVELOPER: 0, ROLE_ADMIN: 1, ROLE_MANAGER: 2}.get(item.role, 9)
+    return (role_priority, _reverse_text_key(item.role_assigned_at or ""), item.platform_user_id)
+
+
+def _reverse_text_key(value: str) -> str:
+    return "".join(chr(0x10FFFF - ord(ch)) for ch in value)
+
+
+def _format_staff_assigned_at(value: str | None) -> str:
+    return CompanyTimeService(YClientsSettingsRepository(_database_path())).format_datetime(value)
+
+
+def _short_name(name: str | None, max_length: int = 20) -> str:
+    value = (name or "").strip() or "Без имени"
+    if len(value) <= max_length:
+        return value
+    return f"{value[: max_length - 1]}…"
+
+
+def _push_staff_list_screen(context: RouterContext) -> None:
+    current = state.get_current_screen(context.event.platform_user_id, context.event.chat_id)
+    if current != state.STAFF_MENU_SCREEN:
+        state.push_screen(context.event.platform_user_id, context.event.chat_id, state.STAFF_MENU_SCREEN)
+    state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.STAFF_LIST_SCREEN)
 
 
 def _find_user(identifier: str | None) -> User | None:
@@ -398,8 +537,16 @@ def _display_name(user: User | None) -> str | None:
     return None
 
 
+def _staff_issuer_name(user: User | None) -> str:
+    return _display_name(user) or "Разработчик"
+
+
 def _is_protected_target(user: User) -> bool:
     return is_protected_developer(user.platform_user_id, _dev_max_user_id(), max_user_id=user.max_user_id)
+
+
+def _is_protected_staff_member(platform_user_id: str, user: User | None) -> bool:
+    return is_protected_developer(platform_user_id, _dev_max_user_id(), max_user_id=user.max_user_id if user else None)
 
 
 def _push_current_screen(context: RouterContext, screen_id: str) -> None:
