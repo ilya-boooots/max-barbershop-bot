@@ -68,6 +68,13 @@ class StaffRolesRepository:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
+                DELETE FROM staff_roles
+                WHERE platform = ? AND platform_user_id = ?
+                """,
+                (platform, platform_user_id),
+            )
+            connection.execute(
+                """
                 INSERT INTO staff_roles (
                     platform,
                     platform_user_id,
@@ -75,9 +82,6 @@ class StaffRolesRepository:
                     assigned_by_platform_user_id
                 )
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(platform, platform_user_id, role) DO UPDATE SET
-                    assigned_by_platform_user_id = excluded.assigned_by_platform_user_id,
-                    updated_at = CURRENT_TIMESTAMP
                 """,
                 (
                     platform,
