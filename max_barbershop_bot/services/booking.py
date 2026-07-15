@@ -304,7 +304,7 @@ class BookingService:
                 yclients_dates = await yclients.get_available_dates(
                     company_id=settings.company_id,
                     service_id=service_id,
-                    staff_id=master_id,
+                    staff_id=None if master_id == "0" else master_id,
                     date_from=date_from,
                     date_to=date_to,
                 )
@@ -317,7 +317,7 @@ class BookingService:
                     slots_payload = await yclients.get_available_slots(
                         company_id=settings.company_id,
                         service_id=service_id,
-                        staff_id=master_id,
+                        staff_id=None if master_id == "0" else master_id,
                         date=item.isoformat(),
                     )
                     slots = filter_available_slots(slots_payload, booking_date=item.isoformat(), timezone_name=timezone_name)
@@ -1037,7 +1037,7 @@ class BookingService:
                 slots_payload = await yclients.get_available_slots(
                     company_id=settings.company_id,
                     service_id=service_id,
-                    staff_id=master_id,
+                    staff_id=None if master_id == "0" else master_id,
                     date=booking_date_value,
                 )
         except YClientsError as exc:
