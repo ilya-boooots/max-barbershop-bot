@@ -239,6 +239,7 @@ MY_BOOKINGS_RESCHEDULE_SLOT_PAYLOAD_PREFIX = "my_bookings:reschedule:slot:"
 MY_BOOKINGS_BACK_PAYLOAD = "my_bookings:back"
 
 STAFF_LIST_PAYLOAD = "staff:list"
+STAFF_CARD_PAYLOAD_PREFIX = "staff:card:open:"
 STAFF_ASSIGN_START_PAYLOAD = "staff:assign:start"
 STAFF_REMOVE_START_PAYLOAD = "staff:remove:start"
 STAFF_ASSIGN_MANAGER_PAYLOAD = "staff:assign:role:manager"
@@ -1624,6 +1625,29 @@ def staff_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
+
+
+def staff_list_keyboard(items: list[tuple[str, str]]) -> MaxInlineKeyboard:
+    """Build Telegram-parity personnel list buttons with navigation."""
+
+    rows = [
+        [MaxButton(text=f"👤 {label}", payload=f"{STAFF_CARD_PAYLOAD_PREFIX}{platform_user_id}")]
+        for platform_user_id, label in items
+    ]
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
+    return MaxInlineKeyboard.from_rows(rows)
+
+
+def staff_card_keyboard() -> MaxInlineKeyboard:
+    """Build read-only staff card navigation for personnel-list parity."""
+
+    return MaxInlineKeyboard.from_rows(
+        [
+            [MaxButton(text="⬅️ Назад", payload=STAFF_LIST_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
+        ]
+    )
 
 def staff_role_assign_keyboard(role: str | None = None) -> MaxInlineKeyboard:
     """Build role picker for assigning staff roles."""

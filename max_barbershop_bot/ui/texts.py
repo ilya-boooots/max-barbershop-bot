@@ -171,8 +171,12 @@ BOOKING_CREATE_IN_PROGRESS_TEXT = "⏳ Уже выполняем действи�
 STAFF_MENU_TEXT = """👥 Управление персоналом
 
 Выберите действие:"""
-STAFF_LIST_EMPTY_TEXT = """👥 Персонал
+STAFF_LIST_TITLE_TEXT = "👥 Персонал ресторана"
+STAFF_LIST_EMPTY_TEXT = """👥 Персонал ресторана
 Всего: 0"""
+STAFF_CARD_TITLE_TEXT = "<b>Карточка сотрудника</b>"
+STAFF_CARD_STALE_TEXT = "Сотрудник не найден"
+STAFF_PROTECTED_DEVELOPER_LIST_TEXT = "🔒 Защищённый системный разработчик"
 STAFF_ASSIGN_IDENTIFIER_TEXT = "✍️ Введите MAX ID или телефон сотрудника:"
 STAFF_REMOVE_IDENTIFIER_TEXT = """➖ Выберите сотрудника, у которого нужно снять роль:
 
