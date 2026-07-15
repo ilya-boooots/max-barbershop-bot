@@ -505,16 +505,14 @@ async def handle_settings_contacts_reset(context: RouterContext) -> None:
     except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
         await context.send_text("⚠️ Не удалось сбросить настройки контактов. Попробуйте ещё раз.")
         return
-    if not changed:
-        await _show_contacts_editor(context)
-        return
-    _audit(
-        context,
-        actor_role,
-        action="contacts_override_cleared",
-        section="contacts",
-        metadata={"field": "contacts_override"},
-    )
+    if changed:
+        _audit(
+            context,
+            actor_role,
+            action="contacts_override_cleared",
+            section="contacts",
+            metadata={"field": "contacts_override"},
+        )
     await context.send_text("♻️ Локальные правки контактов сброшены. Теперь используются данные из YClients.")
     await _show_contacts_editor(context)
 

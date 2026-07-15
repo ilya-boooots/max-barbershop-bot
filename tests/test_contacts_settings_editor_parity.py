@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -247,7 +248,13 @@ def test_contacts_reset_handler_clears_fields_and_map_overrides_once(
     assert active.twogis_url is None and active.twogis_enabled
     assert active.google_maps_url is None and active.google_maps_enabled
     assert calls == 1
-    assert sum(text.startswith("♻️ Локальные правки") for text, _ in sender.messages) == 1
+    assert sum(text.startswith("♻️ Локальные правки") for text, _ in sender.messages) == 2
+    with sqlite3.connect(db) as connection:
+        reset_events = connection.execute(
+            "SELECT COUNT(*) FROM settings_audit_log WHERE action = ?",
+            ("contacts_override_cleared",),
+        ).fetchone()[0]
+    assert reset_events == 1
 
 
 def test_map_handlers_gate_access_and_reject_stale_without_mutation(
