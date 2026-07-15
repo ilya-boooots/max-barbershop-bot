@@ -499,7 +499,15 @@ async def handle_settings_contacts_reset(context: RouterContext) -> None:
         await _send_no_access(context)
         return
     await _answer_callback_if_needed(context)
-    YClientsSettingsRepository(_database_path()).set_contacts_override({})
+    repository = YClientsSettingsRepository(_database_path())
+    try:
+        changed = _clear_contacts_overrides(repository)
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text("⚠️ Не удалось сбросить настройки контактов. Попробуйте ещё раз.")
+        return
+    if not changed:
+        await _show_contacts_editor(context)
+        return
     _audit(
         context,
         actor_role,
@@ -545,41 +553,76 @@ async def handle_settings_contacts_map_edit(context: RouterContext) -> None:
     map_key = _payload_suffix(context, SETTINGS_CONTACTS_MAP_EDIT_PREFIX)
     meta = _map_meta(map_key)
     if meta is None:
+        actor_role = _actor_role(context)
+        if not can_view_contacts_settings(actor_role):
+            await _send_no_access(context)
+            return
+        await _answer_callback_if_needed(context)
         await _show_contacts_editor(context)
         return
     await _start_contacts_edit(context, meta["screen"], f"🗺 Введите ссылку для {meta['prompt_name']}:")
 
 
 async def handle_settings_contacts_map_hide(context: RouterContext) -> None:
-    await _set_contacts_map_enabled(context, _payload_suffix(context, SETTINGS_CONTACTS_MAP_HIDE_PREFIX), enabled=False)
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
+    await _set_contacts_map_enabled(
+        context,
+        _payload_suffix(context, SETTINGS_CONTACTS_MAP_HIDE_PREFIX),
+        enabled=False,
+        answer_callback=False,
+    )
 
 
 async def handle_settings_contacts_map_show(context: RouterContext) -> None:
     map_key = _payload_suffix(context, SETTINGS_CONTACTS_MAP_SHOW_PREFIX)
     meta = _map_meta(map_key)
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
     if meta is None:
         await _show_contacts_editor(context)
         return
-    override = YClientsSettingsRepository(_database_path()).get_contacts_override()
+    try:
+        override = YClientsSettingsRepository(_database_path()).get_contacts_override()
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text("⚠️ Не удалось загрузить настройки карт. Попробуйте ещё раз.")
+        return
     if not str(override.get(meta["url_field"]) or "").strip():
         await context.send_text("Сначала добавьте ссылку 🙏")
-        await _show_contacts_map_editor(context, map_key)
+        await _show_contacts_map_editor(context, map_key, answer_callback=False)
         return
-    await _set_contacts_map_enabled(context, map_key, enabled=True)
+    await _set_contacts_map_enabled(context, map_key, enabled=True, answer_callback=False)
 
 
 async def handle_settings_contacts_map_delete(context: RouterContext) -> None:
     map_key = _payload_suffix(context, SETTINGS_CONTACTS_MAP_DELETE_PREFIX)
     meta = _map_meta(map_key)
+    actor_role = _actor_role(context)
+    if not can_view_contacts_settings(actor_role):
+        await _send_no_access(context)
+        return
+    await _answer_callback_if_needed(context)
     if meta is None:
         await _show_contacts_editor(context)
         return
     repo = YClientsSettingsRepository(_database_path())
-    override = repo.get_contacts_override()
-    override[meta["url_field"]] = ""
-    override[meta["enabled_field"]] = False
-    repo.set_contacts_override(override)
-    await _show_contacts_map_editor(context, map_key)
+    try:
+        override = repo.get_contacts_override()
+        if str(override.get(meta["url_field"]) or "").strip() or _map_enabled(override, map_key):
+            override[meta["url_field"]] = ""
+            override[meta["enabled_field"]] = False
+            if repo.set_contacts_override(override) is None:
+                raise RuntimeError("Contacts map settings row disappeared during delete")
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text("⚠️ Не удалось сохранить настройки карт. Попробуйте ещё раз.")
+        return
+    await _show_contacts_map_editor(context, map_key, answer_callback=False)
 
 
 async def handle_settings_contacts_yandex_input(context: RouterContext) -> None:
@@ -1842,7 +1885,12 @@ def _map_status(raw: dict[str, object] | None, map_key: str) -> str:
     return "включено" if _map_enabled(raw, map_key) else "выключено"
 
 
-async def _show_contacts_map_editor(context: RouterContext, map_key: str) -> None:
+async def _show_contacts_map_editor(
+    context: RouterContext,
+    map_key: str,
+    *,
+    answer_callback: bool = True,
+) -> None:
     actor_role = _actor_role(context)
     if not can_view_contacts_settings(actor_role):
         await _send_no_access(context)
@@ -1851,8 +1899,13 @@ async def _show_contacts_map_editor(context: RouterContext, map_key: str) -> Non
     if meta is None:
         await _show_contacts_editor(context)
         return
-    await _answer_callback_if_needed(context)
-    override = YClientsSettingsRepository(_database_path()).get_contacts_override()
+    if answer_callback:
+        await _answer_callback_if_needed(context)
+    try:
+        override = YClientsSettingsRepository(_database_path()).get_contacts_override()
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text("⚠️ Не удалось загрузить настройки карт. Попробуйте ещё раз.")
+        return
     enabled = _map_enabled(override, map_key)
     url = str(override.get(meta["url_field"]) or "").strip() or "—"
     text = (
@@ -1864,16 +1917,28 @@ async def _show_contacts_map_editor(context: RouterContext, map_key: str) -> Non
     await context.send_text(text, keyboard=settings_contacts_map_keyboard(map_key=map_key, enabled=enabled))
 
 
-async def _set_contacts_map_enabled(context: RouterContext, map_key: str, *, enabled: bool) -> None:
+async def _set_contacts_map_enabled(
+    context: RouterContext,
+    map_key: str,
+    *,
+    enabled: bool,
+    answer_callback: bool = True,
+) -> None:
     meta = _map_meta(map_key)
     if meta is None:
         await _show_contacts_editor(context)
         return
     repo = YClientsSettingsRepository(_database_path())
-    override = repo.get_contacts_override()
-    override[meta["enabled_field"]] = enabled
-    repo.set_contacts_override(override)
-    await _show_contacts_map_editor(context, map_key)
+    try:
+        override = repo.get_contacts_override()
+        if _map_enabled(override, map_key) != enabled:
+            override[meta["enabled_field"]] = enabled
+            if repo.set_contacts_override(override) is None:
+                raise RuntimeError("Contacts map settings row disappeared during update")
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text("⚠️ Не удалось сохранить настройки карт. Попробуйте ещё раз.")
+        return
+    await _show_contacts_map_editor(context, map_key, answer_callback=answer_callback)
 
 
 async def _save_contact_map_url(context: RouterContext, map_key: str, value: str) -> None:
@@ -1893,11 +1958,21 @@ async def _save_contact_map_url(context: RouterContext, map_key: str, value: str
         )
         return
     repo = YClientsSettingsRepository(_database_path())
-    override = repo.get_contacts_override()
-    override[meta["url_field"]] = cleaned_value
-    override[meta["enabled_field"]] = True
-    repo.set_contacts_override(override)
-    await _show_contacts_map_editor(context, map_key)
+    try:
+        override = repo.get_contacts_override()
+        current_url = str(override.get(meta["url_field"]) or "").strip()
+        if current_url != cleaned_value or not _map_enabled(override, map_key):
+            override[meta["url_field"]] = cleaned_value
+            override[meta["enabled_field"]] = True
+            if repo.set_contacts_override(override) is None:
+                raise RuntimeError("Contacts map settings row disappeared during update")
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text(
+            "⚠️ Не удалось сохранить настройки карт. Попробуйте ещё раз.",
+            keyboard=settings_contacts_input_keyboard(),
+        )
+        return
+    await _show_contacts_map_editor(context, map_key, answer_callback=False)
 
 
 def _render_contacts_preview(contacts: ContactInfo) -> str:
@@ -1930,21 +2005,67 @@ async def _save_contact_field(context: RouterContext, *, field: str, value: str)
         return
 
     cleaned_value = value.strip()
-    if not cleaned_value:
-        await context.send_text(_contacts_field_empty_text(field), keyboard=settings_contacts_input_keyboard())
-        return
-
     settings_repository = YClientsSettingsRepository(_database_path())
-    settings_repository.update_contacts_override_field(field, cleaned_value)
-    _audit(
-        context,
-        actor_role,
-        action=_contacts_field_audit_action(field),
-        section="contacts",
-        metadata={"field": field},
-    )
-    await context.send_text(_contacts_field_success_text(field))
+    changed = False
+    try:
+        override = settings_repository.get_contacts_override()
+        current_value = str(override.get(field) or "").strip()
+        if current_value != cleaned_value:
+            if cleaned_value:
+                override[field] = cleaned_value
+            else:
+                override.pop(field, None)
+            if settings_repository.set_contacts_override(override) is None:
+                raise RuntimeError("Contacts settings row disappeared during update")
+            changed = True
+    except Exception:  # noqa: BLE001 - storage diagnostics must not leak into user-facing text.
+        await context.send_text(
+            "⚠️ Не удалось сохранить настройки контактов. Попробуйте ещё раз.",
+            keyboard=settings_contacts_input_keyboard(),
+        )
+        return
+    if changed:
+        _audit(
+            context,
+            actor_role,
+            action=_contacts_field_audit_action(field),
+            section="contacts",
+            metadata={"field": field},
+        )
+    await context.send_text("✅ Контакты обновлены")
     await _show_contacts_editor(context)
+
+
+def _clear_contacts_overrides(repository: YClientsSettingsRepository) -> bool:
+    active = repository.get_active()
+    if active is None or active.id is None:
+        return False
+    has_changes = any(
+        (
+            bool(str(active.contacts_override_json or "").strip()),
+            bool(str(active.yandex_maps_url or "").strip()),
+            not active.yandex_maps_enabled,
+            bool(str(active.twogis_url or "").strip()),
+            not active.twogis_enabled,
+            bool(str(active.google_maps_url or "").strip()),
+            not active.google_maps_enabled,
+        )
+    )
+    if not has_changes:
+        return False
+    updated = repository.update_settings(
+        active.id,
+        contacts_override_json=None,
+        yandex_maps_url=None,
+        yandex_maps_enabled=True,
+        twogis_url=None,
+        twogis_enabled=True,
+        google_maps_url=None,
+        google_maps_enabled=True,
+    )
+    if updated is None:
+        raise RuntimeError("Contacts settings row disappeared during reset")
+    return True
 
 
 def _contacts_field_audit_action(field: str) -> str:
@@ -1955,26 +2076,6 @@ def _contacts_field_audit_action(field: str) -> str:
     if field == "schedule":
         return "contacts_override_schedule_updated"
     return "contacts_override_updated"
-
-
-def _contacts_field_empty_text(field: str) -> str:
-    if field == "address":
-        return "🏠 Адрес не может быть пустым. Введите новый адрес:"
-    if field == "phone":
-        return "📞 Телефон не может быть пустым. Введите новый телефон:"
-    if field == "schedule":
-        return "⏰ Режим работы не может быть пустым. Введите новый режим работы:"
-    return "✍️ Значение не может быть пустым. Введите текст:"
-
-
-def _contacts_field_success_text(field: str) -> str:
-    if field == "address":
-        return "✅ Адрес обновлён"
-    if field == "phone":
-        return "✅ Телефон обновлён"
-    if field == "schedule":
-        return "✅ Режим работы обновлён"
-    return "✅ Контакты обновлены"
 
 
 def _actor_role(context: RouterContext) -> str:
