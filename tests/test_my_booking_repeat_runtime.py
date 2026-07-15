@@ -71,7 +71,7 @@ def test_repeat_valid_service_and_master_opens_dates_and_clears_old_state():
     state.set_state_data_value("u-repeat", "100", "selected_booking_datetime", "old")
     state.set_state_data_value("u-repeat", "100", "selected_booking_slot_raw", {"old": True})
 
-    asyncio.run(flow.start_repeat_booking_with_prefill(c, service_id="svc", service_name="Старая", master_id="master", master_name="Старый", service_price="1000 ₽", service_duration="40 мин"))
+    asyncio.run(flow.start_repeat_booking_with_prefill(c, service_id="svc", service_name="Старая", master_id="master", master_name="Старый", service_price="1000 ₽", service_duration="40 мин", source_screen="my_booking_details"))
 
     assert state.get_state_data_value("u-repeat", "100", "booking_entry_mode") == "repeat_booking"
     assert state.get_state_data_value("u-repeat", "100", "selected_yclients_service_id") == "svc"
@@ -86,7 +86,7 @@ def test_repeat_valid_service_and_master_opens_dates_and_clears_old_state():
 
 def test_repeat_missing_master_falls_back_to_master_selection_without_first_master_choice():
     c = ctx()
-    asyncio.run(flow.start_repeat_booking_with_prefill(c, service_id="svc", service_name="Стрижка", master_id="gone", master_name="Старый"))
+    asyncio.run(flow.start_repeat_booking_with_prefill(c, service_id="svc", service_name="Стрижка", master_id="gone", master_name="Старый", source_screen="my_booking_details"))
     assert state.get_state_data_value("u-repeat", "100", "selected_yclients_service_id") == "svc"
     assert state.get_state_data_value("u-repeat", "100", "selected_yclients_master_id") is None
     assert "Выберите мастера" in c.sender.messages[-1]["text"]
@@ -94,14 +94,14 @@ def test_repeat_missing_master_falls_back_to_master_selection_without_first_mast
 
 def test_repeat_missing_service_falls_back_to_service_selection_without_wrong_service():
     c = ctx()
-    asyncio.run(flow.start_repeat_booking_with_prefill(c, service_id="gone", service_name="Старая", master_id="master", master_name="Макс"))
+    asyncio.run(flow.start_repeat_booking_with_prefill(c, service_id="gone", service_name="Старая", master_id="master", master_name="Макс", source_screen="my_booking_details"))
     assert state.get_state_data_value("u-repeat", "100", "selected_yclients_service_id") is None
     assert "Выберите категорию" in c.sender.messages[-1]["text"] or "Выберите услугу" in c.sender.messages[-1]["text"]
 
 
 def test_repeat_any_master_uses_none_master_and_opens_dates():
     c = ctx()
-    asyncio.run(flow.start_repeat_booking_with_prefill(c, service_id="svc", service_name="Стрижка", master_id=None, master_name="Любой мастер"))
-    assert state.get_state_data_value("u-repeat", "100", "selected_yclients_master_id") is None
+    asyncio.run(flow.start_repeat_booking_with_prefill(c, service_id="svc", service_name="Стрижка", master_id=None, master_name="Любой мастер", source_screen="my_booking_details"))
+    assert state.get_state_data_value("u-repeat", "100", "selected_yclients_master_id") == "0"
     assert state.get_state_data_value("u-repeat", "100", "selected_master_name") == "Любой мастер"
     assert "Выберите дату" in c.sender.messages[-1]["text"]
