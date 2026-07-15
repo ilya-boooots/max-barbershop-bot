@@ -733,6 +733,15 @@ async def handle_my_booking_reschedule_confirm(context: RouterContext) -> None:
     staff_id = _clean_state_text(reschedule_context.get("staff_id"))
     new_date = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_NEW_DATE_STATE_KEY))
     new_time = _clean_state_text(slot_data.get("new_time"))
+    completed_old_id = _clean_state_text(state.get_state_data_value(platform_user_id, chat_id, _RESCHEDULE_COMPLETED_OLD_RECORD_STATE_KEY))
+    if completed_old_id and (not record_id or completed_old_id == record_id):
+        await context.answer_callback()
+        await context.send_text(
+            _format_reschedule_success_card(selected_booking, slot_data, timezone_name=_timezone_from_state(context)),
+            keyboard=my_booking_reschedule_result_keyboard(),
+            attachments=_booking_master_photo_attachment(selected_booking),
+        )
+        return
     if not record_id or not new_datetime:
         await context.answer_callback()
         await context.send_text(MY_BOOKING_RESCHEDULE_PREPARE_ERROR_TEXT, keyboard=my_booking_reschedule_result_keyboard())
