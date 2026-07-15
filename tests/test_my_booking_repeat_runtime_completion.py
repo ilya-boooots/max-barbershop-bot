@@ -189,9 +189,14 @@ def setup(monkeypatch):
 
 
 def seed_selected(source=ACTIVE_SOURCE, item=None):
+    selected = item or booking()
     state.set_current_screen(USER_ID, CHAT_ID, source)
-    state.set_state_data_value(USER_ID, CHAT_ID, "my_bookings_selected_booking", item or booking())
+    state.set_state_data_value(USER_ID, CHAT_ID, "my_bookings_selected_booking", selected)
     state.set_state_data_value(USER_ID, CHAT_ID, "my_bookings_branch_timezone", "Europe/Samara")
+    if source == HISTORY_SOURCE:
+        state.set_state_data_value(USER_ID, CHAT_ID, "my_bookings_items", [selected])
+        state.set_state_data_value(USER_ID, CHAT_ID, "my_bookings_past_items", [selected])
+        state.set_state_data_value(USER_ID, CHAT_ID, "my_bookings_history_page", 0)
 
 
 def text_messages(c):
@@ -224,14 +229,15 @@ def test_real_handler_captures_history_source_and_back_restores_history_detail()
     back = ctx(BOOKING_BACK_PAYLOAD)
     asyncio.run(booking_flow.handle_booking_back(back))
     assert state.get_current_screen(USER_ID, CHAT_ID) == HISTORY_SOURCE
-    assert "запись" in text_messages(back)[-1].lower()
+    assert text_messages(back)[-1].startswith("🕘 История визитов")
     assert "Повторить запись" not in "Authorization traceback response_body"
 
 
-def test_history_without_selected_booking_uses_past_source_candidate():
+def test_history_without_selected_booking_uses_global_history_repeat_candidate():
     c = ctx()
     state.set_current_screen(USER_ID, CHAT_ID, HISTORY_SOURCE)
     state.set_state_data_value(USER_ID, CHAT_ID, "my_bookings_past_items", [booking(record_id="past-1")])
+    state.set_state_data_value(USER_ID, CHAT_ID, "my_bookings_items", [booking(record_id="past-1")])
     asyncio.run(my_flow.handle_my_booking_repeat_start(c))
     assert FakeMyBookingsService.calls == [("past-1", USER_ID)]
     assert state.get_state_data_value(USER_ID, CHAT_ID, "repeat_source_screen") == HISTORY_SOURCE

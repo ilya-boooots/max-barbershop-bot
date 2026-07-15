@@ -192,9 +192,6 @@ async def handle_my_bookings_history(context: RouterContext) -> None:
     end = start + page_size
     platform_user_id = _user_id(context)
     chat_id = _chat_id(context)
-    repeat_candidate = next((item for item in reversed(past) if _booking_record_id(item)), None)
-    if repeat_candidate is not None:
-        state.set_state_data_value(platform_user_id, chat_id, _SELECTED_BOOKING_STATE_KEY, repeat_candidate)
     state.set_state_data_value(platform_user_id, chat_id, "my_bookings_history_page", page)
     state.set_current_screen(platform_user_id, chat_id, MY_BOOKINGS_HISTORY_SCREEN)
     await context.send_text(
@@ -451,11 +448,9 @@ async def handle_my_booking_repeat_start(context: RouterContext) -> None:
 
     await context.answer_callback()
     source_screen = _repeat_source_screen(context)
-    booking = _selected_booking(context)
-    if booking is None and source_screen == MY_BOOKINGS_HISTORY_SCREEN:
-        booking = _repeat_booking_from_history(context)
-        if booking is not None:
-            state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_BOOKING_STATE_KEY, booking)
+    booking = _repeat_booking_from_history(context) if source_screen == MY_BOOKINGS_HISTORY_SCREEN else _selected_booking(context)
+    if booking is not None:
+        state.set_state_data_value(_user_id(context), _chat_id(context), _SELECTED_BOOKING_STATE_KEY, booking)
     if booking is None:
         await context.send_text(MY_BOOKING_NOT_FOUND_TEXT, keyboard=my_bookings_keyboard())
         return
@@ -1375,7 +1370,7 @@ def _repeat_source_screen(context: RouterContext) -> str:
 
 
 def _repeat_booking_from_history(context: RouterContext) -> Any | None:
-    for item in reversed(_past_bookings_from_state(context)):
+    for item in reversed(_bookings_from_state(context)):
         if _booking_record_id(item):
             return item
     return None
