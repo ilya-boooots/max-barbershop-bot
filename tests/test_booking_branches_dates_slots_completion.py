@@ -34,6 +34,7 @@ from max_barbershop_bot.ui.buttons import (
     BOOKING_HUB_SERVICE_PAYLOAD,
     BOOKING_HUB_STAFF_PAYLOAD,
     BOOKING_MASTER_NEXT_PAYLOAD,
+    BOOKING_MASTER_ANY_PAYLOAD,
     BOOKING_MASTER_PAYLOAD_PREFIX,
     BOOKING_SERVICE_PAYLOAD_PREFIX,
     BOOKING_SLOT_PAYLOAD_PREFIX,
@@ -275,7 +276,7 @@ def test_empty_states_and_pagination_for_all_selection_screens() -> None:
     asyncio.run(booking._show_dates(ctx, [], timezone_name="Europe/Samara"))
     assert ctx.sender.messages[-1]["text"] == BOOKING_DATES_EMPTY_TEXT
     asyncio.run(booking._show_slots(ctx, []))
-    assert ctx.sender.messages[-1]["text"] == booking.BOOKING_STALE_DATE_TEXT
+    assert ctx.sender.messages[-1]["text"] == booking.BOOKING_SLOTS_EMPTY_TEXT
 
     cats = [_cat(f"c{i}", f"Категория {i}") for i in range(10)]
     asyncio.run(booking._show_categories(ctx, cats))
@@ -368,3 +369,308 @@ def test_scope_safety_forbidden_handlers_and_reference_files_untouched() -> None
         assert token in source
     assert "from aiogram" not in max_sources
     assert "import aiogram" not in max_sources
+
+
+@pytest.mark.parametrize("entry_mode,screen,payload,expected_method", [
+    (booking._ENTRY_MODE_SERVICE_FIRST, state.BOOKING_CATEGORIES_SCREEN, f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}9", "catalog"),
+    (booking._ENTRY_MODE_STAFF_FIRST, state.BOOKING_CATEGORIES_SCREEN, f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}9", "catalog"),
+    (booking._ENTRY_MODE_DATETIME_FIRST, state.BOOKING_CATEGORIES_SCREEN, f"{BOOKING_CATEGORY_PAYLOAD_PREFIX}9", "dt_catalog"),
+])
+def test_stale_category_refresh_is_branch_aware(monkeypatch, entry_mode, screen, payload, expected_method) -> None:
+    # Telegram behavior: stale category keeps branch context and refreshes the logical category/service screen.
+    calls = []
+    catalog = BookingCatalog(categories=[_cat()], services=[_service()])
+
+    async def fake_catalog(self, **kwargs):
+        calls.append(("catalog", kwargs))
+        return catalog
+
+    async def fake_dt_services(self, **kwargs):
+        calls.append(("dt_catalog", kwargs))
+        return catalog
+
+    monkeypatch.setattr(booking.BookingService, "get_valid_categories_for_entry_mode", fake_catalog)
+    monkeypatch.setattr(booking.BookingService, "get_datetime_first_services_for_slot", fake_dt_services)
+    state.set_current_screen("u35", "35", screen)
+    state.set_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY, entry_mode)
+    state.set_state_data_value("u35", "35", booking._SELECTED_MASTER_STATE_KEY, "m1")
+    state.set_state_data_value("u35", "35", booking._SELECTED_DATE_STATE_KEY, "2026-07-15")
+    state.set_state_data_value("u35", "35", booking._SELECTED_SLOT_TIME_STATE_KEY, "12:00")
+
+    ctx = _context(payload)
+    asyncio.run(booking.handle_booking_category(ctx))
+
+    assert "Список категорий уже обновился" in ctx.sender.messages[0]["text"]
+    assert calls and calls[-1][0] == expected_method
+    assert state.get_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY) == entry_mode
+    if entry_mode == booking._ENTRY_MODE_STAFF_FIRST:
+        assert state.get_state_data_value("u35", "35", booking._SELECTED_MASTER_STATE_KEY) == "m1"
+    if entry_mode == booking._ENTRY_MODE_DATETIME_FIRST:
+        assert state.get_state_data_value("u35", "35", booking._SELECTED_DATE_STATE_KEY) == "2026-07-15"
+        assert state.get_state_data_value("u35", "35", booking._SELECTED_SLOT_TIME_STATE_KEY) == "12:00"
+
+
+@pytest.mark.parametrize("entry_mode,expected_method", [
+    (booking._ENTRY_MODE_SERVICE_FIRST, "catalog"),
+    (booking._ENTRY_MODE_STAFF_FIRST, "selected_category"),
+    (booking._ENTRY_MODE_DATETIME_FIRST, "dt_catalog"),
+])
+def test_stale_service_refresh_is_branch_aware(monkeypatch, entry_mode, expected_method) -> None:
+    # Telegram behavior: stale service does not select another service and reloads valid services for current branch.
+    calls = []
+    catalog = BookingCatalog(categories=[_cat()], services=[_service()])
+
+    async def fake_valid_services(self, **kwargs):
+        calls.append(("selected_category", kwargs))
+        return [_service()]
+
+    async def fake_dt_services(self, **kwargs):
+        calls.append(("dt_catalog", kwargs))
+        return catalog
+
+    async def fake_catalog(self, **kwargs):
+        calls.append(("catalog", kwargs))
+        return catalog
+
+    monkeypatch.setattr(booking.BookingService, "get_valid_services_for_constraints", fake_valid_services)
+    monkeypatch.setattr(booking.BookingService, "get_datetime_first_services_for_slot", fake_dt_services)
+    monkeypatch.setattr(booking.BookingService, "get_valid_categories_for_entry_mode", fake_catalog)
+    state.set_current_screen("u35", "35", state.BOOKING_SERVICES_SCREEN)
+    state.set_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY, entry_mode)
+    state.set_state_data_value("u35", "35", booking._SELECTED_CATEGORY_STATE_KEY, "c1")
+    state.set_state_data_value("u35", "35", booking._SELECTED_MASTER_STATE_KEY, "m1")
+    state.set_state_data_value("u35", "35", booking._SELECTED_DATE_STATE_KEY, "2026-07-15")
+    state.set_state_data_value("u35", "35", booking._SELECTED_SLOT_TIME_STATE_KEY, "12:00")
+    state.set_state_data_value("u35", "35", booking._CATALOG_STATE_KEY, catalog)
+
+    ctx = _context(f"{BOOKING_SERVICE_PAYLOAD_PREFIX}9")
+    asyncio.run(booking.handle_booking_service(ctx))
+
+    assert "Список услуг уже обновился" in ctx.sender.messages[0]["text"]
+    assert calls and calls[-1][0] == expected_method
+    assert state.get_state_data_value("u35", "35", booking._SELECTED_SERVICE_STATE_KEY) is None
+
+
+@pytest.mark.parametrize("entry_mode,expected_method", [
+    (booking._ENTRY_MODE_SERVICE_FIRST, "masters"),
+    (booking._ENTRY_MODE_STAFF_FIRST, "staff_masters"),
+    (booking._ENTRY_MODE_DATETIME_FIRST, "dt_masters"),
+])
+def test_stale_master_refresh_is_branch_aware(monkeypatch, entry_mode, expected_method) -> None:
+    # Telegram behavior: stale master refreshes the current master-selection branch and keeps valid context.
+    calls = []
+
+    async def fake_masters(self, **kwargs):
+        calls.append(("staff_masters" if kwargs.get("entry_mode") == booking._ENTRY_MODE_STAFF_FIRST else "masters", kwargs))
+        return [_master()]
+
+    async def fake_dt_masters(self, **kwargs):
+        calls.append(("dt_masters", kwargs))
+        return [_master()]
+
+    monkeypatch.setattr(booking.BookingService, "get_valid_masters_for_constraints", fake_masters)
+    monkeypatch.setattr(booking.BookingService, "get_datetime_first_masters_for_slot", fake_dt_masters)
+    state.set_current_screen("u35", "35", state.BOOKING_MASTERS_SCREEN)
+    state.set_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY, entry_mode)
+    state.set_state_data_value("u35", "35", booking._SELECTED_SERVICE_STATE_KEY, "s1")
+    state.set_state_data_value("u35", "35", booking._SELECTED_DATE_STATE_KEY, "2026-07-15")
+    state.set_state_data_value("u35", "35", booking._SELECTED_SLOT_TIME_STATE_KEY, "12:00")
+
+    ctx = _context(f"{BOOKING_MASTER_PAYLOAD_PREFIX}9")
+    asyncio.run(booking.handle_booking_master(ctx))
+
+    assert "Список мастеров уже обновился" in ctx.sender.messages[0]["text"]
+    assert calls and calls[-1][0] == expected_method
+    assert state.get_state_data_value("u35", "35", booking._SELECTED_MASTER_STATE_KEY) is None
+
+
+@pytest.mark.parametrize("entry_mode,expected_method", [
+    (booking._ENTRY_MODE_SERVICE_FIRST, "dates"),
+    (booking._ENTRY_MODE_STAFF_FIRST, "dates"),
+    (booking._ENTRY_MODE_DATETIME_FIRST, "dt_dates"),
+])
+def test_stale_date_refresh_is_branch_aware(monkeypatch, entry_mode, expected_method) -> None:
+    # Telegram behavior: stale date refreshes available dates for current branch without changing selections.
+    calls = []
+
+    async def fake_dates(self, **kwargs):
+        calls.append(("dates", kwargs))
+        return [datetime(2026, 7, 15).date()]
+
+    async def fake_dt_dates(self, **kwargs):
+        calls.append(("dt_dates", kwargs))
+        return [datetime(2026, 7, 15).date()]
+
+    monkeypatch.setattr(booking.BookingService, "get_available_dates_for_selection", fake_dates)
+    monkeypatch.setattr(booking.BookingService, "get_datetime_first_available_dates", fake_dt_dates)
+    monkeypatch.setattr(booking.BookingService, "get_branch_timezone", lambda self: "Europe/Samara")
+    state.set_current_screen("u35", "35", state.BOOKING_DATES_SCREEN)
+    state.set_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY, entry_mode)
+    state.set_state_data_value("u35", "35", booking._SELECTED_SERVICE_STATE_KEY, None if entry_mode == booking._ENTRY_MODE_DATETIME_FIRST else "s1")
+    state.set_state_data_value("u35", "35", booking._SELECTED_MASTER_STATE_KEY, None if entry_mode == booking._ENTRY_MODE_DATETIME_FIRST else "m1")
+
+    ctx = _context(f"{BOOKING_DATE_PAYLOAD_PREFIX}9")
+    asyncio.run(booking.handle_booking_date(ctx))
+
+    assert "свободного времени нет" in ctx.sender.messages[0]["text"]
+    assert calls and calls[-1][0] == expected_method
+    assert state.get_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY) == entry_mode
+
+
+@pytest.mark.parametrize("entry_mode,expected_method", [
+    (booking._ENTRY_MODE_SERVICE_FIRST, "slots"),
+    (booking._ENTRY_MODE_STAFF_FIRST, "slots"),
+    (booking._ENTRY_MODE_DATETIME_FIRST, "dt_slots"),
+])
+def test_stale_slot_refresh_is_branch_aware(monkeypatch, entry_mode, expected_method) -> None:
+    # Telegram behavior: stale slot reloads slots for the same date and never selects another slot.
+    calls = []
+
+    async def fake_slots(self, **kwargs):
+        calls.append(("slots", kwargs))
+        return [_slot("15:00")]
+
+    async def fake_dt_slots(self, booking_date, **kwargs):
+        calls.append(("dt_slots", {"booking_date": str(booking_date)}))
+        return [_slot("15:00")]
+
+    monkeypatch.setattr(booking.BookingService, "get_available_slots", fake_slots)
+    monkeypatch.setattr(booking.BookingService, "get_datetime_first_slots_for_date", fake_dt_slots)
+    state.set_current_screen("u35", "35", state.BOOKING_SLOTS_SCREEN)
+    state.set_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY, entry_mode)
+    state.set_state_data_value("u35", "35", booking._SELECTED_DATE_STATE_KEY, "2026-07-15")
+    state.set_state_data_value("u35", "35", booking._SELECTED_SERVICE_STATE_KEY, None if entry_mode == booking._ENTRY_MODE_DATETIME_FIRST else "s1")
+    state.set_state_data_value("u35", "35", booking._SELECTED_MASTER_STATE_KEY, None if entry_mode == booking._ENTRY_MODE_DATETIME_FIRST else "m1")
+
+    ctx = _context(f"{BOOKING_SLOT_PAYLOAD_PREFIX}9")
+    asyncio.run(booking.handle_booking_slot(ctx))
+
+    assert "окно уже неактуально" in ctx.sender.messages[0]["text"]
+    assert calls and calls[-1][0] == expected_method
+    assert state.get_state_data_value("u35", "35", booking._SELECTED_SLOT_TIME_STATE_KEY) is None
+    assert state.get_current_screen("u35", "35") == state.BOOKING_SLOTS_SCREEN
+
+
+def test_back_navigation_matrices_for_all_entry_modes(monkeypatch) -> None:
+    # Telegram behavior: Back follows explicit branch matrix and preserves selected context.
+    async def fake_dates(ctx, *, push_current=True):
+        state.set_current_screen("u35", "35", state.BOOKING_DATES_SCREEN)
+        await ctx.send_text("dates", keyboard=booking.navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+
+    async def fake_slots(ctx, *args, **kwargs):
+        state.set_current_screen("u35", "35", state.BOOKING_SLOTS_SCREEN)
+        await ctx.send_text("slots", keyboard=booking.navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+
+    async def fake_catalog(ctx, *, push_current=True):
+        state.set_current_screen("u35", "35", state.BOOKING_CATEGORIES_SCREEN)
+        await ctx.send_text("catalog", keyboard=booking.navigation_keyboard(back_payload=BOOKING_BACK_PAYLOAD))
+
+    monkeypatch.setattr(booking, "_show_booking_dates", fake_dates)
+    monkeypatch.setattr(booking, "_open_datetime_first_slots", fake_slots)
+    monkeypatch.setattr(booking, "_open_booking_catalog", fake_catalog)
+
+    for entry_mode, edges in {
+        booking._ENTRY_MODE_SERVICE_FIRST: [(state.BOOKING_CATEGORIES_SCREEN, state.BOOKING_HUB_SCREEN), (state.BOOKING_SLOTS_SCREEN, state.BOOKING_DATES_SCREEN)],
+        booking._ENTRY_MODE_STAFF_FIRST: [(state.BOOKING_SERVICES_SCREEN, state.BOOKING_MASTERS_SCREEN), (state.BOOKING_SLOTS_SCREEN, state.BOOKING_DATES_SCREEN)],
+        booking._ENTRY_MODE_DATETIME_FIRST: [(state.BOOKING_DATES_SCREEN, state.BOOKING_HUB_SCREEN), (state.BOOKING_SERVICES_SCREEN, state.BOOKING_SLOTS_SCREEN)],
+    }.items():
+        for current, expected in edges:
+            state.clear_user_state("u35", "35")
+            state.set_current_screen("u35", "35", current)
+            state.set_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY, entry_mode)
+            state.set_state_data_value("u35", "35", booking._SELECTED_MASTER_STATE_KEY, "m1")
+            selected_service = None if (entry_mode == booking._ENTRY_MODE_DATETIME_FIRST and current == state.BOOKING_DATES_SCREEN) else "s1"
+            state.set_state_data_value("u35", "35", booking._SELECTED_SERVICE_STATE_KEY, selected_service)
+            state.set_state_data_value("u35", "35", booking._SELECTED_DATE_STATE_KEY, "2026-07-15")
+            state.set_state_data_value("u35", "35", booking._MASTERS_STATE_KEY, [_master("m1")])
+            ctx = _context(BOOKING_BACK_PAYLOAD)
+            asyncio.run(booking.handle_booking_back(ctx))
+            assert state.get_current_screen("u35", "35") == expected
+            assert state.get_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY) == entry_mode
+
+
+def test_any_master_visibility_and_selection_semantics(monkeypatch) -> None:
+    # Telegram behavior: master list starts with “Любой специалист”; selecting it uses any-master YClients staff semantics.
+    async def fake_dates(self, **kwargs):
+        assert kwargs["yclients_master_id"] == "0"
+        return [datetime(2026, 7, 15).date()]
+
+    monkeypatch.setattr(booking.BookingService, "get_available_dates_for_selection", fake_dates)
+    monkeypatch.setattr(booking.BookingService, "get_branch_timezone", lambda self: "Europe/Samara")
+    ctx = _context("show-masters")
+    state.set_state_data_value("u35", "35", booking._ENTRY_MODE_STATE_KEY, booking._ENTRY_MODE_SERVICE_FIRST)
+    state.set_state_data_value("u35", "35", booking._SELECTED_SERVICE_STATE_KEY, "s1")
+    asyncio.run(booking._show_masters(ctx, [_master("m1")]))
+    assert _texts(ctx)[0] == "👤 Любой специалист"
+    assert BOOKING_MASTER_ANY_PAYLOAD in _payloads(ctx)
+
+    select = _context(BOOKING_MASTER_ANY_PAYLOAD)
+    state.set_current_screen("u35", "35", state.BOOKING_MASTERS_SCREEN)
+    asyncio.run(booking.handle_booking_master_any(select))
+    assert state.get_state_data_value("u35", "35", booking._SELECTED_MASTER_STATE_KEY) == "0"
+    assert state.get_current_screen("u35", "35") == state.BOOKING_DATES_SCREEN
+
+
+def test_real_service_master_filter_removes_incompatible_and_unavailable(monkeypatch) -> None:
+    # Telegram behavior: real BookingService filtering removes incompatible/no-future staff and avoids all-staff fallback.
+    service = _service("s1", staff_ids=("m1", "m2", "m3"))
+    masters = [_master("m1"), _master("m2"), _master("m3")]
+    svc = booking.BookingService(None)
+
+    async def fake_can_book(service_arg, staff_id, **kwargs):
+        return staff_id != "m2"
+
+    async def fake_future(service_id, *, staff_id=None):
+        return staff_id == "m1"
+
+    monkeypatch.setattr(svc, "_staff_can_book_service", fake_can_book)
+    monkeypatch.setattr(svc, "_service_has_future_slot", fake_future)
+    result = asyncio.run(svc.get_valid_masters_for_constraints(yclients_service_id="s1", service=service, entry_mode="service_first", masters=masters))
+    assert [item.yclients_master_id for item in result] == ["m1"]
+
+
+def test_date_and_slot_pagination_boundaries_and_invalid_pages() -> None:
+    # Telegram behavior: date/slot prev-next clamps stale pages and keeps Back/Home.
+    dates = [datetime(2026, 7, day).date() for day in range(1, 24)]
+    slots = [BookingSlotItem(time=f"{8 + i // 4:02d}:{(i % 4) * 15:02d}") for i in range(31)]
+    ctx = _context("dates")
+    asyncio.run(booking._show_dates(ctx, dates, timezone_name="Europe/Samara", page=1))
+    assert "⬅️" in _texts(ctx) and "➡️" in _texts(ctx)
+    asyncio.run(booking._show_dates(ctx, dates, timezone_name="Europe/Samara", page=99))
+    assert "➡️" not in _texts(ctx)
+    state.set_state_data_value("u35", "35", booking._SELECTED_DATE_STATE_KEY, "2026-07-15")
+    asyncio.run(booking._show_slots(ctx, slots, page=1))
+    assert "⬅️" in _texts(ctx) and "➡️" in _texts(ctx)
+    asyncio.run(booking._show_slots(ctx, slots, page=99))
+    assert "➡️" not in _texts(ctx)
+
+
+@pytest.mark.parametrize("category,status,text", [
+    ("credentials", None, "настроена"),
+    ("auth", 401, "доступ"),
+    ("auth", 403, "доступ"),
+    ("rate_limit", 429, "много запросов"),
+    ("server", 500, "временно"),
+    ("transport", None, "связаться"),
+    ("malformed", None, "Попробуйте позже"),
+])
+def test_yclients_error_categories_are_masked_through_real_handler(monkeypatch, category, status, text) -> None:
+    # Telegram behavior: selection-screen YClients failures are masked and keep navigation.
+    exc = BookingServiceError(
+        f"Не удалось загрузить данные. {text} 🙏\n\nПопробуйте позже.",
+        diagnostic={"error_category": category, "http_status": status, "safe_response_snippet": "masked"},
+    )
+
+    async def fail_catalog(self, **kwargs):
+        raise exc
+
+    monkeypatch.setattr(booking.BookingService, "get_valid_categories_for_entry_mode", fail_catalog)
+    state.set_current_screen("u35", "35", state.BOOKING_HUB_SCREEN)
+    ctx = _context(BOOKING_HUB_SERVICE_PAYLOAD)
+    asyncio.run(booking.handle_booking_hub_service(ctx))
+    rendered = ctx.sender.messages[-1]["text"]
+    assert text in rendered
+    for forbidden in ("Authorization", "partner_token", "user_token", "raw_response", "traceback"):
+        assert forbidden not in rendered
+    assert BOOKING_BACK_PAYLOAD in _payloads(ctx)
+    assert NAV_HOME_PAYLOAD in _payloads(ctx)

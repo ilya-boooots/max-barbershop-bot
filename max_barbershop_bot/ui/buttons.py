@@ -211,6 +211,7 @@ BOOKING_CATEGORY_NEXT_PAYLOAD = "booking:category_page:next"
 BOOKING_SERVICE_PREV_PAYLOAD = "booking:service_page:prev"
 BOOKING_SERVICE_NEXT_PAYLOAD = "booking:service_page:next"
 BOOKING_MASTER_PAYLOAD_PREFIX = "booking:master:"
+BOOKING_MASTER_ANY_PAYLOAD = "booking:master:any"
 BOOKING_MASTER_PREV_PAYLOAD = "booking:master_page:prev"
 BOOKING_MASTER_NEXT_PAYLOAD = "booking:master_page:next"
 BOOKING_DATE_PAYLOAD_PREFIX = "booking:date:"
@@ -1205,11 +1206,15 @@ def booking_masters_keyboard(
     page: int = 0,
     has_previous: bool = False,
     has_next: bool = False,
+    include_any_master: bool = False,
     back_payload: str = BOOKING_BACK_PAYLOAD,
 ) -> MaxInlineKeyboard:
     """Build MAX-compatible master picker buttons."""
 
-    rows = [
+    rows = []
+    if include_any_master:
+        rows.append([MaxButton(text="👤 Любой специалист", payload=BOOKING_MASTER_ANY_PAYLOAD)])
+    rows.extend([
         [
             MaxButton(
                 text=title_formatter(master),
@@ -1217,7 +1222,7 @@ def booking_masters_keyboard(
             )
         ]
         for index, master in enumerate(masters)
-    ]
+    ])
     page_row = []
     if has_previous:
         page_row.append(MaxButton(text="⬅️", payload=BOOKING_MASTER_PREV_PAYLOAD))
