@@ -65,6 +65,7 @@ logger = logging.getLogger(__name__)
 
 SEGMENT_STALE_TEXT = "⚠️ Данные устарели. Откройте раздел заново."
 SEGMENT_BROADCAST_UNSUPPORTED_TEXT = "⚠️ Этот сегмент пока нельзя использовать для разовой рассылки."
+MASTER_PICKER_LOAD_ERROR_TEXT = "⚠️ Не удалось загрузить мастеров. Проверьте интеграцию YClients или попробуйте позже."
 SERVICE_CATEGORIES_EMPTY_TEXT = "😌 В YClients пока нет категорий услуг."
 SERVICE_CATEGORIES_LOAD_ERROR_TEXT = "⚠️ Не удалось загрузить категории услуг из YClients. Попробуйте позже."
 
@@ -126,6 +127,10 @@ async def handle_segment_selected(context: RouterContext) -> None:
         return
     if payload == SEGMENTS_BY_SERVICE_PAYLOAD:
         await _show_service_picker(context)
+        return
+    if payload == SEGMENTS_BY_MASTER_PREFIX or payload == f"{SEGMENTS_BY_MASTER_PREFIX}picker":
+        await _answer_callback(context)
+        await context.send_text(SEGMENT_STALE_TEXT, keyboard=client_segments_menu_keyboard())
         return
     if payload == SEGMENTS_BY_SERVICE_PREFIX or payload == f"{SEGMENTS_BY_SERVICE_PREFIX}picker":
         await _answer_callback(context)
@@ -278,7 +283,12 @@ async def _show_segment(context: RouterContext, payload: str, *, notification: s
     state.set_current_screen(_user_id(context), _chat_id(context), state.CLIENT_SEGMENT_RESULT_SCREEN)
 
     text = format_segment_summary(result)
-    keyboard = _service_category_detail_keyboard(payload) if payload.startswith(SEGMENTS_BY_SERVICE_PREFIX) else client_segment_result_keyboard(can_broadcast=True)
+    if payload.startswith(SEGMENTS_BY_MASTER_PREFIX):
+        keyboard = _by_master_detail_keyboard(payload)
+    elif payload.startswith(SEGMENTS_BY_SERVICE_PREFIX):
+        keyboard = _service_category_detail_keyboard(payload)
+    else:
+        keyboard = client_segment_result_keyboard(can_broadcast=True)
     await context.send_text(text, keyboard=keyboard)
 
 
@@ -323,7 +333,7 @@ def _audience_key_from_segment_payload(payload: str, segment_type: str) -> str |
         "lost_30": "lost_30",
         "lost_60": "lost_60",
         "lost_90": "lost_90",
-        "no_future_bookings": "no_future_booking",
+        "no_future_bookings": "no_future_bookings",
         "cancelled": "cancelled_recent",
         "birthday_soon": "birthday_soon",
     }
