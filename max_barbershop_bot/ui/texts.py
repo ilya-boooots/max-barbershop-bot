@@ -233,6 +233,12 @@ STATISTICS_NOT_CONFIGURED_TEXT = """YClients пока не настроен 🙏
 Сначала добавьте данные подключения."""
 STATISTICS_LOAD_ERROR_TEXT = "⚠️ Не удалось загрузить статистику. Попробуйте позже."
 
+ADMIN_BOOKINGS_NOT_CONFIGURED_TEXT = "❌ YClients не настроен. Зайдите в ⚙️ Интеграция YClients"
+ADMIN_BOOKINGS_AUTH_ERROR_TEXT = "❌ Нет доступа к YClients. Проверьте токены ⚙️"
+ADMIN_BOOKINGS_RATE_LIMIT_TEXT = "⏳ Слишком много запросов. Попробуйте позже 🙂"
+ADMIN_BOOKINGS_UNAVAILABLE_TEXT = "😔 YClients временно недоступен. Попробуйте позже 🙂"
+ADMIN_BOOKINGS_GENERIC_ERROR_TEXT = "😔 Не удалось загрузить записи. Попробуйте позже 🙂"
+
 CLIENT_SEGMENTS_MENU_TEXT = """🎯 Сегменты клиентов
 
 Бот автоматически распределяет клиентов по группам на основе визитов, записей и данных из YClients."""

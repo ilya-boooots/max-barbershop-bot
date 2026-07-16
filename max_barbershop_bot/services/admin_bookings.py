@@ -19,7 +19,6 @@ from max_barbershop_bot.integrations.yclients import (
 )
 from max_barbershop_bot.integrations.yclients.endpoints import get_booking_details, list_bookings_by_date_range, list_staff
 from max_barbershop_bot.integrations.yclients.utils import extract_data_rows, extract_first_record, safe_str
-from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import CompanyTimeService
 from max_barbershop_bot.services.yclients_context import (
@@ -65,6 +64,14 @@ class AdminBookingsLoadError(RuntimeError):
     """Raised when YClients bookings cannot be loaded safely."""
 
 
+class AdminBookingsAuthError(AdminBookingsLoadError):
+    """Raised when YClients rejects the configured credentials."""
+
+
+class AdminBookingsRateLimitError(AdminBookingsLoadError):
+    """Raised when YClients asks the operator to retry later."""
+
+
 async def load_admin_bookings(filters: AdminBookingsFilter, *, actor_platform_user_id_present: bool = False) -> AdminBookingsResult:
     """Load company bookings from YClients for the selected Telegram-equivalent filters."""
 
@@ -93,7 +100,6 @@ async def load_admin_bookings(filters: AdminBookingsFilter, *, actor_platform_us
         if filters.status:
             rows = [row for row in rows if _record_status(row) == filters.status]
         rows = sorted(rows, key=lambda row: company_time.localize_datetime(_record_datetime(row)) or company_time.now())
-        rows = _enrich_sources(rows)
         statuses = sorted({_record_status(row) for row in rows if _record_status(row)})
         counters = {"confirmed": 0, "pending": 0, "cancelled": 0}
         for row in rows:
@@ -118,7 +124,16 @@ async def load_admin_bookings(filters: AdminBookingsFilter, *, actor_platform_us
     except (YClientsConfigError, ValueError) as exc:
         _log_error(exc, filters, actor_platform_user_id_present)
         raise AdminBookingsSettingsMissingError from exc
-    except (YClientsAuthError, YClientsRateLimitError, YClientsServerError, YClientsTransportError, YClientsError) as exc:
+    except YClientsAuthError as exc:
+        _log_error(exc, filters, actor_platform_user_id_present)
+        raise AdminBookingsAuthError from exc
+    except YClientsRateLimitError as exc:
+        _log_error(exc, filters, actor_platform_user_id_present)
+        raise AdminBookingsRateLimitError from exc
+    except (YClientsServerError, YClientsTransportError, YClientsError) as exc:
+        _log_error(exc, filters, actor_platform_user_id_present)
+        raise AdminBookingsLoadError from exc
+    except Exception as exc:  # noqa: BLE001 - preserve Telegram's safe generic fallback.
         _log_error(exc, filters, actor_platform_user_id_present)
         raise AdminBookingsLoadError from exc
     finally:
@@ -140,8 +155,7 @@ async def load_admin_booking_detail(record: dict[str, Any]) -> dict[str, Any]:
         client = build_yclients_client_from_active_settings(settings)
         company_id = str(settings.company_id)
         payload = await get_booking_details(client, company_id=company_id, record_id=record_id)
-        item = extract_first_record(payload) or record
-        return _enrich_sources([item])[0]
+        return extract_first_record(payload) or record
     finally:
         if client is not None:
             await client.close()
@@ -174,9 +188,9 @@ def format_admin_bookings_list(result: AdminBookingsResult) -> str:
     """Format Telegram-equivalent admin bookings list."""
 
     lines = [f"📋 Записи — {result.title}"]
-    if result.bookings:
+    if result.statuses:
         lines.append(f"✅ Подтверждено: {result.counters['confirmed']} | ⏳ Ожидает: {result.counters['pending']} | ❌ Отменено: {result.counters['cancelled']}")
-    else:
+    if not result.page_bookings:
         lines.append("\n😌 На выбранный день записей нет.")
     return "\n".join(lines)
 
@@ -204,7 +218,6 @@ def format_admin_booking_card(item: dict[str, Any]) -> str:
         f"👤 Клиент: {_pick(item, ('client_name', 'fullname', 'name'), '—')}",
         f"📞 Телефон: {_mask_phone(_pick(item, ('phone', 'client_phone', 'tel'), ''))}",
         f"🧾 Статус: {_record_status(item) or '—'}",
-        f"📍 Источник: {_source_label(item)}",
     ]
     comment = _pick(item, ("comment", "notes"), "")
     if comment:
@@ -267,36 +280,6 @@ def _status_bucket(raw: str) -> str:
     if "wait" in value or "нов" in value or "pending" in value:
         return "pending"
     return "confirmed"
-
-
-def _enrich_sources(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    repo = PlatformAttributionRepository(_database_path())
-    enriched: list[dict[str, Any]] = []
-    for row in rows:
-        copy = dict(row)
-        record_id = _record_id(copy)
-        try:
-            attribution = repo.get_by_yclients_record_id(record_id) if record_id else None
-        except Exception as exc:  # noqa: BLE001 - attribution must not become booking truth.
-            logger.warning(
-                "MAX admin bookings diagnostic: attribution_lookup_failed=%s selected_record_id_present=%s",
-                type(exc).__name__,
-                bool(record_id),
-            )
-            attribution = None
-        if attribution is not None:
-            copy["_platform_source"] = attribution.platform
-        enriched.append(copy)
-    return enriched
-
-
-def _source_label(item: dict[str, Any]) -> str:
-    source = safe_str(item.get("_platform_source")).lower()
-    if source == "max":
-        return "MAX"
-    if source:
-        return source.capitalize()
-    return "не найден"
 
 
 def _company_time() -> CompanyTimeService:
