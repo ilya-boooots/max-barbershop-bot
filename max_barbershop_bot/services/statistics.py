@@ -12,9 +12,12 @@ from zoneinfo import ZoneInfo
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
+from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER
 from max_barbershop_bot.repositories.platform_attribution import PLATFORM_MAX, PlatformAttributionRepository
+from max_barbershop_bot.repositories.users import UsersRepository
 from max_barbershop_bot.repositories.yclients_settings import YClientsSettingsRepository
 from max_barbershop_bot.services.company_time import DEFAULT_BRANCH_TIMEZONE, normalize_branch_timezone, zoneinfo_or_default
+from max_barbershop_bot.services.registration import is_registered
 from max_barbershop_bot.services.yclients_context import (
     build_yclients_client_from_active_settings,
     has_required_yclients_credentials,
@@ -70,12 +73,96 @@ class StatisticsResult:
     max_revenue: float | None
 
 
+@dataclass(frozen=True)
+class BusinessSummary:
+    """Telegram-equivalent all-time business summary."""
+
+    bot_registered_clients: int
+    clients_total: int
+    records_total: int
+    revenue: float
+    avg_check: float
+    completed: int
+    cancelled: int
+    no_show: int
+
+
 class StatisticsSettingsMissingError(RuntimeError):
     """Raised when active YClients settings are missing or incomplete."""
 
 
 class StatisticsLoadError(RuntimeError):
     """Raised when statistics cannot be loaded from YClients."""
+
+
+async def get_business_summary() -> BusinessSummary:
+    """Load the all-time summary using Telegram's counting rules for MAX records."""
+
+    try:
+        settings = load_active_yclients_settings(
+            YClientsSettingsRepository(_database_path()),
+            operation="get_statistics",
+        )
+        if not has_required_yclients_credentials(settings):
+            raise StatisticsLoadError("YClients settings are incomplete")
+
+        timezone = _safe_zoneinfo(settings.branch_timezone)
+        period = StatisticsPeriod(
+            label="all_time",
+            start=date(2000, 1, 1),
+            end=datetime.now(timezone).date(),
+        )
+        users = UsersRepository(_database_path()).list_users_for_broadcast_audience(platform=PLATFORM_MAX)
+        registered_count = sum(1 for user in users if is_registered(user))
+
+        async with build_yclients_client_from_active_settings(settings) as client:
+            service = YClientsServiceLayer(client, company_id=settings.company_id)
+            rows = await get_records_for_period_from_yclients(service, period=period)
+            attributed_ids = set(
+                PlatformAttributionRepository(_database_path()).list_active_yclients_record_ids(
+                    platform=PLATFORM_MAX,
+                    yclients_record_ids=[record_id for row in rows if (record_id := _extract_record_id(row))],
+                )
+            )
+            candidates = [row for row in rows if _is_max_record(row, attributed_ids)]
+            detailed_rows = await _load_record_details(service, candidates)
+    except StatisticsLoadError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - never expose integration or storage details.
+        logger.warning("MAX statistics summary failed: category=%s", type(exc).__name__)
+        raise StatisticsLoadError("Statistics load failed") from exc
+
+    amounts = [_extract_record_amount(row) for row in detailed_rows]
+    positive_amounts = [amount for amount in amounts if amount > 0]
+    return BusinessSummary(
+        bot_registered_clients=registered_count,
+        clients_total=registered_count,
+        records_total=len(detailed_rows),
+        revenue=sum(positive_amounts),
+        avg_check=(sum(positive_amounts) / len(positive_amounts)) if positive_amounts else 0.0,
+        completed=sum(1 for row in detailed_rows if _is_completed(row)),
+        cancelled=sum(1 for row in detailed_rows if _is_cancelled(row)),
+        no_show=sum(1 for row in detailed_rows if _is_no_show(row)),
+    )
+
+
+def format_business_summary_text(summary: BusinessSummary) -> str:
+    """Render the exact active Telegram statistics text."""
+
+    return "\n".join(
+        [
+            "📊 Статистика",
+            "",
+            f"👤 Клиентов зарегистрировано в боте: {summary.bot_registered_clients}",
+            f"👥 Клиентов всего: {summary.clients_total}",
+            f"🧾 Записей всего: {summary.records_total}",
+            f"💰 Выручка за весь период: {_format_money_number(summary.revenue)} ₽",
+            f"💳 Средний чек: {_format_money_number(summary.avg_check)} ₽",
+            f"✅ Дошли/оплатили: {summary.completed}",
+            f"❌ Отмены: {summary.cancelled}",
+            f"🚫 Не пришли: {summary.no_show}",
+        ]
+    )
 
 
 async def get_statistics_for_period(days: int | None, period_name: str) -> StatisticsResult:
@@ -342,6 +429,17 @@ def _is_valid_business_record(item: dict[str, Any]) -> bool:
     return not _is_cancelled(item) and not _is_no_show(item)
 
 
+def _is_max_record(item: dict[str, Any], attributed_ids: set[str]) -> bool:
+    record_id = _extract_record_id(item)
+    comment = _s(item.get("comment") or item.get("record_comment") or item.get("booking_comment"))
+    return MAX_BOOKING_COMMENT_MARKER in comment or bool(record_id and record_id in attributed_ids)
+
+
+def _is_completed(item: dict[str, Any]) -> bool:
+    attendance = _extract_attendance(item)
+    return attendance == "1" or _extract_status(item) in COMPLETED_STATUSES
+
+
 def _is_revenue_record(item: dict[str, Any]) -> bool:
     return _is_valid_business_record(item) and _is_paid(item)
 
@@ -366,9 +464,7 @@ def _is_cancelled(item: dict[str, Any]) -> bool:
 
 def _is_no_show(item: dict[str, Any]) -> bool:
     attendance = _extract_attendance(item)
-    if attendance:
-        return attendance == "-1"
-    return _extract_status(item) in NO_SHOW_STATUSES
+    return attendance == "-1" or _extract_status(item) in NO_SHOW_STATUSES
 
 
 def _extract_rows(payload: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
@@ -509,6 +605,10 @@ def _s(value: Any) -> str:
 
 def _format_count(value: int | None) -> str:
     return str(value) if value is not None else "недоступно"
+
+
+def _format_money_number(value: float | int) -> str:
+    return f"{int(round(float(value))):,}".replace(",", " ")
 
 
 def _format_period_range(result: StatisticsResult) -> str:

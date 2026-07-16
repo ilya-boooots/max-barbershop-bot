@@ -227,13 +227,11 @@ FEEDBACK_NEGATIVE_THANKS_TEXT = "Спасибо, что поделились. М
 STATISTICS_MENU_TEXT = """📊 Статистика
 
 Выберите период:"""
-STATISTICS_NO_ACCESS_TEXT = "У вас нет доступа к этому разделу 🙏"
+STATISTICS_NO_ACCESS_TEXT = "⛔ Раздел статистики доступен только сотрудникам."
 STATISTICS_NOT_CONFIGURED_TEXT = """YClients пока не настроен 🙏
 
 Сначала добавьте данные подключения."""
-STATISTICS_LOAD_ERROR_TEXT = """Не удалось загрузить статистику 🙏
-
-Пожалуйста, попробуйте позже."""
+STATISTICS_LOAD_ERROR_TEXT = "⚠️ Не удалось загрузить статистику. Попробуйте позже."
 
 CLIENT_SEGMENTS_MENU_TEXT = """🎯 Сегменты клиентов
 

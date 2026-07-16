@@ -704,12 +704,12 @@ def statistics_period_keyboard() -> MaxInlineKeyboard:
 
 
 def statistics_result_keyboard() -> MaxInlineKeyboard:
-    """Build statistics result navigation buttons."""
+    """Build Telegram-equivalent statistics navigation buttons."""
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="⬅️ Назад", payload=STATISTICS_BACK_PAYLOAD)],
-            [MaxButton(text="🏠 Главное меню", payload=STATISTICS_HOME_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
 
