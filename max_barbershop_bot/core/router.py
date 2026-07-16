@@ -13,6 +13,7 @@ from max_barbershop_bot.core.antiflood import is_callback_allowed, is_text_allow
 from max_barbershop_bot.core.config import Config
 from max_barbershop_bot.core.error_handler import ErrorDiagnostics
 from max_barbershop_bot.core.events import NormalizedEvent
+from max_barbershop_bot.core.payloads import CallbackPayloadError, validate_callback_payload
 from max_barbershop_bot.max_api.models import MaxInlineKeyboard
 from max_barbershop_bot.max_api.sender import MaxMessageSender
 from max_barbershop_bot.repositories.diagnostics import DiagnosticsRepository
@@ -96,12 +97,12 @@ class Router:
     def on_callback(self, payload: str, handler: EventHandler) -> None:
         """Register a handler for an exact callback payload."""
 
-        self._callback_handlers[payload] = handler
+        self._callback_handlers[validate_callback_payload(payload)] = handler
 
     def on_callback_prefix(self, payload_prefix: str, handler: EventHandler) -> None:
         """Register a handler for callback payloads that start with a prefix."""
 
-        self._callback_prefix_handlers.append((payload_prefix, handler))
+        self._callback_prefix_handlers.append((validate_callback_payload(payload_prefix), handler))
 
     def on_screen_text(self, screen_id: str, handler: EventHandler) -> None:
         """Register a text handler for the current in-memory screen."""
@@ -144,6 +145,28 @@ class Router:
             result = handler(RouterContext(event=event, sender=sender))
             if inspect.isawaitable(result):
                 await result
+        except (LookupError, ValueError) as error:
+            if event.update_type == "message_callback" and handler is not self._unknown_callback_handler:
+                logger.warning(
+                    "MAX stale callback recovered: error_class=%s payload_present=%s",
+                    type(error).__name__,
+                    event.callback_payload is not None,
+                )
+                fallback = self._unknown_callback_handler
+                if fallback is not None:
+                    try:
+                        fallback_result = fallback(RouterContext(event=event, sender=sender))
+                        if inspect.isawaitable(fallback_result):
+                            await fallback_result
+                        return
+                    except Exception as fallback_error:
+                        error = fallback_error
+            await self._error_diagnostics.handle_handler_exception(
+                exception=error,
+                event=event,
+                sender=sender,
+                handler_name=_handler_name(handler),
+            )
         except Exception as error:
             await self._error_diagnostics.handle_handler_exception(
                 exception=error,
@@ -358,6 +381,16 @@ class Router:
     def _resolve_callback_handler(self, event: NormalizedEvent) -> EventHandler | None:
         payload = event.callback_payload
         if payload is None:
+            self._log_yclients_setup_callback_diagnostic(event, route_matched=False)
+            return self._unknown_callback_handler
+        try:
+            validate_callback_payload(payload)
+        except CallbackPayloadError:
+            logger.warning(
+                "Unsafe MAX callback rejected: payload_type=%s payload_bytes=%s",
+                type(payload).__name__,
+                len(payload.encode("utf-8")) if isinstance(payload, str) else None,
+            )
             self._log_yclients_setup_callback_diagnostic(event, route_matched=False)
             return self._unknown_callback_handler
         handler = self._callback_handlers.get(payload)
