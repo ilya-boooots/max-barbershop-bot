@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 30696)
-Total output lines: 2455
-
 """Admin settings hub for the MAX bot."""
 
 from __future__ import annotations
@@ -1200,7 +1197,50 @@ async def _send_notification_test_and_build_result_text(context: RouterContext, 
         SETTINGS_NOTIFICATIONS_TEST_48H_PAYLOAD: "подтверждение записи за 48 часов",
         SETTINGS_NOTIFICATIONS_TEST_2H_PAYLOAD: "напоминание за 2 часа",
     }
-    notification_type = notificati…696 tokens truncated…cord_id=%s reminder_type=%s status_after=%s sent_at_utc=%s error_summary=%s",
+    notification_type = notification_type_by_payload.get(payload)
+    if notification_type is None:
+        return "🧪 Тест уведомлений\n\n❌ Неизвестный тест. Откройте раздел заново."
+
+    now_utc = datetime.now(UTC)
+    branch_timezone = "Europe/Moscow"
+    booking_datetime = _dev_test_booking_datetime(notification_type, now_utc, branch_timezone)
+    record_suffix = "confirm-48h" if notification_type == BOOKING_REMINDER_48H else "2h" if notification_type == BOOKING_REMINDER_2H else "immediate"
+    dev_record_id = f"dev-test-{record_suffix}-{context.event.platform_user_id}-{int(now_utc.timestamp() * 1000)}-{uuid4().hex[:8]}"
+    reminder_type = "confirm_2d" if notification_type == BOOKING_REMINDER_48H else "reminder_2h" if notification_type == BOOKING_REMINDER_2H else "immediate"
+    logger.info(
+        "dev_test_booking_reminder_clicked actor_platform_user_id=%s yclients_record_id=%s reminder_type=%s",
+        context.event.platform_user_id,
+        dev_record_id,
+        reminder_type,
+    )
+
+    booking_context = BookingNotificationContext(
+        platform_user_id=str(context.event.platform_user_id or "dev-safe-test"),
+        max_user_id=context.event.max_user_id or context.event.platform_user_id,
+        chat_id=None,
+        yclients_record_id=dev_record_id,
+        yclients_client_id="dev-test-client",
+        notification_type=notification_type,
+        booking_datetime=booking_datetime,
+        service_name="МУЖСКАЯ СТРИЖКА" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовая стрижка",
+        master_name="Рената Пономарёва" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовый мастер",
+        client_name="Илья" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовый клиент",
+        branch_address=await _dev_test_branch_address(),
+        scheduled_for=now_utc,
+    )
+    result = await send_booking_notification(
+        context.sender,
+        database_path=_database_path(),
+        context=booking_context,
+        timezone_name=branch_timezone,
+        keyboard=booking_reminder_keyboard(booking_context),
+        respect_global_settings=False,
+    )
+    preview = render_booking_notification_text(booking_context, branch_timezone)
+    sent = bool(result and result.status == "sent" and result.sent_at)
+    status_line = "✅ Тестовое уведомление отправлено." if sent else "⚠️ Тестовое событие создано, но уведомление не отправилось. Проверьте логи."
+    logger.info(
+        "dev_test_booking_reminder_process_finished actor_platform_user_id=%s yclients_record_id=%s reminder_type=%s status_after=%s sent_at_utc=%s error_summary=%s",
         context.event.platform_user_id,
         dev_record_id,
         reminder_type,
