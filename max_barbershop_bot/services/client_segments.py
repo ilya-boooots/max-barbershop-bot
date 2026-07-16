@@ -744,6 +744,7 @@ def format_segment_summary(result: ClientSegmentResult, *, limit: int = SEGMENT_
         ClientSegmentType.LOST_60.value,
         ClientSegmentType.LOST_90.value,
         ClientSegmentType.CANCELLED.value,
+        ClientSegmentType.BY_MASTER.value,
         ClientSegmentType.BY_SERVICE.value,
         ClientSegmentType.BIRTHDAY_SOON.value,
     }:
