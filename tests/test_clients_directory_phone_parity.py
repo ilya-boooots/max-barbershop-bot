@@ -144,7 +144,7 @@ def test_clients_phone_real_query_handler_matches_normalization_validation_resul
     buttons = _buttons(sender.messages[-1])
     assert buttons[0] == ("👤 Клиент 0 • 📞 +*******4567", "clients:result:0")
     assert all("ID" not in label and payload != "0" for label, payload in buttons)
-    assert ("Уточните запрос, найдено больше 8", "clients:refresh") in buttons
+    assert ("➡️ След", "clients:page:2") in buttons
     assert state.get_current_screen("104", "900") == state.CLIENTS_DIRECTORY_RESULTS_SCREEN
 
 
