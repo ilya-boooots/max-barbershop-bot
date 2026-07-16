@@ -211,7 +211,7 @@ async def handle_text_input(context: RouterContext) -> None:
 
     attachment = extract_broadcast_attachment(context.event.attachments)
     incoming_text = (context.event.text or "").strip()
-    if attachment is not None:
+    if attachment is not None and attachment.attachment_type == "photo":
         _save_broadcast_attachment(context, attachment.attachment_type, attachment.attachment)
         logger.info(
             "MAX broadcast parity diagnostic: media_input platform_user_id_present=%s role=%s screen_id=%s draft_text_present=%s attachment_type=%s attachment_present=%s",
@@ -222,8 +222,12 @@ async def handle_text_input(context: RouterContext) -> None:
             attachment.attachment_type,
             True,
         )
-    elif context.event.attachments and not incoming_text:
-        await context.send_text("Этот тип вложения пока не поддерживается в MAX 🙏", keyboard=broadcast_text_keyboard())
+    elif context.event.attachments:
+        await context.send_text(
+            "Этот тип вложения пока не поддерживается в MAX 🙏 "
+            "Для рассылки можно добавить только фото. Отправьте фото или продолжите без него.",
+            keyboard=broadcast_text_keyboard(),
+        )
         return
 
     validation = validate_broadcast_text(incoming_text or _broadcast_text(context))
@@ -266,7 +270,10 @@ async def handle_preview_edit_attachment(context: RouterContext) -> None:
         return
     await _answer_callback_if_needed(context)
     _push_current_screen(context, state.BROADCAST_ONE_TIME_TEXT_SCREEN)
-    await context.send_text("Отправьте фото, GIF или видео для рассылки. Можно добавить подпись текстом 👇", keyboard=broadcast_text_keyboard())
+    await context.send_text(
+        "Отправьте фото для рассылки. Можно добавить подпись текстом 👇",
+        keyboard=broadcast_text_keyboard(),
+    )
 
 
 async def handle_preview_remove_attachment(context: RouterContext) -> None:
@@ -781,7 +788,16 @@ async def handle_confirm_send(context: RouterContext) -> None:
         )
         state.set_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_IN_PROGRESS_KEY, False)
         release_action_lock(_BROADCAST_SEND_LOCK_KEY)
-        await context.send_text("⚠️ Не удалось завершить рассылку. Попробуйте позже.", keyboard=broadcast_report_keyboard())
+        attachment = _broadcast_attachment(context)
+        if attachment is not None:
+            state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_PREVIEW_SCREEN)
+            await context.send_text(
+                "⚠️ Не удалось завершить рассылку. Попробуйте позже.",
+                keyboard=broadcast_preview_keyboard(has_attachment=True),
+                attachments=[attachment],
+            )
+        else:
+            await context.send_text("⚠️ Не удалось завершить рассылку. Попробуйте позже.", keyboard=broadcast_report_keyboard())
         return
 
     report = BroadcastSendReport(
@@ -1335,10 +1351,12 @@ def _broadcast_text(context: RouterContext) -> str | None:
 
 def _broadcast_attachment_type(context: RouterContext) -> str | None:
     value = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ATTACHMENT_TYPE_KEY)
-    return value if isinstance(value, str) and value in {"photo", "gif", "video"} else None
+    return value if value == "photo" else None
 
 
 def _broadcast_attachment(context: RouterContext) -> dict[str, object] | None:
+    if _broadcast_attachment_type(context) != "photo":
+        return None
     value = state.get_state_data_value(_user_id(context), _chat_id(context), _BROADCAST_ATTACHMENT_KEY)
     return value if isinstance(value, dict) else None
 
