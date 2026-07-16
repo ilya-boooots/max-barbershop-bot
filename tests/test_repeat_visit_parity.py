@@ -209,6 +209,22 @@ def test_repeat_visit_scan_skips_no_completed_newer_future_duplicate_antispam_di
     assert sqlite3.connect(path).execute("SELECT 1 FROM repeat_visit_events WHERE status='skipped_unsubscribed'").fetchone()
 
 
+def test_repeat_visit_antispam_uses_the_current_scan_clock(tmp_path):
+    path = _db(tmp_path)
+    repo = RepeatVisitEventsRepository(path)
+    scan_now = datetime(2026, 7, 9, tzinfo=UTC)
+    repo.create_event(
+        platform_user_id="u-clock",
+        yclients_record_id="previous-send",
+        status="sent",
+        scheduled_at=scan_now.isoformat(),
+        sent_at_utc=scan_now.isoformat(),
+    )
+
+    assert repo.has_recent_sent("u-clock", 48, now=scan_now)
+    assert not repo.has_recent_sent("u-clock", 48, now=scan_now + timedelta(hours=49))
+
+
 def test_repeat_visit_delivery_blocked_and_failed(tmp_path):
     path = _db(tmp_path)
     _add_user(path)
