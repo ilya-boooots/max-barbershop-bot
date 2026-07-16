@@ -309,8 +309,8 @@ def clients_directory_menu_keyboard() -> MaxInlineKeyboard:
         [
             [MaxButton(text="📞 По телефону", payload=CLIENTS_DIRECTORY_SEARCH_PHONE_PAYLOAD)],
             [MaxButton(text="🔎 По имени", payload=CLIENTS_DIRECTORY_SEARCH_NAME_PAYLOAD)],
-            [MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)],
-            [MaxButton(text="🏠 Главное меню", payload=CLIENTS_DIRECTORY_HOME_PAYLOAD)],
+            [MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
 
@@ -321,12 +321,17 @@ def clients_directory_search_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(
         [
             [MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)],
-            [MaxButton(text="🏠 Главное меню", payload=CLIENTS_DIRECTORY_HOME_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
 
 
-def clients_directory_results_keyboard(results: list[object], *, has_next: bool = False) -> MaxInlineKeyboard:
+def clients_directory_results_keyboard(
+    results: list[object],
+    *,
+    has_next: bool = False,
+    include_client_id: bool = True,
+) -> MaxInlineKeyboard:
     """Build safe state-indexed client search result buttons."""
 
     rows: list[list[MaxButton]] = []
@@ -334,14 +339,14 @@ def clients_directory_results_keyboard(results: list[object], *, has_next: bool 
         name = str(item.get("name") or item.get("fullname") or "Клиент") if isinstance(item, dict) else "Клиент"
         phone = str(item.get("phone") or "") if isinstance(item, dict) else ""
         yclients_client_id = str(item.get("id") or item.get("client_id") or "") if isinstance(item, dict) else ""
-        suffix = f" • ID {yclients_client_id}" if yclients_client_id else ""
+        suffix = f" • ID {yclients_client_id}" if include_client_id and yclients_client_id else ""
         phone_part = f" • 📞 {_mask_clients_directory_phone(phone)}" if phone else ""
         rows.append([MaxButton(text=f"👤 {name}{phone_part}{suffix}"[:64], payload=indexed_payload(CLIENTS_DIRECTORY_RESULT_PAYLOAD_PREFIX, index))])
     if has_next:
         rows.append([MaxButton(text="Уточните запрос, найдено больше 8", payload=CLIENTS_DIRECTORY_REFRESH_PAYLOAD)])
     rows.append([MaxButton(text="🔄 Обновить", payload=CLIENTS_DIRECTORY_REFRESH_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)])
-    rows.append([MaxButton(text="🏠 Главное меню", payload=CLIENTS_DIRECTORY_HOME_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
 
@@ -351,7 +356,7 @@ def clients_directory_card_keyboard() -> MaxInlineKeyboard:
     return MaxInlineKeyboard.from_rows(
         [
             [MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)],
-            [MaxButton(text="🏠 Главное меню", payload=CLIENTS_DIRECTORY_HOME_PAYLOAD)],
+            [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
 

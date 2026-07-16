@@ -9,7 +9,7 @@ from typing import Any
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
-from max_barbershop_bot.core.permissions import ROLE_USER, is_manager_or_higher
+from max_barbershop_bot.core.permissions import ROLE_USER, effective_role, is_manager_or_higher
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsError, classify_yclients_error
 from max_barbershop_bot.integrations.yclients.service import YClientsServiceLayer
@@ -189,14 +189,40 @@ async def _load_and_show_results(context: RouterContext, *, force_refresh: bool 
 async def _show_results_from_state(context: RouterContext, *, has_next: bool = False) -> None:
     rows = state.get_state_data_value(_uid(context), _chat(context), _RESULTS_KEY)
     visible = rows if isinstance(rows, list) else []
+    mode = str(state.get_state_data_value(_uid(context), _chat(context), _MODE_KEY) or "name")
     state.set_current_screen(_uid(context), _chat(context), state.CLIENTS_DIRECTORY_RESULTS_SCREEN)
     if not visible:
         await context.send_text("😔 Клиент не найден. Попробуйте другой запрос 🙂", keyboard=clients_directory_search_keyboard())
         return
-    await context.send_text("👥 Результаты поиска\n\nВыберите клиента ниже 👇", keyboard=clients_directory_results_keyboard(visible, has_next=has_next))
+    text = (
+        "👥 Результаты поиска • стр. 1\n\nВыберите клиента ниже 👇"
+        if mode == "phone"
+        else "👥 Результаты поиска\n\nВыберите клиента ниже 👇"
+    )
+    await context.send_text(
+        text,
+        keyboard=clients_directory_results_keyboard(
+            visible,
+            has_next=has_next,
+            include_client_id=mode != "phone",
+        ),
+    )
 
 
 async def _show_card(context: RouterContext, yclients_client_id: str) -> None:
+    mode = str(state.get_state_data_value(_uid(context), _chat(context), _MODE_KEY) or "name")
+    if mode == "phone":
+        try:
+            async with _yclients_layer() as service:
+                card = await service.get_client_card(yclients_client_id=yclients_client_id)
+        except Exception as exc:  # noqa: BLE001
+            await _send_yclients_error(context, exc, selected_yclients_client_id_present=True)
+            return
+        row = card.raw | {"id": card.id, "name": card.name, "phone": card.phone} if card else {"id": yclients_client_id}
+        state.set_current_screen(_uid(context), _chat(context), state.CLIENTS_DIRECTORY_CARD_SCREEN)
+        await context.send_text(format_clients_directory_phone_card(row), keyboard=clients_directory_card_keyboard())
+        return
+
     time_service = CompanyTimeService(YClientsSettingsRepository(_database_path()))
     today = time_service.today().isoformat()
     end = (time_service.today() + timedelta(days=365)).isoformat()
@@ -213,6 +239,24 @@ async def _show_card(context: RouterContext, yclients_client_id: str) -> None:
     text = format_clients_directory_card(card.raw if card else {"id": yclients_client_id}, future, [visit.raw for visit in visits], time_service)
     state.set_current_screen(_uid(context), _chat(context), state.CLIENTS_DIRECTORY_CARD_SCREEN)
     await context.send_text(text, keyboard=clients_directory_card_keyboard())
+
+
+def format_clients_directory_phone_card(client_row: dict[str, Any]) -> str:
+    """Format the compact phone-search card from active Telegram."""
+
+    return "\n".join(
+        [
+            "👤 Карточка клиента",
+            "",
+            f"👤 Имя: {_name(client_row)}",
+            f"📞 Телефон: {_mask_phone(_phone(client_row))}",
+            f"🆔 Client ID: {_client_id(client_row) or '—'}",
+            f"🕒 Последний визит: {_value(client_row, ('last_visit_date', 'last_visit'))}",
+            f"🧾 Кол-во визитов: {_value(client_row, ('visits_count',))}",
+            f"💳 Потрачено: {_value(client_row, ('spent', 'total_spent'))}",
+            f"📝 Заметки: {_value(client_row, ('comment', 'notes'))}",
+        ]
+    )
 
 
 def format_clients_directory_card(client_row: dict[str, Any], future: list[dict[str, Any]], history: list[dict[str, Any]], time_service: CompanyTimeService) -> str:
@@ -307,7 +351,16 @@ def _can_access(context: RouterContext) -> bool:
 def _actor_role(context: RouterContext) -> str:
     if context.event.platform_user_id is None:
         return ROLE_USER
-    return StaffRolesRepository(_database_path()).get_highest_role(context.event.platform_user_id, platform=PLATFORM_MAX)
+    db_role = StaffRolesRepository(_database_path()).get_highest_role(
+        context.event.platform_user_id,
+        platform=PLATFORM_MAX,
+    )
+    return effective_role(
+        db_role,
+        platform_user_id=context.event.platform_user_id,
+        dev_max_user_id=getenv("DEV_MAX_USER_ID"),
+        max_user_id=context.event.max_user_id,
+    )
 
 
 def _push(context: RouterContext, screen_id: str) -> None:
@@ -340,6 +393,12 @@ def _payload_index(payload: str | None) -> int | None:
 def _client_id(item: dict[str, Any]) -> str: return safe_str(item.get("id") or item.get("client_id"))
 def _name(item: dict[str, Any]) -> str: return safe_str(item.get("name") or item.get("fullname")) or "Клиент"
 def _phone(item: dict[str, Any]) -> str: return safe_str(item.get("phone") or item.get("tel"))
+def _value(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = safe_str(item.get(key))
+        if value:
+            return value
+    return "—"
 def _mask_phone(phone: str | None) -> str:
     digits = _digits(str(phone or ""))
     return "—" if not digits else f"+{'*' * max(1, len(digits) - 4)}{digits[-4:]}"
