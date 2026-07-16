@@ -12,6 +12,7 @@ from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.integrations.yclients.utils import MAX_BOOKING_COMMENT_MARKER, MAX_REPEAT_BOOKING_COMMENT_MARKER
 from max_barbershop_bot.repositories.birthday_funnel_events import BirthdayFunnelEventsRepository
+from max_barbershop_bot.repositories.cancellation_recovery_events import CancellationRecoveryEventsRepository
 from max_barbershop_bot.repositories.platform_attribution import PlatformAttributionRepository
 from max_barbershop_bot.repositories.repeat_visit_events import RepeatVisitEventsRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
@@ -239,6 +240,7 @@ def register_booking_routes(router: Router) -> None:
 
     router.on_callback(MENU_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback_prefix(REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX, handle_repeat_visit_booking_start)
+    router.on_callback_prefix("cancel_recovery:", handle_cancellation_recovery_booking_cta)
     router.on_callback(CANCELLATION_RECOVERY_BOOKING_PAYLOAD, handle_booking_start)
     router.on_callback_prefix(f"{BIRTHDAY_BUTTON_BOOK}:", handle_birthday_booking_start)
     router.on_callback(BOOKING_BACK_PAYLOAD, handle_booking_back)
@@ -402,6 +404,52 @@ async def handle_booking_start(context: RouterContext) -> None:
 
     await context.answer_callback()
     _clear_booking_state(context)
+    await _show_booking_hub(context)
+
+
+async def handle_cancellation_recovery_booking_cta(context: RouterContext) -> None:
+    """Handle Telegram-equivalent cancellation recovery CTA callbacks."""
+
+    await context.answer_callback()
+    payload_parts = str(context.event.callback_payload or "").split(":")
+    if len(payload_parts) != 3 or payload_parts[0] != "cancel_recovery" or payload_parts[1] not in {"rebook", "date", "later"}:
+        await context.send_text(CANCELLATION_RECOVERY_STALE_TEXT)
+        return
+    if not payload_parts[2].isdigit():
+        await context.send_text(CANCELLATION_RECOVERY_STALE_TEXT)
+        return
+    event_id = int(payload_parts[2])
+    if event_id <= 0:
+        await context.send_text(CANCELLATION_RECOVERY_STALE_TEXT)
+        return
+
+    events_repo = CancellationRecoveryEventsRepository(_database_path())
+    event = events_repo.get_event(event_id)
+    if event is None or event.platform_user_id != str(_user_id(context) or "") or event.status not in {"sent", "pending"}:
+        await context.send_text(CANCELLATION_RECOVERY_STALE_TEXT)
+        return
+
+    action = payload_parts[1]
+    clicked_at_utc = datetime.now(UTC).isoformat()
+    if action == "later":
+        events_repo.set_status(event.id, "clicked_later", clicked_at_utc=clicked_at_utc)
+        await context.send_text(CANCELLATION_RECOVERY_LATER_TEXT)
+        return
+
+    events_repo.set_status(event.id, "clicked_rebook", clicked_at_utc=clicked_at_utc)
+    _clear_booking_state(context)
+    _set_cancellation_recovery_attribution(context, event_id=event.id, event=event)
+    if action == "date":
+        state.set_state_data_value(_user_id(context), _chat_id(context), _ENTRY_MODE_STATE_KEY, _ENTRY_MODE_DATETIME_FIRST)
+        try:
+            await _open_datetime_first_dates(context)
+        except Exception as exc:  # noqa: BLE001 - Telegram falls back to the booking hub.
+            logger.warning(
+                "Cancellation recovery date-first entry failed safely: error_class=%s",
+                type(exc).__name__,
+            )
+            await _show_booking_hub(context)
+        return
     await _show_booking_hub(context)
 
 

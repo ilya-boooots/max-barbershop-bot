@@ -15,7 +15,7 @@ _BOOKING_SPEC.loader.exec_module(booking_flow)
 import max_barbershop_bot.services.cancellation_recovery as recovery_service
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.events import NormalizedEvent
-from max_barbershop_bot.core.router import RouterContext
+from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.db.sqlite import init_database
 from max_barbershop_bot.max_api.sender import MaxSendResult
 from max_barbershop_bot.repositories.cancellation_recovery_events import CancellationRecoveryEventsRepository
@@ -333,5 +333,163 @@ def test_cta_rebook_and_later_mark_clicks_and_preserve_attribution(tmp_path, mon
 
         assert repo.get_event(later.id).status == "clicked_later"
         assert sender.sent[-1][2] == "Хорошо, будем ждать вас позже 😊"
+
+    asyncio.run(run())
+
+
+def test_cancellation_recovery_cta_prefix_routes_to_real_handler() -> None:
+    router = Router()
+
+    booking_flow.register_booking_routes(router)
+
+    assert ("cancel_recovery:", booking_flow.handle_cancellation_recovery_booking_cta) in router._callback_prefix_handlers
+
+
+def test_cancellation_recovery_date_cta_opens_datetime_first_with_attribution(tmp_path, monkeypatch) -> None:
+    async def run() -> None:
+        db, repo = _repo(tmp_path)
+        event = _create_due_event(repo)
+        repo.set_status(event.id, "sent", sent_at_utc=datetime.now(UTC).isoformat())
+        monkeypatch.setattr(booking_flow, "_database_path", lambda: db)
+        opened = []
+
+        async def fake_open_dates(context, *, push_current=True):
+            opened.append(push_current)
+            state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.BOOKING_DATES_SCREEN)
+
+        monkeypatch.setattr(booking_flow, "_open_datetime_first_dates", fake_open_dates)
+        context = RouterContext(
+            event=NormalizedEvent(
+                update_type="message_callback",
+                platform_user_id="u1",
+                max_user_id="100",
+                chat_id="c1",
+                text=None,
+                callback_payload=f"cancel_recovery:date:{event.id}",
+                callback_id="cb-date",
+            ),
+            sender=FakeSender(),
+        )
+
+        await booking_flow.handle_cancellation_recovery_booking_cta(context)
+
+        assert repo.get_event(event.id).status == "clicked_rebook"
+        assert opened == [True]
+        assert state.get_state_data_value("u1", "c1", booking_flow._ENTRY_MODE_STATE_KEY) == booking_flow._ENTRY_MODE_DATETIME_FIRST
+        assert state.get_state_data_value("u1", "c1", "booking_source") == "cancellation_recovery"
+        assert state.get_state_data_value("u1", "c1", "notification_event_id") == event.id
+
+    asyncio.run(run())
+
+
+def test_cancellation_recovery_date_failure_falls_back_to_booking_hub(tmp_path, monkeypatch) -> None:
+    async def run() -> None:
+        db, repo = _repo(tmp_path)
+        event = _create_due_event(repo, record_id="date-fallback")
+        repo.set_status(event.id, "sent", sent_at_utc=datetime.now(UTC).isoformat())
+        monkeypatch.setattr(booking_flow, "_database_path", lambda: db)
+        opened = []
+
+        async def broken_open_dates(context, *, push_current=True):
+            raise RuntimeError("safe test failure")
+
+        async def fake_show_hub(context, *, push_current=True):
+            opened.append(push_current)
+            state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.BOOKING_HUB_SCREEN)
+
+        monkeypatch.setattr(booking_flow, "_open_datetime_first_dates", broken_open_dates)
+        monkeypatch.setattr(booking_flow, "_show_booking_hub", fake_show_hub)
+        context = RouterContext(
+            event=NormalizedEvent(
+                update_type="message_callback",
+                platform_user_id="u1",
+                max_user_id="100",
+                chat_id="c1",
+                text=None,
+                callback_payload=f"cancel_recovery:date:{event.id}",
+                callback_id="cb-date-fallback",
+            ),
+            sender=FakeSender(),
+        )
+
+        await booking_flow.handle_cancellation_recovery_booking_cta(context)
+
+        assert opened == [True]
+        assert state.get_current_screen("u1", "c1") == state.BOOKING_HUB_SCREEN
+        assert repo.get_event(event.id).status == "clicked_rebook"
+
+    asyncio.run(run())
+
+
+def test_cancellation_recovery_stale_and_repeated_callbacks_do_not_mutate_twice(tmp_path, monkeypatch) -> None:
+    async def run() -> None:
+        db, repo = _repo(tmp_path)
+        event = _create_due_event(repo)
+        repo.set_status(event.id, "sent", sent_at_utc=datetime.now(UTC).isoformat())
+        monkeypatch.setattr(booking_flow, "_database_path", lambda: db)
+        opened = []
+
+        async def fake_show_hub(context, *, push_current=True):
+            opened.append(push_current)
+
+        monkeypatch.setattr(booking_flow, "_show_booking_hub", fake_show_hub)
+        sender = FakeSender()
+        callback = NormalizedEvent(
+            update_type="message_callback",
+            platform_user_id="u1",
+            max_user_id="100",
+            chat_id="c1",
+            text=None,
+            callback_payload=f"cancel_recovery:rebook:{event.id}",
+            callback_id="cb-repeat",
+        )
+
+        await booking_flow.handle_cancellation_recovery_booking_cta(RouterContext(event=callback, sender=sender))
+        clicked_at = repo.get_event(event.id).clicked_at_utc
+        await booking_flow.handle_cancellation_recovery_booking_cta(RouterContext(event=callback, sender=sender))
+
+        assert opened == [True]
+        assert repo.get_event(event.id).status == "clicked_rebook"
+        assert repo.get_event(event.id).clicked_at_utc == clicked_at
+        assert sender.sent[-1][2] == booking_flow.CANCELLATION_RECOVERY_STALE_TEXT
+
+        malformed = NormalizedEvent(
+            update_type="message_callback",
+            platform_user_id="u1",
+            max_user_id="100",
+            chat_id="c1",
+            text=None,
+            callback_payload="cancel_recovery:rebook:not-an-id",
+            callback_id="cb-stale",
+        )
+        await booking_flow.handle_cancellation_recovery_booking_cta(RouterContext(event=malformed, sender=sender))
+        assert sender.sent[-1][2] == booking_flow.CANCELLATION_RECOVERY_STALE_TEXT
+
+        signed_id = NormalizedEvent(
+            update_type="message_callback",
+            platform_user_id="u1",
+            max_user_id="100",
+            chat_id="c1",
+            text=None,
+            callback_payload=f"cancel_recovery:later:+{event.id}",
+            callback_id="cb-signed-id",
+        )
+        await booking_flow.handle_cancellation_recovery_booking_cta(RouterContext(event=signed_id, sender=sender))
+        assert sender.sent[-1][2] == booking_flow.CANCELLATION_RECOVERY_STALE_TEXT
+
+        foreign = _create_due_event(repo, record_id="foreign", platform_user_id="u2")
+        repo.set_status(foreign.id, "sent", sent_at_utc=datetime.now(UTC).isoformat())
+        wrong_owner = NormalizedEvent(
+            update_type="message_callback",
+            platform_user_id="u1",
+            max_user_id="100",
+            chat_id="c1",
+            text=None,
+            callback_payload=f"cancel_recovery:later:{foreign.id}",
+            callback_id="cb-wrong-owner",
+        )
+        await booking_flow.handle_cancellation_recovery_booking_cta(RouterContext(event=wrong_owner, sender=sender))
+        assert repo.get_event(foreign.id).status == "sent"
+        assert sender.sent[-1][2] == booking_flow.CANCELLATION_RECOVERY_STALE_TEXT
 
     asyncio.run(run())
