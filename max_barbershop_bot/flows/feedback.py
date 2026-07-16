@@ -24,6 +24,7 @@ from max_barbershop_bot.services.feedback import (
     STALE_TEXT,
     client_recipient,
     feedback_admin_reply_confirm_keyboard,
+    feedback_review_links_keyboard,
     get_feedback_response,
     is_feedback_admin,
     notify_negative_feedback,
@@ -76,7 +77,7 @@ async def _handle_rating(context: RouterContext) -> None:
         await context.send_text(NEGATIVE_COMMENT_PROMPT)
     else:
         state.reset_to_home(context.event.platform_user_id, context.event.chat_id)
-        await context.send_text(POSITIVE_TEXT, keyboard=feedback_review_links_keyboard())
+        await context.send_text(POSITIVE_TEXT, keyboard=feedback_review_links_keyboard(database_path))
     await context.answer_callback()
 
 
