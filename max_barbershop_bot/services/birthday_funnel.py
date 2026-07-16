@@ -239,9 +239,10 @@ def apply_birthday_warning(base_comment: str, *, booking_source: str | None, bir
 
 
 def _birthday_settings(database_path: str) -> dict[str, object]:
-    settings = AppSettingsRepository(database_path).get_automation_setting("birthday")
+    repository = AppSettingsRepository(database_path)
+    settings = repository.get_automation_setting("birthday")
     return {
-        "enabled": bool(settings.get("enabled", True)),
+        "enabled": repository.get_bool("birthday", default=bool(settings.get("enabled", True))),
         "send_days_before": int(settings.get("send_days_before") or BIRTHDAY_SEND_DAYS_BEFORE),
         "message_text": str(settings.get("message_text") or BIRTHDAY_MESSAGE_TEXT),
         "gift_text": str(settings.get("gift_text") or ""),
