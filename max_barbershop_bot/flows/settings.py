@@ -1457,9 +1457,24 @@ async def handle_settings_diagnostics_user_logs_input(context: RouterContext) ->
         await _send_dev_no_access(context)
         return
     query = (context.event.text or "").strip()
+    if not query:
+        await context.send_text(
+            "👤 Логи пользователя\n\nВведите user_id или @username:",
+            keyboard=settings_diagnostics_keyboard(),
+        )
+        return
     repository = DiagnosticsRepository(_database_path())
-    rows = repository.find_user_events(query, limit=500)
-    summary = repository.summarize_events(rows)
+    try:
+        rows = repository.find_user_events(query, limit=500)
+        summary = repository.summarize_events(rows)
+    except Exception as exc:  # noqa: BLE001 - diagnostics storage details must stay hidden.
+        logger.warning("Developer user event search failed: error_class=%s", type(exc).__name__)
+        state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
+        await context.send_text(
+            "⚠️ Не удалось выполнить поиск по логам пользователя. Попробуйте ещё раз.",
+            keyboard=settings_diagnostics_keyboard(),
+        )
+        return
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
     await context.send_text(
         "👤 Логи пользователя\n\n" + _render_user_events(rows, summary=summary),
@@ -1481,7 +1496,22 @@ async def handle_settings_diagnostics_event_search_input(context: RouterContext)
         await _send_dev_no_access(context)
         return
     query = (context.event.text or "").strip()
-    rows = DiagnosticsRepository(_database_path()).search_events(query, limit=500)
+    if not query:
+        await context.send_text(
+            "🔎 Поиск по событиям\n\nВведите ключевое слово:",
+            keyboard=settings_diagnostics_keyboard(),
+        )
+        return
+    try:
+        rows = DiagnosticsRepository(_database_path()).search_events(query, limit=500)
+    except Exception as exc:  # noqa: BLE001 - diagnostics storage details must stay hidden.
+        logger.warning("Developer event search failed: error_class=%s", type(exc).__name__)
+        state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
+        await context.send_text(
+            "⚠️ Не удалось выполнить поиск по событиям. Попробуйте ещё раз.",
+            keyboard=settings_diagnostics_keyboard(),
+        )
+        return
     state.set_current_screen(context.event.platform_user_id, context.event.chat_id, state.SETTINGS_DIAGNOSTICS_SCREEN)
     await context.send_text("🔎 Поиск по событиям\n\n" + _render_user_events(rows), keyboard=settings_diagnostics_keyboard())
 
@@ -2308,20 +2338,35 @@ def _render_user_events(rows: list[dict[str, object]], *, summary: object | None
             [
                 f"Всего событий за 7 дней: {total_7d}",
                 f"Последняя активность: {last_activity or '—'}",
-                "Топ действий: " + (", ".join(f"{name}×{count}" for name, count in top_buttons) or "—"),
+                "Топ действий: "
+                + (", ".join(f"{_safe_diagnostics_field(name)}×{count}" for name, count in top_buttons) or "—"),
                 "",
             ]
         )
     for row in rows[:20]:
         lines.append(
             "• "
-            f"{row.get('ts_utc') or '—'} | {row.get('event_type') or '—'} | "
-            f"{row.get('event_name') or '—'} | screen={row.get('screen') or '—'} | "
-            f"user={row.get('platform_user_id') or '—'} @{row.get('username') or '—'}"
+            f"{_safe_diagnostics_field(row.get('ts_utc'))} | "
+            f"{_safe_diagnostics_field(row.get('event_type'))} | "
+            f"{_safe_diagnostics_field(row.get('event_name'))} | "
+            f"screen={_safe_diagnostics_field(row.get('screen'))} | "
+            f"user={_mask_diagnostics_identifier(row.get('platform_user_id'))} "
+            f"@{_safe_diagnostics_field(row.get('username'))}"
         )
     if len(rows) > 20:
         lines.append(f"\nПоказаны 20 из {len(rows)} событий.")
     return _short("\n".join(lines), 3300)
+
+
+def _safe_diagnostics_field(value: object) -> str:
+    return _short(sanitize_text(str(value or "—")), 160)
+
+
+def _mask_diagnostics_identifier(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "—"
+    return "***" if len(text) <= 4 else f"***{text[-4:]}"
 
 
 async def _send_file_to_current_chat(context: RouterContext, content: bytes, *, filename: str, caption: str) -> bool:
