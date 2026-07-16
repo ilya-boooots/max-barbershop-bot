@@ -737,8 +737,8 @@ def admin_bookings_list_keyboard(items: list[str], *, page: int, max_page: int) 
         navigation.append(MaxButton(text="➡️", payload=f"admbook:page:{page + 1}"))
     if navigation:
         rows.append(navigation)
-    rows.append([MaxButton(text="⬅️ Назад", payload=ADMIN_BOOKINGS_BACK_PAYLOAD)])
-    rows.append([MaxButton(text="🏠 Главное меню", payload=ADMIN_BOOKINGS_HOME_PAYLOAD)])
+    rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
+    rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
 

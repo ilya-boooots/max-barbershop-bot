@@ -6,13 +6,15 @@ from os import getenv
 
 from max_barbershop_bot.core import state
 from max_barbershop_bot.core.config import DEFAULT_DATABASE_PATH
-from max_barbershop_bot.core.permissions import can_view_admin_bookings
+from max_barbershop_bot.core.permissions import can_view_admin_bookings, effective_role
 from max_barbershop_bot.core.router import Router, RouterContext
 from max_barbershop_bot.repositories.staff_roles import StaffRolesRepository
 from max_barbershop_bot.repositories.users import PLATFORM_MAX
 from max_barbershop_bot.services.admin_bookings import (
     AdminBookingsFilter,
+    AdminBookingsAuthError,
     AdminBookingsLoadError,
+    AdminBookingsRateLimitError,
     AdminBookingsSettingsMissingError,
     STALE_LIST_TEXT,
     format_admin_booking_card,
@@ -38,7 +40,14 @@ from max_barbershop_bot.ui.buttons import (
     admin_bookings_master_keyboard,
     admin_bookings_status_keyboard,
 )
-from max_barbershop_bot.ui.texts import STATISTICS_NO_ACCESS_TEXT
+from max_barbershop_bot.ui.texts import (
+    ADMIN_BOOKINGS_AUTH_ERROR_TEXT,
+    ADMIN_BOOKINGS_GENERIC_ERROR_TEXT,
+    ADMIN_BOOKINGS_NOT_CONFIGURED_TEXT,
+    ADMIN_BOOKINGS_RATE_LIMIT_TEXT,
+    ADMIN_BOOKINGS_UNAVAILABLE_TEXT,
+    STATISTICS_NO_ACCESS_TEXT,
+)
 
 FILTER_KEY = "admin_bookings_filter"
 BOOKINGS_KEY = "admin_bookings_rows"
@@ -216,18 +225,25 @@ async def _show_list(context: RouterContext) -> None:
     try:
         result = await load_admin_bookings(filters, actor_platform_user_id_present=_user_id(context) is not None)
     except AdminBookingsSettingsMissingError:
-        await context.send_text("❌ YClients не настроен. Зайдите в ⚙️ Интеграция YClients", keyboard=admin_bookings_list_keyboard([], page=0, max_page=0))
-        return
+        text = ADMIN_BOOKINGS_NOT_CONFIGURED_TEXT
+    except AdminBookingsAuthError:
+        text = ADMIN_BOOKINGS_AUTH_ERROR_TEXT
+    except AdminBookingsRateLimitError:
+        text = ADMIN_BOOKINGS_RATE_LIMIT_TEXT
     except AdminBookingsLoadError:
-        await context.send_text("😔 YClients временно недоступен. Попробуйте позже 🙂", keyboard=admin_bookings_list_keyboard([], page=0, max_page=0))
+        text = ADMIN_BOOKINGS_UNAVAILABLE_TEXT
+    except Exception:  # noqa: BLE001 - match Telegram's safe generic handler fallback.
+        text = ADMIN_BOOKINGS_GENERIC_ERROR_TEXT
+    else:
+        _set_filter(context, AdminBookingsFilter(day=filters.day, master_id=filters.master_id, status=filters.status, page=result.page))
+        state.set_state_data_value(_user_id(context), _chat_id(context), BOOKINGS_KEY, result.page_bookings)
+        state.set_state_data_value(_user_id(context), _chat_id(context), STATUSES_KEY, result.statuses)
+        await context.send_text(
+            format_admin_bookings_list(result),
+            keyboard=admin_bookings_list_keyboard([format_admin_booking_list_item(item) for item in result.page_bookings], page=result.page, max_page=result.max_page),
+        )
         return
-    _set_filter(context, AdminBookingsFilter(day=filters.day, master_id=filters.master_id, status=filters.status, page=result.page))
-    state.set_state_data_value(_user_id(context), _chat_id(context), BOOKINGS_KEY, result.page_bookings)
-    state.set_state_data_value(_user_id(context), _chat_id(context), STATUSES_KEY, result.statuses)
-    await context.send_text(
-        format_admin_bookings_list(result),
-        keyboard=admin_bookings_list_keyboard([format_admin_booking_list_item(item) for item in result.page_bookings], page=result.page, max_page=result.max_page),
-    )
+    await context.send_text(text, keyboard=admin_bookings_list_keyboard([], page=0, max_page=0))
 
 
 def _get_filter(context: RouterContext) -> AdminBookingsFilter:
@@ -262,7 +278,13 @@ def _actor_role(context: RouterContext) -> str:
     platform_user_id = context.event.platform_user_id
     if platform_user_id is None:
         return "user"
-    return StaffRolesRepository(_database_path()).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+    db_role = StaffRolesRepository(_database_path()).get_highest_role(platform_user_id, platform=PLATFORM_MAX)
+    return effective_role(
+        db_role,
+        platform_user_id=platform_user_id,
+        dev_max_user_id=getenv("DEV_MAX_USER_ID"),
+        max_user_id=context.event.max_user_id,
+    )
 
 
 def _push_current_screen(context: RouterContext, screen_id: str) -> None:
