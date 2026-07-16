@@ -18,9 +18,9 @@ from max_barbershop_bot.repositories.support_settings import (
 from max_barbershop_bot.repositories.users import PLATFORM_MAX, UsersRepository
 from max_barbershop_bot.services.registration import is_registered
 from max_barbershop_bot.services.user_names import get_user_display_name, join_profile_name
-from max_barbershop_bot.ui.buttons import booking_stale_keyboard, settings_support_keyboard, stale_screen_keyboard
+from max_barbershop_bot.ui.buttons import booking_stale_keyboard, settings_support_keyboard
 from max_barbershop_bot.ui.screens import main_menu_screen, placeholder_screen, settings_menu_screen, staff_menu_screen
-from max_barbershop_bot.ui.texts import BOOKING_STALE_CALLBACK_TEXT, STALE_SCREEN_TEXT
+from max_barbershop_bot.ui.texts import BOOKING_STALE_CALLBACK_TEXT
 
 
 def _user_id(context: RouterContext) -> str | None:
@@ -63,10 +63,11 @@ async def open_screen(context: RouterContext, screen_id: str) -> None:
 
 
 async def show_stale_callback(context: RouterContext) -> None:
-    """Show a generic friendly stale callback screen."""
+    """Show Telegram-parity stale state guidance and return to the role menu."""
 
     await context.answer_callback("Экран устарел 🙏")
-    await context.send_text(STALE_SCREEN_TEXT, keyboard=stale_screen_keyboard())
+    await context.send_text("⚠️ Данные шага устарели. Пожалуйста, начните заново.")
+    await show_home(context)
 
 
 async def show_booking_stale_callback(context: RouterContext) -> None:

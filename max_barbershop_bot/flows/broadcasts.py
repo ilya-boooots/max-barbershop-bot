@@ -809,7 +809,10 @@ async def handle_broadcast_back(context: RouterContext) -> None:
         return
     await _answer_callback_if_needed(context)
     current = state.get_current_screen(_user_id(context), _chat_id(context))
-    if current == state.BROADCAST_ONE_TIME_TEXT_SCREEN:
+    if current == state.BROADCAST_MENU_SCREEN:
+        _clear_broadcast_state(context)
+        await show_home(context)
+    elif current == state.BROADCAST_ONE_TIME_TEXT_SCREEN:
         _clear_broadcast_state(context)
         state.set_current_screen(_user_id(context), _chat_id(context), state.BROADCAST_ONE_TIME_AUDIENCE_SCREEN)
         await context.send_text("✉️ Разовая рассылка\n\nВыберите аудиторию 👇", keyboard=broadcast_audience_keyboard())
