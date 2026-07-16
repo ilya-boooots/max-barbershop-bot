@@ -230,8 +230,18 @@ class RepeatVisitEventsRepository:
             ).fetchone()
             return row is not None
 
-    def has_recent_sent(self, platform_user_id: str, cooldown_hours: int, *, platform: str = PLATFORM_MAX) -> bool:
-        cutoff = (datetime.now(UTC) - timedelta(hours=cooldown_hours)).isoformat()
+    def has_recent_sent(
+        self,
+        platform_user_id: str,
+        cooldown_hours: int,
+        *,
+        platform: str = PLATFORM_MAX,
+        now: datetime | None = None,
+    ) -> bool:
+        reference_now = now or datetime.now(UTC)
+        if reference_now.tzinfo is None:
+            reference_now = reference_now.replace(tzinfo=UTC)
+        cutoff = (reference_now.astimezone(UTC) - timedelta(hours=cooldown_hours)).isoformat()
         with closing(self._connect()) as connection:
             row = connection.execute(
                 """

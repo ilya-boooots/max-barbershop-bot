@@ -117,7 +117,12 @@ async def schedule_repeat_visit_events(*, database_path: str, now: datetime | No
             if repo.has_event_for_visit(user.platform_user_id, visit_id, service_id, platform=PLATFORM_MAX):
                 scheduled += _create_skip(repo, user, yc_id, rec, visit_dt, service_id, service_name, delay_days, tz_name, "skipped_duplicate")
                 continue
-            if respect_antispam and repo.has_recent_sent(user.platform_user_id, cooldown_hours, platform=PLATFORM_MAX):
+            if respect_antispam and repo.has_recent_sent(
+                user.platform_user_id,
+                cooldown_hours,
+                platform=PLATFORM_MAX,
+                now=now_utc,
+            ):
                 scheduled += _create_skip(repo, user, yc_id, rec, visit_dt, service_id, service_name, delay_days, tz_name, "skipped_antispam")
                 continue
             template_idx, template_text = select_repeat_visit_text(cfg, user_tg_id=user.platform_user_id)
