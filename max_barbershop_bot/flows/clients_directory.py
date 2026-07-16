@@ -49,6 +49,7 @@ _RESULTS_KEY = "clients_directory_results"
 _QUERY_KEY = "clients_directory_query"
 _MODE_KEY = "clients_directory_mode"
 _SELECTED_KEY = "clients_directory_selected"
+_PAGE_KEY = "clients_directory_page"
 
 STALE_RESULTS_TEXT = "Этот список клиентов уже устарел 🙏\n\nВыполните поиск заново."
 NO_ACCESS_TEXT = "⛔️ Этот раздел доступен только команде барбершопа."
@@ -60,6 +61,7 @@ def register_clients_directory_routes(router: Router) -> None:
     router.on_callback(CLIENTS_DIRECTORY_SEARCH_PHONE_PAYLOAD, handle_search_phone)
     router.on_callback(CLIENTS_DIRECTORY_SEARCH_NAME_PAYLOAD, handle_search_name)
     router.on_callback(CLIENTS_DIRECTORY_REFRESH_PAYLOAD, handle_refresh)
+    router.on_callback_prefix("clients:page:", handle_page)
     router.on_callback(CLIENTS_DIRECTORY_BACK_PAYLOAD, handle_back)
     router.on_callback(CLIENTS_DIRECTORY_HOME_PAYLOAD, handle_home)
     for index in range(PAGE_SIZE):
@@ -101,6 +103,7 @@ async def handle_query_text(context: RouterContext) -> None:
             await context.send_text("🙂 Введите хотя бы 2 символа имени 🔎", keyboard=clients_directory_search_keyboard())
             return
     state.set_state_data_value(_uid(context), _chat(context), _QUERY_KEY, query)
+    state.set_state_data_value(_uid(context), _chat(context), _PAGE_KEY, 1)
     await _load_and_show_results(context, force_refresh=True)
 
 
@@ -110,6 +113,21 @@ async def handle_refresh(context: RouterContext) -> None:
         return
     await _answer(context)
     await _load_and_show_results(context, force_refresh=True)
+
+
+async def handle_page(context: RouterContext) -> None:
+    if not _can_access(context):
+        await _send_no_access(context)
+        return
+    raw_page = str(context.event.callback_payload or "").removeprefix("clients:page:")
+    query = str(state.get_state_data_value(_uid(context), _chat(context), _QUERY_KEY) or "").strip()
+    if not raw_page.isdigit() or not query:
+        await _answer(context)
+        await context.send_text(STALE_RESULTS_TEXT, keyboard=clients_directory_menu_keyboard())
+        return
+    await _answer(context)
+    state.set_state_data_value(_uid(context), _chat(context), _PAGE_KEY, max(1, int(raw_page)))
+    await _load_and_show_results(context)
 
 
 async def handle_result(context: RouterContext) -> None:
@@ -174,9 +192,10 @@ async def _load_and_show_results(context: RouterContext, *, force_refresh: bool 
     del force_refresh
     mode = str(state.get_state_data_value(_uid(context), _chat(context), _MODE_KEY) or "name")
     query = str(state.get_state_data_value(_uid(context), _chat(context), _QUERY_KEY) or "").strip()
+    page = int(state.get_state_data_value(_uid(context), _chat(context), _PAGE_KEY) or 1)
     try:
         async with _yclients_layer() as service:
-            rows = [card.raw | {"id": card.id, "name": card.name, "phone": card.phone} for card in await service.find_client(query=query, by_phone=mode == "phone", by_name=mode == "name", count=PAGE_SIZE + 1)]
+            rows = [card.raw | {"id": card.id, "name": card.name, "phone": card.phone} for card in await service.find_client(query=query, by_phone=mode == "phone", by_name=mode == "name", page=page, count=PAGE_SIZE + 1)]
     except Exception as exc:  # noqa: BLE001
         await _send_yclients_error(context, exc, search_type=mode, query_present=bool(query))
         return
@@ -190,13 +209,14 @@ async def _show_results_from_state(context: RouterContext, *, has_next: bool = F
     rows = state.get_state_data_value(_uid(context), _chat(context), _RESULTS_KEY)
     visible = rows if isinstance(rows, list) else []
     mode = str(state.get_state_data_value(_uid(context), _chat(context), _MODE_KEY) or "name")
+    page = int(state.get_state_data_value(_uid(context), _chat(context), _PAGE_KEY) or 1)
     state.set_current_screen(_uid(context), _chat(context), state.CLIENTS_DIRECTORY_RESULTS_SCREEN)
     if not visible:
         await context.send_text("😔 Клиент не найден. Попробуйте другой запрос 🙂", keyboard=clients_directory_search_keyboard())
         return
     text = (
-        "👥 Результаты поиска • стр. 1\n\nВыберите клиента ниже 👇"
-        if mode == "phone"
+        f"👥 Результаты поиска • стр. {page}\n\nВыберите клиента ниже 👇"
+        if mode in {"phone", "name"}
         else "👥 Результаты поиска\n\nВыберите клиента ниже 👇"
     )
     await context.send_text(
@@ -204,14 +224,15 @@ async def _show_results_from_state(context: RouterContext, *, has_next: bool = F
         keyboard=clients_directory_results_keyboard(
             visible,
             has_next=has_next,
-            include_client_id=mode != "phone",
+            include_client_id=mode not in {"phone", "name"},
+            page=page,
         ),
     )
 
 
 async def _show_card(context: RouterContext, yclients_client_id: str) -> None:
     mode = str(state.get_state_data_value(_uid(context), _chat(context), _MODE_KEY) or "name")
-    if mode == "phone":
+    if mode in {"phone", "name"}:
         try:
             async with _yclients_layer() as service:
                 card = await service.get_client_card(yclients_client_id=yclients_client_id)

@@ -331,6 +331,7 @@ def clients_directory_results_keyboard(
     *,
     has_next: bool = False,
     include_client_id: bool = True,
+    page: int = 1,
 ) -> MaxInlineKeyboard:
     """Build safe state-indexed client search result buttons."""
 
@@ -342,8 +343,13 @@ def clients_directory_results_keyboard(
         suffix = f" • ID {yclients_client_id}" if include_client_id and yclients_client_id else ""
         phone_part = f" • 📞 {_mask_clients_directory_phone(phone)}" if phone else ""
         rows.append([MaxButton(text=f"👤 {name}{phone_part}{suffix}"[:64], payload=indexed_payload(CLIENTS_DIRECTORY_RESULT_PAYLOAD_PREFIX, index))])
+    pager: list[MaxButton] = []
+    if page > 1:
+        pager.append(MaxButton(text="⬅️ Пред", payload=f"clients:page:{page - 1}"))
     if has_next:
-        rows.append([MaxButton(text="Уточните запрос, найдено больше 8", payload=CLIENTS_DIRECTORY_REFRESH_PAYLOAD)])
+        pager.append(MaxButton(text="➡️ След", payload=f"clients:page:{page + 1}"))
+    if pager:
+        rows.append(pager)
     rows.append([MaxButton(text="🔄 Обновить", payload=CLIENTS_DIRECTORY_REFRESH_PAYLOAD)])
     rows.append([MaxButton(text="⬅️ Назад", payload=CLIENTS_DIRECTORY_BACK_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
