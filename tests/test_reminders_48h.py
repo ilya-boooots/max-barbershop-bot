@@ -352,7 +352,7 @@ def test_settings_test_48h_sends_real_dev_message_and_logs_history(tmp_path, mon
 
     assert "✅ Тестовое уведомление отправлено." in text
     assert "reminder_type=confirm_2d" in text
-    assert sender.sent and sender.sent[0][0] == "chat"
+    assert sender.sent and sender.sent[0][:2] == ("user", "100")
     assert "Подтвердите, пожалуйста, запись 👇" in sender.sent[0][2]
     assert sender.sent[0][3].rows[0][0].text == "✅ Да, запись в силе"
     assert _count_rows(db, "notification_history", BOOKING_REMINDER_48H) == 1
@@ -452,7 +452,7 @@ def test_settings_test_2h_sends_real_dev_message_and_logs_history(tmp_path, monk
 
     assert "✅ Тестовое уведомление отправлено." in text
     assert "reminder_type=reminder_2h" in text
-    assert sender.sent and sender.sent[0][0] == "chat"
+    assert sender.sent and sender.sent[0][:2] == ("user", "100")
     assert "вы записаны на услугу «МУЖСКАЯ СТРИЖКА»" in sender.sent[0][2]
     assert sender.sent[0][3].rows[0][0].text == "📅 Мои записи"
     assert _count_rows(db, "notification_history", BOOKING_REMINDER_2H) == 1
