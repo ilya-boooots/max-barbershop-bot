@@ -59,6 +59,19 @@ class DiagnosticsRepository:
             connection.commit()
             return int(cursor.lastrowid)
 
+    def log_error_event(self, context: Mapping[str, Any]) -> int:
+        """Persist one already bounded, sanitized error context in the existing bot log."""
+
+        safe = sanitize_mapping(context)
+        exception_class = str(safe.get("exception_class") or "Error")
+        location = str(safe.get("location") or "unknown")
+        return self.log_bot_event(
+            level="ERROR",
+            source="error_handler",
+            message=f"{exception_class} @ {location}",
+            details=safe,
+        )
+
     def get_recent_bot_logs(self, limit: int = 200) -> list[dict[str, Any]]:
         """Return recent bot logs newest first, like Telegram reference repository."""
 
