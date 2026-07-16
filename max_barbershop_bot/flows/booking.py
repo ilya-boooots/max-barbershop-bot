@@ -1662,7 +1662,11 @@ async def _show_booking_dates(context: RouterContext, *, push_current: bool = Tr
     try:
         dates = await booking_service.get_available_dates_for_selection(
             yclients_service_id=service_id,
-            yclients_master_id=None if master_id == "0" else (master_id if isinstance(master_id, str) and master_id else None),
+            yclients_master_id=(
+                None
+                if master_id == "0" and _entry_mode(context) == _ENTRY_MODE_REPEAT
+                else (master_id if isinstance(master_id, str) and master_id else None)
+            ),
             days=DATE_LOOKAHEAD_DAYS,
         )
     except BookingServiceError as exc:
@@ -1705,7 +1709,11 @@ async def _open_booking_slots(context: RouterContext, booking_date: str, *, push
     try:
         slots = await booking_service.get_available_slots(
             yclients_service_id=service_id,
-            yclients_master_id=None if master_id == "0" else (master_id if isinstance(master_id, str) and master_id else None),
+            yclients_master_id=(
+                None
+                if master_id == "0" and _entry_mode(context) == _ENTRY_MODE_REPEAT
+                else (master_id if isinstance(master_id, str) and master_id else None)
+            ),
             booking_date=booking_date,
         )
     except BookingServiceError as exc:
