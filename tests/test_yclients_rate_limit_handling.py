@@ -141,4 +141,3 @@ def test_real_my_bookings_rate_limit_handler_never_sends_diagnostic_to_developer
     ]
     assert all("diagnostic" not in text.lower() for text, _ in sender.messages)
     assert all("dev-user" not in text for text, _ in sender.messages)
-
