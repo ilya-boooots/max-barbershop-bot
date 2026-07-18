@@ -73,6 +73,7 @@ def test_my_bookings_rate_limit_diagnostic_has_no_traceback() -> None:
     assert diagnostic["error_category"] == "rate_limit"
     assert "traceback_last_5_lines" not in diagnostic
 
+
 class _RuntimeSender:
     def __init__(self) -> None:
         self.messages: list[tuple[str, object]] = []
@@ -93,7 +94,7 @@ def test_real_my_bookings_rate_limit_handler_never_sends_diagnostic_to_developer
 ) -> None:
     diagnostic = mb._rate_limit_diagnostic(
         function="MyBookingsService.get_bookings_for_user",
-        max_user_id="295169373",
+        max_user_id="dev-user",
         user=None,
         endpoint_name="list_user_bookings",
         request_mode="by_phone",
@@ -115,8 +116,8 @@ def test_real_my_bookings_rate_limit_handler_never_sends_diagnostic_to_developer
     context = RouterContext(
         event=NormalizedEvent(
             update_type="message_callback",
-            platform_user_id="295169373",
-            max_user_id="295169373",
+            platform_user_id="dev-user",
+            max_user_id="dev-user",
             chat_id="900",
             text=None,
             callback_payload="menu:my_bookings",
@@ -139,5 +140,5 @@ def test_real_my_bookings_rate_limit_handler_never_sends_diagnostic_to_developer
         ("🏠 Главное меню", "nav:home"),
     ]
     assert all("diagnostic" not in text.lower() for text, _ in sender.messages)
-    assert all("295169373" not in text for text, _ in sender.messages)
+    assert all("dev-user" not in text for text, _ in sender.messages)
 
