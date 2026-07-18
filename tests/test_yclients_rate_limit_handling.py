@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
+import pytest
+
+from max_barbershop_bot.core.events import NormalizedEvent
+from max_barbershop_bot.core.router import RouterContext
+from max_barbershop_bot.flows import my_bookings as my_bookings_flow
 from max_barbershop_bot.integrations.yclients.exceptions import YClientsRateLimitError
 from max_barbershop_bot.services import my_bookings as mb
 
@@ -66,3 +72,72 @@ def test_my_bookings_rate_limit_diagnostic_has_no_traceback() -> None:
     assert diagnostic["error_type"] == "YClientsRateLimitError"
     assert diagnostic["error_category"] == "rate_limit"
     assert "traceback_last_5_lines" not in diagnostic
+
+
+class _RuntimeSender:
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, object]] = []
+        self.callbacks: list[str] = []
+
+    async def send_to_chat(self, chat_id: int, text: str, *, keyboard=None, attachments=None):
+        self.messages.append((text, keyboard))
+
+    async def send_to_user(self, user_id: int, text: str, *, keyboard=None, attachments=None):
+        self.messages.append((text, keyboard))
+
+    async def answer_callback(self, callback_id: str):
+        self.callbacks.append(callback_id)
+
+
+def test_real_my_bookings_rate_limit_handler_never_sends_diagnostic_to_developer_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = mb._rate_limit_diagnostic(
+        function="MyBookingsService.get_bookings_for_user",
+        max_user_id="dev-user",
+        user=None,
+        endpoint_name="list_user_bookings",
+        request_mode="by_phone",
+        retry_after_seconds=5,
+        duration_ms=3682,
+    )
+
+    async def raise_rate_limit(_service, _user, *, platform_user_id=None):
+        raise mb.MyBookingsLoadError(mb.MY_BOOKINGS_RATE_LIMIT_TEXT, diagnostic=diagnostic)
+
+    monkeypatch.setattr(mb.MyBookingsService, "get_bookings_for_user", raise_rate_limit)
+    monkeypatch.setattr(
+        my_bookings_flow,
+        "_current_user",
+        lambda _context: SimpleNamespace(role="developer"),
+    )
+
+    sender = _RuntimeSender()
+    context = RouterContext(
+        event=NormalizedEvent(
+            update_type="message_callback",
+            platform_user_id="dev-user",
+            max_user_id="dev-user",
+            chat_id="900",
+            text=None,
+            callback_payload="menu:my_bookings",
+            callback_id="cb-my-bookings",
+        ),
+        sender=sender,
+    )
+
+    asyncio.run(my_bookings_flow.handle_my_bookings_open(context))
+
+    assert sender.callbacks == ["cb-my-bookings"]
+    assert [text for text, _ in sender.messages] == [
+        "⏳ Загружаю ваши записи…",
+        mb.MY_BOOKINGS_RATE_LIMIT_TEXT,
+    ]
+    keyboard = sender.messages[-1][1]
+    assert [(button.text, button.payload) for row in keyboard.rows for button in row] == [
+        ("🔄 Повторить", "menu:my_bookings"),
+        ("⬅️ Назад", "nav:back"),
+        ("🏠 Главное меню", "nav:home"),
+    ]
+    assert all("diagnostic" not in text.lower() for text, _ in sender.messages)
+    assert all("dev-user" not in text for text, _ in sender.messages)
