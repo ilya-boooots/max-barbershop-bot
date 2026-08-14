@@ -238,7 +238,7 @@ def test_router_registration_and_scope_safety(db) -> None:
         "SETTINGS_PROFILE_SAVE_PHONE_PAYLOAD",
     ):
         assert payload_name in source
-    assert "✂️ Записаться" in [button.text for row in main_menu_keyboard("user").rows for button in row]
+    assert "✨ Записаться" in [button.text for row in main_menu_keyboard("user").rows for button in row]
     target_sources = "\n".join(
         (ROOT / path).read_text(encoding="utf-8")
         for path in (

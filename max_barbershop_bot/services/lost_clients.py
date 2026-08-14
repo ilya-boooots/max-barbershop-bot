@@ -430,7 +430,7 @@ class LostClientsScanSummary:
     errors: int = 0
 
 
-LOST_CLIENTS_BOOKING_BUTTON_TEXT = "✂️ Записаться"
+LOST_CLIENTS_BOOKING_BUTTON_TEXT = "✨ Записаться"
 LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX = "lost_clients:book:"
 
 

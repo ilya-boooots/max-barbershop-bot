@@ -1332,7 +1332,7 @@ async def _show_booking_hub(context: RouterContext, *, push_current: bool = True
 async def _booking_hub_text() -> str:
     """Build the Telegram-reference booking hub text with safe MAX fallbacks."""
 
-    branch_title = "барбершоп"
+    branch_title = "салон красоты"
     address: str | None = None
     try:
         contacts = await ContactsService(YClientsSettingsRepository(_database_path())).get_contacts()
@@ -1343,7 +1343,7 @@ async def _booking_hub_text() -> str:
         if contacts.address and contacts.address != "—":
             address = contacts.address
 
-    lines = [f"✂️ Запись в {branch_title}"]
+    lines = [f"✨ Запись в {branch_title}"]
     if address:
         lines.append(f"📍 {address}")
     lines.append("\nВыберите, с чего начать:")
@@ -2386,8 +2386,8 @@ def _booking_step_text(context: RouterContext, *, tail: str, include_selected_da
     service_name = str(_state_value(context, _SELECTED_SERVICE_NAME_STATE_KEY) or "—").strip() or "—"
     master_name = str(_state_value(context, _SELECTED_MASTER_NAME_STATE_KEY) or "Любой мастер").strip() or "Любой мастер"
     lines = [
-        f"✂️ Услуга: {service_name}",
-        f"💈 Мастер: {master_name}",
+        f"✨ Услуга: {service_name}",
+        f"👤 Мастер: {master_name}",
     ]
     if include_selected_date:
         selected_date = _state_value(context, _SELECTED_DATE_STATE_KEY)

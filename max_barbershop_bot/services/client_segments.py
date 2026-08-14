@@ -114,8 +114,8 @@ SEGMENT_TITLES = {
     ClientSegmentType.LOST_60: "😴 Не были 60 дней",
     ClientSegmentType.LOST_90: "😴 Не были 90 дней",
     ClientSegmentType.CANCELLED: "❌ Отменили запись",
-    ClientSegmentType.BY_MASTER: "💈 По мастеру",
-    ClientSegmentType.BY_SERVICE: "✂️ По услуге",
+    ClientSegmentType.BY_MASTER: "👤 По мастеру",
+    ClientSegmentType.BY_SERVICE: "✨ По услуге",
     ClientSegmentType.BIRTHDAY_SOON: "🎂 День рождения скоро",
     ClientSegmentType.NO_FUTURE_BOOKINGS: "📅 Без будущей записи",
 }
@@ -488,7 +488,7 @@ class ClientSegmentService:
         )
         return ClientSegmentResult(
             segment_type=result.segment_type,
-            title=f"✂️ Клиенты категории: {category_name or f'Категория {cid}'}",
+            title=f"✨ Клиенты категории: {category_name or f'Категория {cid}'}",
             members=result.members,
             description="Клиенты, которые пользовались услугами из выбранной категории.",
             branch_timezone="Europe/Moscow",
@@ -1007,8 +1007,8 @@ def _plain_segment_title(title: str) -> str:
 def _master_segment_title(master_name: str | None = None) -> str:
     name = (master_name or "").strip()
     if name:
-        return f"💈 Клиенты мастера: {name}"
-    return "💈 Клиенты выбранного мастера"
+        return f"👤 Клиенты мастера: {name}"
+    return "👤 Клиенты выбранного мастера"
 
 
 def format_segments_overview(overview: ClientSegmentsOverview) -> str:

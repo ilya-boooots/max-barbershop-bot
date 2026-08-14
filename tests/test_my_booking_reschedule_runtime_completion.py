@@ -78,7 +78,7 @@ def base_booking(status: str = "active", minutes: int = 120) -> dict[str, object
         "id": "old-1",
         "datetime": dt.strftime("%Y-%m-%d %H:%M:%S"),
         "status": status,
-        "services": [{"id": "svc-1", "title": "Стрижка", "seance_length": 60}],
+        "services": [{"id": "svc-1", "title": "Услуга", "seance_length": 60}],
         "staff": {"id": "staff-1", "name": "Максим"},
         "client": {"id": "client-1", "name": "Иван", "phone": "+79991234567"},
         "seance_length": 60,
@@ -90,7 +90,7 @@ def reschedule_context(old_datetime: str = OLD_DT) -> dict[str, object]:
         "yclients_record_id": "old-1",
         "service_id": "svc-1",
         "service_ids": ["svc-1"],
-        "service_name": "Стрижка",
+        "service_name": "Услуга",
         "staff_id": "staff-1",
         "staff_name": "Максим",
         "client_data": {"id": "client-1", "phone": "+79991234567", "name": "Иван"},
@@ -110,7 +110,7 @@ def seed_reschedule_state(*, slots=None, slot_data=None, dates=None, current_scr
     state.set_state_data_value(USER_ID, CHAT_ID, flow._RESCHEDULE_SLOTS_STATE_KEY, slots or [])
     state.set_state_data_value(USER_ID, CHAT_ID, flow._RESCHEDULE_NEW_DATE_STATE_KEY, "2026-07-21")
     state.set_state_data_value(USER_ID, CHAT_ID, flow._RESCHEDULE_NEW_SLOT_STATE_KEY, slot_data)
-    state.set_state_data_value(USER_ID, CHAT_ID, flow._SELECTED_BOOKING_STATE_KEY, {"service_name": "Стрижка", "master_name": "Максим", "datetime": OLD_DT, "date": "20.07.2026", "time": "10:00", "yclients_record_id": "old-1"})
+    state.set_state_data_value(USER_ID, CHAT_ID, flow._SELECTED_BOOKING_STATE_KEY, {"service_name": "Услуга", "master_name": "Максим", "datetime": OLD_DT, "date": "20.07.2026", "time": "10:00", "yclients_record_id": "old-1"})
     state.set_current_screen(USER_ID, CHAT_ID, current_screen or state.MY_BOOKING_RESCHEDULE_SLOTS_SCREEN)
 
 
@@ -279,8 +279,8 @@ def test_confirmation_text_buttons_and_back_to_slots_no_mutation():
     # 39-45, 96, 100
     keyboard = my_booking_reschedule_confirmation_keyboard()
     assert [row[0].payload for row in keyboard.rows] == [MY_BOOKINGS_RESCHEDULE_CONFIRM_PAYLOAD, MY_BOOKINGS_BACK_PAYLOAD, NAV_HOME_PAYLOAD]
-    text = svc.format_reschedule_confirmation_text({"service_name": "Стрижка", "staff_name": "Максим", "old_date": "20.07.2026", "old_time": "10:00", "new_date": "21.07.2026", "new_time": "11:30"})
-    for part in ["Стрижка", "Максим", "20.07.2026", "10:00", "21.07.2026", "11:30"]:
+    text = svc.format_reschedule_confirmation_text({"service_name": "Услуга", "staff_name": "Максим", "old_date": "20.07.2026", "old_time": "10:00", "new_date": "21.07.2026", "new_time": "11:30"})
+    for part in ["Услуга", "Максим", "20.07.2026", "10:00", "21.07.2026", "11:30"]:
         assert part in text
     seed_reschedule_state(slots=[BookingSlotItem(time="11:30", datetime_iso=NEW_DT)], slot_data={"new_datetime": NEW_DT, "new_time": "11:30"}, current_screen=state.MY_BOOKING_RESCHEDULE_CONFIRM_SCREEN)
     ctx = context(MY_BOOKINGS_BACK_PAYLOAD)

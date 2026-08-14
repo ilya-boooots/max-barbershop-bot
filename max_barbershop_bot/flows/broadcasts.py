@@ -478,7 +478,7 @@ def _history_audience_label(audience_key: str) -> str:
         "birthday_soon": "🎂 День рождения скоро",
         "self_test": "🧪 Отправить себе",
         "send_to_self": "🧪 Отправить себе",
-        "by_service_category": "✂️ По категории услуг",
+        "by_service_category": "✨ По категории услуг",
     }.get(audience_key, audience_key or "—")
 
 
@@ -547,7 +547,7 @@ async def handle_reminder_notification_test(context: RouterContext) -> None:
         yclients_client_id="dev-test-client",
         notification_type=notification_type,
         booking_datetime=booking_datetime,
-        service_name="МУЖСКАЯ СТРИЖКА",
+        service_name="Тестовая услуга",
         master_name="Рената Пономарёва",
         client_name="Илья",
         branch_address=await _dev_test_branch_address(),

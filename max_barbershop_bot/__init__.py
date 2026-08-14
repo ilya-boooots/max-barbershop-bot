@@ -1,1 +1,1 @@
-"""MAX Barbershop Bot package."""
+"""MAX beauty services bot package."""

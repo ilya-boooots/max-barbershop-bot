@@ -99,7 +99,7 @@ def test_repeat_visit_migration_adds_telegram_equivalent_columns(tmp_path):
 def test_repeat_visit_repository_creates_event_with_new_and_legacy_fields(tmp_path):
     path = _db(tmp_path)
     repo = RepeatVisitEventsRepository(path)
-    event = repo.create_event(platform_user_id="100", yclients_record_id="v1", yclients_client_id="yc1", yclients_visit_id="v1", yclients_service_id="s1", service_name="Стрижка", last_visit_datetime_utc="2026-07-01T10:00:00+00:00", delay_days=30, scheduled_at="2026-07-31T10:00:00+00:00", scheduled_send_at_utc="2026-07-31T10:00:00+00:00", selected_template_index=2, selected_template_text="Текст", status="pending", branch_timezone="UTC", source="dev_test", is_test=True)
+    event = repo.create_event(platform_user_id="100", yclients_record_id="v1", yclients_client_id="yc1", yclients_visit_id="v1", yclients_service_id="s1", service_name="Услуга", last_visit_datetime_utc="2026-07-01T10:00:00+00:00", delay_days=30, scheduled_at="2026-07-31T10:00:00+00:00", scheduled_send_at_utc="2026-07-31T10:00:00+00:00", selected_template_index=2, selected_template_text="Текст", status="pending", branch_timezone="UTC", source="dev_test", is_test=True)
     assert event is not None
     loaded = repo.get_event(event.id)
     assert loaded.yclients_record_id == "v1"
@@ -153,7 +153,7 @@ def test_repeat_visit_scan_finds_latest_completed_and_sends_selected_text(tmp_pa
     now = datetime(2026, 7, 9, tzinfo=UTC)
     _patch_yclients(monkeypatch, [
         {"id": "old", "datetime": (now - timedelta(days=60)).isoformat(), "attendance": 1, "services": [{"id": "s1", "title": "Old"}]},
-        {"id": "new", "datetime": (now - timedelta(days=31)).isoformat(), "status": "visit", "services": [{"id": "s2", "title": "Стрижка"}]},
+        {"id": "new", "datetime": (now - timedelta(days=31)).isoformat(), "status": "visit", "services": [{"id": "s2", "title": "Услуга"}]},
     ])
     count = asyncio.run(schedule_repeat_visit_events(database_path=path, now=now, settings={"templates": ["", "Повтор"]}))
     assert count == 1
@@ -165,7 +165,7 @@ def test_repeat_visit_scan_finds_latest_completed_and_sends_selected_text(tmp_pa
     sent = asyncio.run(process_due_repeat_visit_events(sender, database_path=path, settings={"templates": ["Повтор"]}))
     assert sent == 1
     assert sender.calls[0][2] == "Повтор"
-    assert sender.calls[0][3].rows[0][0].text == "✂️ Записаться"
+    assert sender.calls[0][3].rows[0][0].text == "✨ Записаться"
     assert sender.calls[0][3].rows[0][0].payload == f"{BUTTON_CB_PREFIX}{event.id}"
     assert RepeatVisitEventsRepository(path).get_event(event.id).status == "sent"
 

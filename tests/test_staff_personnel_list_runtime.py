@@ -90,7 +90,7 @@ def test_access_matrix_user_denied_manager_admin_developer_allowed(db: Path) -> 
         ctx, sender = _ctx(STAFF_LIST_PAYLOAD, user=actor)
         asyncio.run(handle_staff_list(ctx))
         assert sender.callbacks == ["cb-staff:list"]
-        assert "👥 Персонал ресторана" in _texts(sender)[0]
+        assert "👥 Персонал салона" in _texts(sender)[0]
         assert "Secret Staff" in _texts(sender)[0]
 
 
@@ -112,7 +112,7 @@ def test_title_count_roles_duplicates_order_dates_issuer_and_no_extra_phone_user
     ctx, sender = _ctx(STAFF_LIST_PAYLOAD, user="dev")
     asyncio.run(handle_staff_list(ctx))
     text = _texts(sender)[0]
-    assert text.startswith("👥 Персонал ресторана\nВсего: 3")
+    assert text.startswith("👥 Персонал салона\nВсего: 3")
     assert "1) 💻 Разработчик" in text
     assert "2) 🛡 Администратор" in text
     assert "3) 👑 Управляющий" in text
@@ -135,7 +135,7 @@ def test_empty_state_navigation_and_current_screen(db: Path) -> None:
     _user(db, "dev", display_name="Protected actor")
     ctx, sender = _ctx(STAFF_LIST_PAYLOAD, user="dev")
     asyncio.run(handle_staff_list(ctx))
-    assert _texts(sender)[0] == "👥 Персонал ресторана\nВсего: 0"
+    assert _texts(sender)[0] == "👥 Персонал салона\nВсего: 0"
     buttons = _buttons(sender.messages[0][1])
     assert buttons == [("⬅️ Назад", "nav:back"), ("🏠 Главное меню", "nav:home")]
     assert state.get_current_screen("dev", "900") == state.STAFF_LIST_SCREEN

@@ -1,1 +1,1 @@
-"""Application services for the MAX barbershop bot."""
+"""Application services for the MAX beauty services bot."""

@@ -202,7 +202,7 @@ def format_admin_booking_list_item(item: dict[str, Any]) -> str:
     master = _pick(item, ("staff_name", "master_name", "staff"), "Мастер")
     service = _service_label(item)
     phone = _mask_phone(_pick(item, ("phone", "client_phone", "tel"), ""))
-    return f"🕒 {time_label} • 👤 {master[:12]} • ✂️ {service[:16]} • 📞 {phone}"
+    return f"🕒 {time_label} • 👤 {master[:12]} • ✨ {service[:16]} • 📞 {phone}"
 
 
 def format_admin_booking_card(item: dict[str, Any]) -> str:
@@ -214,7 +214,7 @@ def format_admin_booking_card(item: dict[str, Any]) -> str:
         f"🧾 ID записи: {_record_id(item) or '—'}",
         f"🕒 Дата и время: {_company_time().format_datetime(_record_datetime(item))}",
         f"👤 Мастер: {_pick(item, ('staff_name', 'master_name', 'staff'), '—')}",
-        f"✂️ Услуга: {_service_label(item)}",
+        f"✨ Услуга: {_service_label(item)}",
         f"👤 Клиент: {_pick(item, ('client_name', 'fullname', 'name'), '—')}",
         f"📞 Телефон: {_mask_phone(_pick(item, ('phone', 'client_phone', 'tel'), ''))}",
         f"🧾 Статус: {_record_status(item) or '—'}",

@@ -76,7 +76,7 @@ def _create_due_event(repo: CancellationRecoveryEventsRepository, *, record_id: 
         staff_id="s1",
         staff_name="Тестовый мастер",
         service_id="svc1",
-        service_name="Тестовая стрижка",
+        service_name="Тестовая услуга",
         cancelled_booking_datetime_utc=(now - timedelta(hours=1)).isoformat(),
         cancellation_detected_at_utc=(now - timedelta(hours=1)).isoformat(),
         scheduled_send_at_utc=(now - timedelta(minutes=1)).isoformat(),
@@ -124,7 +124,7 @@ def test_repository_creates_dedups_and_preserves_telegram_fields(tmp_path) -> No
     assert duplicate is not None
     assert duplicate.id == event.id
     assert event.staff_name == "Тестовый мастер"
-    assert event.service_name == "Тестовая стрижка"
+    assert event.service_name == "Тестовая услуга"
     assert event.branch_timezone == "Europe/Moscow"
     assert event.source == "dev_test"
     assert event.is_test is True
@@ -178,7 +178,7 @@ def test_due_event_sends_once_with_text_keyboard_and_source(tmp_path, monkeypatc
         assert len(sender.sent) == 1
         assert sender.sent[0][2] == CANCELLATION_RECOVERY_TEXT
         keyboard = sender.sent[0][3]
-        assert [row[0].text for row in keyboard.rows] == ["✂️ Подобрать новое время", "📅 Выбрать другую дату", "Позже"]
+        assert [row[0].text for row in keyboard.rows] == ["✨ Подобрать новое время", "📅 Выбрать другую дату", "Позже"]
         assert keyboard.rows[0][0].payload == f"cancel_recovery:rebook:{event.id}"
         assert updated.status == "sent"
         assert updated.source == "dev_test"

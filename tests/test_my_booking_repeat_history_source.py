@@ -94,8 +94,8 @@ class FakeBookingService:
 
     async def get_valid_categories_for_entry_mode(self, *, entry_mode):
         return BookingCatalog(
-            categories=[BookingCategory(yclients_category_id="cat", title="Стрижки")],
-            services=[BookingServiceItem(yclients_service_id="svc", title="Current service", yclients_category_id="cat", category_title="Стрижки")],
+            categories=[BookingCategory(yclients_category_id="cat", title="Услуги")],
+            services=[BookingServiceItem(yclients_service_id="svc", title="Current service", yclients_category_id="cat", category_title="Услуги")],
         )
 
     async def get_available_masters_for_service(self, service_id, *, service=None, entry_mode=None):
@@ -155,7 +155,7 @@ def test_history_global_repeat_uses_latest_loaded_booking_not_selected_detail_or
 
 
 def test_history_back_restores_full_history_page_zero_text_keyboard_and_state():
-    past = [item("p0-a", "Стрижка A", 1), item("p0-b", "Борода B", 2)]
+    past = [item("p0-a", "Услуга A", 1), item("p0-b", "Уход B", 2)]
     seed_history(page=0, past=past, all_items=past)
     asyncio.run(my_flow.handle_my_booking_repeat_start(ctx()))
 
@@ -164,7 +164,7 @@ def test_history_back_restores_full_history_page_zero_text_keyboard_and_state():
     message = back.sender.messages[-1]
     assert state.get_current_screen(USER_ID, CHAT_ID) == HISTORY_SCREEN
     assert message["text"].startswith("🕘 История визитов")
-    assert "Стрижка A" in message["text"] and "Борода B" in message["text"]
+    assert "Услуга A" in message["text"] and "Уход B" in message["text"]
     assert "📋 Активная запись" not in message["text"]
     payloads = buttons(message)
     assert ("🔂 Повторить запись", MY_BOOKINGS_REPEAT_START_PAYLOAD) in payloads

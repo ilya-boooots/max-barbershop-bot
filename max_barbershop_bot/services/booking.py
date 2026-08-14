@@ -1433,7 +1433,7 @@ def format_booking_success(
     """Format successful booking text in the Telegram reference style."""
 
     return _format_booking_details(
-        "✅ Готово! Вы записаны 💈\n",
+        "✅ Готово! Вы записаны ✨\n",
         booking_state,
         contacts=contacts,
         timezone_name=timezone_name,
@@ -1613,7 +1613,7 @@ def format_master_title(master: BookingMasterItem | dict[str, Any]) -> str:
     if normalized.rating:
         details.append(f"⭐️ {normalized.rating}")
     suffix = f" ({', '.join(details)})" if details else ""
-    return f"💈 {normalized.title}{suffix}"
+    return f"👤 {normalized.title}{suffix}"
 
 
 def has_available_services(catalog: BookingCatalog) -> bool:
@@ -1654,7 +1654,7 @@ def _format_booking_details(
     lines = [header] if header else []
     lines.extend(
         [
-            f"✂️ Услуга: {service_name}",
+            f"✨ Услуга: {service_name}",
             f"👤 Мастер: {master_name}",
             f"📅 Дата: {booking_date_value}",
             f"🕒 Время: {booking_time_value}",

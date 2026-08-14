@@ -136,7 +136,7 @@ def test_scan_selects_highest_threshold_sends_text_and_cta(tmp_path, monkeypatch
     assert summary.candidates == 1 and summary.sent == 1
     assert sender.sent[0][1] == "90"
     keyboard = sender.sent[0][2]
-    assert keyboard.rows[0][0].text == "✂️ Записаться"
+    assert keyboard.rows[0][0].text == "✨ Записаться"
     assert keyboard.rows[0][0].payload.startswith("lost_clients:book:")
     event = LostClientEventsRepository(path).find_latest_by_tg_threshold("100", 90)
     assert event.segment_key == "lost_90"

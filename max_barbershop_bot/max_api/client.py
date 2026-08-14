@@ -45,7 +45,7 @@ class MaxApiNetworkError(MaxApiError):
 
 
 class MaxApiClient:
-    """Small MAX API transport client without barbershop business logic."""
+    """Small MAX API transport client without application business logic."""
 
     def __init__(
         self,

@@ -1221,7 +1221,7 @@ def format_booking_item(item: MyBookingItem, *, index: int, timezone_name: str) 
     booking_datetime = item.booking_datetime.astimezone(_zoneinfo(timezone_name))
     return "\n".join(
         [
-            f"{index}. ✂️ Услуга: {item.service_name}",
+            f"{index}. ✨ Услуга: {item.service_name}",
             f"   👤 Мастер: {item.master_name or 'Любой мастер'}",
             f"   📅 Дата: {booking_datetime.strftime('%d.%m.%Y')}",
             f"   🕒 Время: {booking_datetime.strftime('%H:%M')}",
@@ -1275,7 +1275,7 @@ def format_visit_history_screen(bookings: list[MyBookingItem | dict[str, Any]], 
     lines = ["🕘 История визитов", ""]
     for idx, booking in enumerate(shown, start=start + 1):
         display = booking_display_data(booking, timezone_name=timezone_name)
-        lines.append(f"{idx}. ✂️ {display['service_name']}")
+        lines.append(f"{idx}. ✨ {display['service_name']}")
         lines.append(f"   👤 {display['master_name'] or 'Любой мастер'}")
         lines.append(f"   📅 {display['date']} {display['time']}")
         lines.append(f"   💰 {display['price'] or '—'}")
@@ -1304,7 +1304,7 @@ def format_booking_details_text(
     lines = [
         title,
         "",
-        f"✂️ Услуга: {display['service_name']}",
+        f"✨ Услуга: {display['service_name']}",
         f"👤 Мастер: {display['master_name'] or 'Любой мастер'}",
         f"📅 Дата: {display['date']}",
         f"🕒 Время: {display['time']}",
@@ -1386,7 +1386,7 @@ def format_reschedule_confirmation_text(data: dict[str, Any]) -> str:
         [
             "Проверьте перенос записи 🔁",
             "",
-            f"✂️ Услуга: {_clean_text(data.get('service_name')) or 'Услуга'}",
+            f"✨ Услуга: {_clean_text(data.get('service_name')) or 'Услуга'}",
             f"👤 Мастер: {_clean_text(data.get('staff_name')) or 'Любой мастер'}",
             "",
             "Было:",

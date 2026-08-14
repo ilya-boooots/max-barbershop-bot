@@ -236,7 +236,7 @@ async def _show_master_picker(context: RouterContext) -> None:
         if _valid_callback_payload(f"{SEGMENTS_BY_MASTER_PREFIX}{item['id']}")
     ]
     rows += [[MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)]]
-    await context.send_text("💈 Выберите мастера", keyboard=MaxInlineKeyboard.from_rows(rows))
+    await context.send_text("👤 Выберите мастера", keyboard=MaxInlineKeyboard.from_rows(rows))
 
 
 async def _show_service_picker(context: RouterContext) -> None:
@@ -251,7 +251,7 @@ async def _show_service_picker(context: RouterContext) -> None:
         return
     rows = [[MaxButton(text=item["title"][:80], payload=f"{SEGMENTS_BY_SERVICE_PREFIX}{item['id']}")] for item in categories[:30]]
     rows += [[MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)], [MaxButton(text="🏠 Главное меню", payload=SEGMENTS_HOME_PAYLOAD)]]
-    await context.send_text("✂️ Выберите категорию услуг", keyboard=MaxInlineKeyboard.from_rows(rows))
+    await context.send_text("✨ Выберите категорию услуг", keyboard=MaxInlineKeyboard.from_rows(rows))
 
 
 async def _show_segment(context: RouterContext, payload: str, *, notification: str | None = None) -> None:

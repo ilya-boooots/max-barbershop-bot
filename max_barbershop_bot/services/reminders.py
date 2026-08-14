@@ -127,7 +127,7 @@ def render_booking_notification_text(context: BookingNotificationContext, timezo
     if context.notification_type == BOOKING_CONFIRMATION_IMMEDIATE:
         service_name = context.service_name or "услуга"
         return (
-            "✅ Готово! Вы записаны 💈\n\n"
+            "✅ Готово! Вы записаны ✨\n\n"
             f"Услуга: {service_name}\n"
             f"Мастер: {master_name}\n"
             f"Дата: {date_text}\n"

@@ -1,4 +1,4 @@
-"""Repository layer for MAX Barbershop Bot persistence."""
+"""Repository layer for MAX beauty services bot persistence."""
 
 from max_barbershop_bot.repositories.staff_roles import StaffRole, StaffRolesRepository
 from max_barbershop_bot.repositories.settings_audit import SettingsAuditRecord, SettingsAuditRepository

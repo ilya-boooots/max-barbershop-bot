@@ -82,23 +82,23 @@ def _texts(ctx: RouterContext) -> list[str]:
     return [button.text for row in keyboard.rows for button in row]
 
 
-def _cat(cid="c1", title="Стрижки"):
+def _cat(cid="c1", title="Услуги"):
     return BookingCategory(yclients_category_id=cid, title=title)
 
 
-def _service(sid="s1", cid="c1", title="Мужская стрижка", staff_ids=("m1",)):
+def _service(sid="s1", cid="c1", title="Тестовая услуга", staff_ids=("m1",)):
     return BookingServiceItem(
         yclients_service_id=sid,
         title=title,
         yclients_category_id=cid,
-        category_title="Стрижки",
+        category_title="Услуги",
         duration="60 мин",
         raw={"staff_ids": list(staff_ids), "bookable": True, "active": True},
     )
 
 
 def _master(mid="m1", title="Иван"):
-    return BookingMasterItem(yclients_master_id=mid, title=title, specialization="Барбер", rating="5.0", raw={"bookable": True, "active": True})
+    return BookingMasterItem(yclients_master_id=mid, title=title, specialization="Мастер", rating="5.0", raw={"bookable": True, "active": True})
 
 
 def _slot(time="10:00"):
@@ -196,7 +196,7 @@ def test_service_first_full_selection_persists_service_filters_staff_dates_slots
 
 def test_staff_first_master_context_filters_services_and_back_returns_to_masters(monkeypatch) -> None:
     compatible = _service("s1", staff_ids=("m1",))
-    incompatible = _service("s2", title="Борода", staff_ids=("m2",))
+    incompatible = _service("s2", title="Уход", staff_ids=("m2",))
     catalog = BookingCatalog(categories=[_cat()], services=[compatible])
 
     async def fake_masters(self, **kwargs):

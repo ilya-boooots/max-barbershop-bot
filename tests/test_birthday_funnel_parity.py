@@ -39,7 +39,7 @@ def test_birthday_text_warning_and_keyboard_match_telegram():
     keyboard = bf.build_birthday_booking_keyboard(42)
     assert len(keyboard.rows) == 1
     assert len(keyboard.rows[0]) == 1
-    assert keyboard.rows[0][0].text == "✂️ Записаться"
+    assert keyboard.rows[0][0].text == "✨ Записаться"
     assert keyboard.rows[0][0].payload == "birthday_funnel:book:42"
 
 
@@ -113,7 +113,7 @@ def test_scan_disabled_skip_and_due_dedup_send(tmp_path, monkeypatch):
     assert summary.sent == 1
     assert summary.skipped == 2
     assert sender.sent[0][2] == bf.BIRTHDAY_MESSAGE_TEXT
-    assert sender.sent[0][3].rows[0][0].text == "✂️ Записаться"
+    assert sender.sent[0][3].rows[0][0].text == "✨ Записаться"
     assert sender.sent[0][3].rows[0][0].payload.startswith("birthday_funnel:book:")
     repo = BirthdayFunnelEventsRepository(str(db))
     event = repo.find_by_client_year("u1", date.today().year)

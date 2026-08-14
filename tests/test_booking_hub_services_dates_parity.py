@@ -175,8 +175,8 @@ def test_stale_service_callback_is_friendly_and_refreshes_safe_screen(monkeypatc
 
 
 def test_staff_first_selected_master_filters_incompatible_services(monkeypatch) -> None:
-    compatible = BookingServiceItem(yclients_service_id="s1", title="Стрижка", yclients_category_id="c1", category_title="Услуги", raw={"staff_ids": ["m1"]})
-    incompatible = BookingServiceItem(yclients_service_id="s2", title="Борода", yclients_category_id="c1", category_title="Услуги", raw={"staff_ids": ["m2"]})
+    compatible = BookingServiceItem(yclients_service_id="s1", title="Услуга", yclients_category_id="c1", category_title="Услуги", raw={"staff_ids": ["m1"]})
+    incompatible = BookingServiceItem(yclients_service_id="s2", title="Уход", yclients_category_id="c1", category_title="Услуги", raw={"staff_ids": ["m2"]})
     context = _context()
     state.set_state_data_value("35", "35", booking._ENTRY_MODE_STATE_KEY, booking._ENTRY_MODE_STAFF_FIRST)
     state.set_state_data_value("35", "35", booking._SELECTED_MASTER_STATE_KEY, "m1")

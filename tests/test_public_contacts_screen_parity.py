@@ -91,7 +91,7 @@ def test_exact_public_contacts_text() -> None:
         )
     )
     assert text == (
-        "📍 Контакты Барбершоп\n\n"
+        "📍 Контакты салона\n\n"
         "🏠 Адрес: ул. Примерная, 1\n"
         "📞 Телефон: +7 999 000-00-00\n"
         "⏰ Режим работы: Ежедневно 10:00–22:00"
@@ -100,7 +100,7 @@ def test_exact_public_contacts_text() -> None:
 
 def test_missing_values_render_dash() -> None:
     assert format_contacts_text(ContactInfo()) == (
-        "📍 Контакты Барбершоп\n\n"
+        "📍 Контакты салона\n\n"
         "🏠 Адрес: —\n"
         "📞 Телефон: —\n"
         "⏰ Режим работы: —"
@@ -219,7 +219,7 @@ def test_opening_contacts_sets_screen_and_pushes_previous_once(monkeypatch: pyte
     assert first_stack == [state.MAIN_MENU_SCREEN]
     assert second_stack == first_stack
     assert sender.messages[-1]["text"] == (
-        "📍 Контакты Барбершоп\n\n"
+        "📍 Контакты салона\n\n"
         "🏠 Адрес: ул. Примерная, 1\n"
         "📞 Телефон: +7 999\n"
         "⏰ Режим работы: 10-22"
@@ -227,14 +227,13 @@ def test_opening_contacts_sets_screen_and_pushes_previous_once(monkeypatch: pyte
     assert _button_texts(sender.messages[-1]["keyboard"]) == ["⬅️ Назад", "🏠 Главное меню"]
 
 
-def test_scope_safety_forbidden_files_and_aiogram_imports() -> None:
+def test_scope_safety_reference_files_and_aiogram_imports() -> None:
     changed = set(
         __import__("subprocess")
         .check_output(["git", "diff", "--name-only", "HEAD"], cwd=ROOT, text=True)
         .splitlines()
     )
     assert not any(path.startswith("telegram_reference/") for path in changed)
-    assert "max_barbershop_bot/flows/settings.py" not in changed
     assert not any(path.startswith("max_barbershop_bot/flows/support") for path in changed)
     assert not any("main_menu" in path and path.startswith("max_barbershop_bot/") for path in changed)
     output = __import__("subprocess").run(

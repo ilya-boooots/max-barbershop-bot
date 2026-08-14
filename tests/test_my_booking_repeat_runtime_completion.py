@@ -97,10 +97,10 @@ class FakeMyBookingsService:
 
 class FakeBookingService:
     catalog = BookingCatalog(
-        categories=[BookingCategory(yclients_category_id="cat", title="Стрижки")],
+        categories=[BookingCategory(yclients_category_id="cat", title="Услуги")],
         services=[
-            BookingServiceItem(yclients_service_id="svc", title="Current service", yclients_category_id="cat", category_title="Стрижки", duration="50 мин", price_min=1500),
-            BookingServiceItem(yclients_service_id="svc2", title="Second service", yclients_category_id="cat", category_title="Стрижки", duration="30 мин", price_min=700),
+            BookingServiceItem(yclients_service_id="svc", title="Current service", yclients_category_id="cat", category_title="Услуги", duration="50 мин", price_min=1500),
+            BookingServiceItem(yclients_service_id="svc2", title="Second service", yclients_category_id="cat", category_title="Услуги", duration="30 мин", price_min=700),
         ],
     )
     masters = [BookingMasterItem(yclients_master_id="master", title="Current master"), BookingMasterItem(yclients_master_id="other", title="Other master")]
@@ -157,10 +157,10 @@ def setup(monkeypatch):
         "branch_timezone": "Europe/Samara",
     }
     FakeBookingService.catalog = BookingCatalog(
-        categories=[BookingCategory(yclients_category_id="cat", title="Стрижки")],
+        categories=[BookingCategory(yclients_category_id="cat", title="Услуги")],
         services=[
-            BookingServiceItem(yclients_service_id="svc", title="Current service", yclients_category_id="cat", category_title="Стрижки", duration="50 мин", price_min=1500),
-            BookingServiceItem(yclients_service_id="svc2", title="Second service", yclients_category_id="cat", category_title="Стрижки", duration="30 мин", price_min=700),
+            BookingServiceItem(yclients_service_id="svc", title="Current service", yclients_category_id="cat", category_title="Услуги", duration="50 мин", price_min=1500),
+            BookingServiceItem(yclients_service_id="svc2", title="Second service", yclients_category_id="cat", category_title="Услуги", duration="30 мин", price_min=700),
         ],
     )
     FakeBookingService.masters = [BookingMasterItem(yclients_master_id="master", title="Current master"), BookingMasterItem(yclients_master_id="other", title="Other master")]
