@@ -64,7 +64,7 @@ def test_by_master_picker_callback_opens_picker_uses_source_and_payloads(monkeyp
     asyncio.run(client_segments.handle_segment_selected(context))
 
     assert calls["list_masters"] == 1
-    assert sender.messages[-1][0] == "💈 Выберите мастера"
+    assert sender.messages[-1][0] == "👤 Выберите мастера"
     assert "Артур" in button_texts(sender.messages[-1][1])
     assert f"{SEGMENTS_BY_MASTER_PREFIX}42" in button_payloads(sender.messages[-1][1])
 
@@ -112,7 +112,7 @@ def test_by_master_detail_uses_selected_resolver_title_count_empty_and_buttons(m
             calls.append(master_id)
             return segments.ClientSegmentResult(
                 segment_type="by_master",
-                title="💈 Клиенты мастера: Артур",
+                title="👤 Клиенты мастера: Артур",
                 description="Выбор клиентов по мастеру из истории YClients.",
                 members=[],
                 branch_timezone="UTC",
@@ -128,7 +128,7 @@ def test_by_master_detail_uses_selected_resolver_title_count_empty_and_buttons(m
 
     assert calls == ["42"]
     text, keyboard = sender.messages[-1]
-    assert "💈 Клиенты мастера: Артур" in text
+    assert "👤 Клиенты мастера: Артур" in text
     assert "Количество клиентов: 0" in text
     assert "Обновлено: 07.07.2026 12:00" in text
     assert "😌 В этом сегменте пока нет клиентов." in text
@@ -161,7 +161,7 @@ def test_by_master_service_count_dedupes_unique_clients_and_uses_master_name(mon
 
     result = asyncio.run(service.get_clients_by_master("42"))
 
-    assert result.title == "💈 Клиенты мастера: Артур"
+    assert result.title == "👤 Клиенты мастера: Артур"
     assert result.count == 1
     assert result.members[0].yclients_client_id == "101"
 
@@ -174,7 +174,7 @@ def test_by_master_broadcast_handoff_preserves_id_and_opens_text_flow_only(monke
         "broadcast-master",
         "100500",
         client_segments._SELECTED_SEGMENT_RESULT_KEY,
-        segments.ClientSegmentResult(segment_type="by_master", title="💈 Клиенты мастера: Артур", members=[]),
+        segments.ClientSegmentResult(segment_type="by_master", title="👤 Клиенты мастера: Артур", members=[]),
     )
     state.set_state_data_value("broadcast-master", "100500", client_segments._SELECTED_SEGMENT_RECIPIENTS_KEY, [])
 

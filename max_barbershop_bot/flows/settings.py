@@ -890,7 +890,7 @@ _SELF_TEST_TEXT = (
 )
 _FEEDBACK_TEST_TEXT = "⭐️ Как прошёл ваш визит?\n\nОцените, пожалуйста, от 1 до 5 ⭐️"
 _LOST_TEST_TEXTS = {
-    "lost_client_30": "Давно вас не видели 😊\n\nСамое время обновить стрижку.",
+    "lost_client_30": "Давно вас не видели 😊\n\nХотите записаться снова? Подберём удобное время.",
     "lost_client_60": "Похоже, вы давно не заглядывали к нам.\n\nПодберём удобное время?",
     "lost_client_90": "Мы скучаем 😄\n\nДля вас есть специальное предложение на возвращение.",
 }
@@ -936,7 +936,7 @@ async def _run_dev_cancellation_test(context: RouterContext, test_event_id: int)
         staff_id="dev-test-staff",
         staff_name="Тестовый мастер",
         service_id="dev-test-service",
-        service_name="Тестовая стрижка",
+        service_name="Тестовая услуга",
         cancelled_booking_datetime_utc=now,
         cancellation_detected_at_utc=now,
         scheduled_send_at_utc=now,
@@ -1019,7 +1019,7 @@ async def _run_dev_repeat_visit_test(context: RouterContext, test_event_id: int)
         scheduled_at=now,
         yclients_visit_id=f"dev-visit-{test_event_id}-{uuid4().hex[:8]}",
         yclients_service_id="dev-test-service",
-        service_name="Тестовая стрижка",
+        service_name="Тестовая услуга",
         last_visit_datetime_utc=now,
         delay_days=30,
         scheduled_send_at_utc=now,
@@ -1222,7 +1222,7 @@ async def _send_notification_test_and_build_result_text(context: RouterContext, 
         yclients_client_id="dev-test-client",
         notification_type=notification_type,
         booking_datetime=booking_datetime,
-        service_name="МУЖСКАЯ СТРИЖКА" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовая стрижка",
+        service_name="Тестовая услуга",
         master_name="Рената Пономарёва" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовый мастер",
         client_name="Илья" if notification_type in {BOOKING_REMINDER_48H, BOOKING_REMINDER_2H} else "Тестовый клиент",
         branch_address=await _dev_test_branch_address(),
@@ -1622,7 +1622,7 @@ def render_automation_module_text(key: str, s: dict[str, object]) -> str:
     if key == "post_visit_review": return f"⭐ Оценка после визита\n\nСтатус: {status}\nЗадержка после визита: {s.get('delay_hours', 2)} ч\nТекст сообщения:\n{s.get('message_text', '')}\n\nПоложительная оценка: 4–5 ⭐ → клиенту показываются ссылки на отзывы.\nНегативная оценка: 1–3 ⭐ → бот попросит комментарий и передаст администратору."
     if key == "cancellation_return": return f"❌ Возврат после отмены\n\nСтатус: {status}\nЗадержка после отмены: {s.get('delay_hours', 2)} ч\nТекст сообщения:\n{s.get('message_text', '')}\n\nПравило: отправлять только если у клиента нет новой будущей записи."
     if key == "lost_clients": return f"😔 Потерянные клиенты\n\nСтатус: {status}\nСроки: {' / '.join(map(str, s.get('threshold_days') or [30, 60, 90]))} дней\nПравило: не отправлять, если у клиента есть будущая запись.\n\n30 дней:\n{s.get('text_30', '')}\n\n60 дней:\n{s.get('text_60', '')}\n\n90 дней:\n{s.get('text_90', '')}"
-    if key == "birthday": return f"🎂 День рождения\n\nСтатус: {status}\nОтправлять за: {s.get('send_days_before', 7)} дней\nТекст сообщения:\n{s.get('message_text', '')}\n\nКнопка в уведомлении: ✂️ Записаться\nКомментарий в YClients при записи: У КЛИЕНТА ДЕНЬ РОЖДЕНИЕ - НУЖНО СДЕЛАТЬ СКИДКУ"
+    if key == "birthday": return f"🎂 День рождения\n\nСтатус: {status}\nОтправлять за: {s.get('send_days_before', 7)} дней\nТекст сообщения:\n{s.get('message_text', '')}\n\nКнопка в уведомлении: ✨ Записаться\nКомментарий в YClients при записи: У КЛИЕНТА ДЕНЬ РОЖДЕНИЕ - НУЖНО СДЕЛАТЬ СКИДКУ"
     if key == "repeat_visit": return f"🔁 Повторный визит\n\nСтатус: {status}\nСрок по умолчанию: {s.get('delay_days', 30)} дней\nПравило: напоминать только если нет будущей записи.\n\n" + "\n\n".join(f"Текст {i}:\n{txt}" for i, txt in enumerate((s.get('templates') or [])[:5], 1))
     if key == "anti_spam": return f"🔕 Антиспам\n\nЛимит зелёных сообщений в неделю: {s.get('max_weekly_marketing', 2)}\nМинимальный интервал между зелёными сообщениями: {s.get('min_interval_hours', 48)} ч\nОтписка: зелёные уведомления не отправляются отписавшимся клиентам.\n\nℹ️ Подробности по белым и зелёным уведомлениям: кнопка ниже."
     if key == "review_links": return f"🔗 Ссылки на отзывы\n\nИспользуются после оценки 4–5 ⭐.\n\nЯндекс: {s.get('yandex_url') or '—'}\n2ГИС: {s.get('two_gis_url') or '—'}"
@@ -2071,7 +2071,7 @@ async def _save_contact_map_url(context: RouterContext, map_key: str, value: str
 
 def _render_contacts_preview(contacts: ContactInfo) -> str:
     return (
-        "📍 Контакты Барбершоп\n\n"
+        "📍 Контакты салона\n\n"
         f"🏠 Адрес: {contacts.address or '—'}\n"
         f"📞 Телефон: {contacts.phone or '—'}\n"
         f"⏰ Режим работы: {contacts.schedule or '—'}\n\n"

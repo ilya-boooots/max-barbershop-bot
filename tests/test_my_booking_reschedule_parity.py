@@ -51,7 +51,7 @@ def future_row(status: str = "active", minutes: int = 120) -> dict[str, object]:
         "id": "old-1",
         "datetime": dt.strftime("%Y-%m-%d %H:%M:%S"),
         "status": status,
-        "services": [{"id": "svc-1", "title": "Стрижка", "seance_length": 3600}],
+        "services": [{"id": "svc-1", "title": "Услуга", "seance_length": 3600}],
         "staff": {"id": "staff-1", "name": "Максим"},
         "client": {"id": "client-1", "name": "Иван", "phone": "+79991234567"},
         "seance_length": 3600,
@@ -107,7 +107,7 @@ def test_past_booking_is_not_reschedulable_but_five_minute_grace_matches_telegra
 def test_reschedule_confirmation_contains_service_master_and_old_new_order() -> None:
     text = svc.format_reschedule_confirmation_text(
         {
-            "service_name": "Стрижка",
+            "service_name": "Услуга",
             "staff_name": "Максим",
             "old_date": "20.07.2026",
             "old_time": "10:00",
@@ -118,7 +118,7 @@ def test_reschedule_confirmation_contains_service_master_and_old_new_order() -> 
     assert text.splitlines() == [
         "Проверьте перенос записи 🔁",
         "",
-        "✂️ Услуга: Стрижка",
+        "✨ Услуга: Услуга",
         "👤 Мастер: Максим",
         "",
         "Было:",

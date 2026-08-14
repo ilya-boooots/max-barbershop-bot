@@ -27,6 +27,8 @@ def test_telegram_reference_active_personnel_list_semantics() -> None:
     assert 'F.data == "staff:menu:show_all"' in personnel
     assert 'can_view_personnel(role)' in personnel
     assert '"⛔️ Недостаточно прав."' in personnel
+    # The immutable Telegram snapshot still carries the legacy restaurant label;
+    # MAX intentionally replaces it with the product-neutral salon wording.
     assert '"👥 Персонал ресторана"' in personnel
     assert 'f"Всего: {len(staff)}"' in personnel
     assert 'role_label(member_role)' in personnel
@@ -47,8 +49,8 @@ def test_staff_list_payload_registered_to_real_handler() -> None:
 
 
 def test_text_and_button_constants_match_telegram_list() -> None:
-    assert texts.STAFF_LIST_TITLE_TEXT == "👥 Персонал ресторана"
-    assert texts.STAFF_LIST_EMPTY_TEXT == "👥 Персонал ресторана\nВсего: 0"
+    assert texts.STAFF_LIST_TITLE_TEXT == "👥 Персонал салона"
+    assert texts.STAFF_LIST_EMPTY_TEXT == "👥 Персонал салона\nВсего: 0"
     assert buttons.STAFF_LIST_PAYLOAD == "staff:list"
     assert buttons.STAFF_CARD_PAYLOAD_PREFIX == "staff:card:open:"
 

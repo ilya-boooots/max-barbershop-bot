@@ -28,7 +28,7 @@ _MASTERS_STATE_KEY = "masters_section_items"
 _SELECTED_MASTER_INDEX_STATE_KEY = "masters_section_selected_index"
 _MAX_MASTERS = 20
 
-MASTERS_LIST_TEXT = "Выберите мастера 💈"
+MASTERS_LIST_TEXT = "Выберите мастера 👤"
 MASTERS_EMPTY_TEXT = """Мастера пока недоступны 🙏
 
 Пожалуйста, попробуйте позже."""
@@ -142,7 +142,7 @@ async def _show_master_detail(context: RouterContext, master: BookingMasterItem)
         _master_detail_text(master),
         keyboard=MaxInlineKeyboard.from_rows(
             [
-                [MaxButton(text="✂️ Записаться к мастеру", payload=MASTERS_BOOK_PAYLOAD)],
+                [MaxButton(text="✨ Записаться к мастеру", payload=MASTERS_BOOK_PAYLOAD)],
                 [MaxButton(text="⬅️ Назад", payload=MASTERS_BACK_PAYLOAD)],
                 [MaxButton(text="🏠 Главное меню", payload=MASTERS_HOME_PAYLOAD)],
             ]
@@ -152,7 +152,7 @@ async def _show_master_detail(context: RouterContext, master: BookingMasterItem)
 
 
 def _master_detail_text(master: BookingMasterItem) -> str:
-    lines = [f"💈 {master.title}"]
+    lines = [f"👤 {master.title}"]
     if master.specialization:
         lines.append(f"Специализация: {master.specialization}")
     if master.rating:

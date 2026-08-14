@@ -66,7 +66,7 @@ def reschedule_context(record_id: str = "old-1") -> dict[str, object]:
         "yclients_record_id": record_id,
         "service_id": "svc-1",
         "service_ids": ["svc-1"],
-        "service_name": "Стрижка",
+        "service_name": "Услуга",
         "staff_id": "staff-1",
         "staff_name": "Максим",
         "client_data": {"id": "client-1", "phone": "+79991234567", "name": "Иван"},
@@ -82,7 +82,7 @@ def selected_booking(record_id: str = "old-1") -> dict[str, object]:
     return {
         "yclients_record_id": record_id,
         "id": record_id,
-        "service_name": "Стрижка",
+        "service_name": "Услуга",
         "master_name": "Максим",
         "datetime": OLD_DT,
         "date": "20.07.2026",

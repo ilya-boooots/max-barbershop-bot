@@ -94,7 +94,7 @@ def _result(*, rows: list[dict[str, object]] | None = None) -> AdminBookingsResu
             "datetime": "2026-07-16T09:30:00+04:00",
             "status": "confirmed",
             "staff_name": "Анна",
-            "services": [{"title": "Стрижка"}],
+            "services": [{"title": "Услуга"}],
             "phone": "+79991234567",
         }
     ]

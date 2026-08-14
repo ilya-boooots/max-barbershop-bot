@@ -25,7 +25,7 @@ REPEAT_VISIT_NOTIFICATION_TYPE = "repeat_visit"
 REPEAT_VISIT_DELAY_DAYS = 30
 REPEAT_VISIT_ANTISPAM_HOURS = 48
 BUTTON_CB_PREFIX = "repeat_visit:book:"
-FALLBACK_TEXT = "Пора обновить стрижку? 😊\n\nОбычно к этому времени форма уже начинает теряться."
+FALLBACK_TEXT = "Пора позаботиться о себе? 😊\n\nПодберём удобное время для следующего визита."
 REPEAT_VISIT_TEXTS = [FALLBACK_TEXT]
 _COMPLETED = {"visit", "done", "paid", "completed", "show"}
 
@@ -39,7 +39,7 @@ class RepeatVisitSummary:
 
 
 def build_repeat_visit_booking_keyboard(event_id: int) -> MaxInlineKeyboard:
-    return MaxInlineKeyboard.from_rows([[MaxButton(text="✂️ Записаться", payload=f"{BUTTON_CB_PREFIX}{event_id}")]])
+    return MaxInlineKeyboard.from_rows([[MaxButton(text="✨ Записаться", payload=f"{BUTTON_CB_PREFIX}{event_id}")]])
 
 
 def repeat_visit_keyboard(event_id: int | None = None) -> MaxInlineKeyboard:

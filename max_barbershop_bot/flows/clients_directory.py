@@ -52,7 +52,7 @@ _SELECTED_KEY = "clients_directory_selected"
 _PAGE_KEY = "clients_directory_page"
 
 STALE_RESULTS_TEXT = "Этот список клиентов уже устарел 🙏\n\nВыполните поиск заново."
-NO_ACCESS_TEXT = "⛔️ Этот раздел доступен только команде барбершопа."
+NO_ACCESS_TEXT = "⛔️ Этот раздел доступен только команде салона."
 NOT_CONFIGURED_TEXT = "⚙️ Не настроены ключи YClients. Проверьте настройки интеграции 🙂"
 
 
@@ -293,7 +293,7 @@ def format_clients_directory_card(client_row: dict[str, Any], future: list[dict[
     ]
     if future:
         for item in future:
-            lines.append(f"• 🕒 {_when(item, time_service)} • 💈 {_service(item)} • 👨‍🔧 {_master(item)} • {_status(item)}")
+            lines.append(f"• 🕒 {_when(item, time_service)} • ✨ {_service(item)} • 👤 {_master(item)} • {_status(item)}")
     else:
         lines.append("Будущих записей пока нет 🙂")
     lines.extend(["", "📅 История визитов"])
@@ -301,7 +301,7 @@ def format_clients_directory_card(client_row: dict[str, Any], future: list[dict[
         for item in history[:HISTORY_SIZE]:
             price = _price(item)
             price_part = f" • 💳 {price}" if price != "—" else ""
-            lines.append(f"• 🕒 {_when(item, time_service)} • 💈 {_service(item)} • 👨‍🔧 {_master(item)} • {_status(item)}{price_part}")
+            lines.append(f"• 🕒 {_when(item, time_service)} • ✨ {_service(item)} • 👤 {_master(item)} • {_status(item)}{price_part}")
     else:
         lines.append("История визитов пока пустая 🙂")
     loyalty = _loyalty(client_row)

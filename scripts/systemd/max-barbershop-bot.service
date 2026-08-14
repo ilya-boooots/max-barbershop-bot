@@ -1,5 +1,5 @@
 [Unit]
-Description=MAX Barbershop Bot
+Description=MAX Beauty Services Bot
 After=network-online.target
 Wants=network-online.target
 

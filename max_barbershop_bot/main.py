@@ -1,4 +1,4 @@
-"""Minimal standalone runtime for the MAX Barbershop Bot."""
+"""Minimal standalone runtime for the MAX beauty services bot."""
 
 from __future__ import annotations
 
@@ -261,7 +261,7 @@ async def run() -> None:
     client = MaxApiClient(config)
     _log_telegram_config_diagnostic(config)
     logger.info(
-        "🚀 MAX Barbershop Bot запускается: env=%s, dev_max_user_id_set=%s",
+        "🚀 MAX beauty services bot запускается: env=%s, dev_max_user_id_set=%s",
         config.app_env,
         config.dev_max_user_id is not None,
     )
@@ -289,7 +289,7 @@ async def run() -> None:
         await _run_dev_polling_runtime(client, config)
     finally:
         await client.close()
-        logger.info("🛑 MAX Barbershop Bot остановлен")
+        logger.info("🛑 MAX beauty services bot остановлен")
 
 
 def _log_telegram_config_diagnostic(config: Config) -> None:

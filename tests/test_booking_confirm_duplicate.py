@@ -82,7 +82,7 @@ def _prepare(monkeypatch):
     state.set_current_screen("u1", "100", state.BOOKING_CONFIRMATION_SCREEN)
     for key, value in {
         booking._SELECTED_SERVICE_STATE_KEY: "svc1",
-        booking._SELECTED_SERVICE_NAME_STATE_KEY: "Стрижка",
+        booking._SELECTED_SERVICE_NAME_STATE_KEY: "Услуга",
         booking._SELECTED_MASTER_STATE_KEY: "m1",
         booking._SELECTED_MASTER_NAME_STATE_KEY: "Мастер",
         booking._SELECTED_DATE_STATE_KEY: "2026-07-05",
@@ -100,7 +100,7 @@ def _prepare(monkeypatch):
 
     async def _success(context, *, created, user, booking_data):
         state.set_current_screen("u1", "100", state.BOOKING_SUCCESS_SCREEN)
-        await context.send_text("✅ Готово! Вы записаны 💈")
+        await context.send_text("✅ Готово! Вы записаны ✨")
 
     monkeypatch.setattr(booking, "_send_immediate_confirmation_safely", _success)
 

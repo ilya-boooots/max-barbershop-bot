@@ -29,7 +29,7 @@ BIRTHDAY_MESSAGE_TEXT = (
     "Хотим сделать вам приятный подарок - покажите это сообщение администратору при оплате."
 )
 BIRTHDAY_WARNING = "У КЛИЕНТА ДЕНЬ РОЖДЕНИЕ - НУЖНО СДЕЛАТЬ СКИДКУ"
-BIRTHDAY_BOOKING_BUTTON_TEXT = "✂️ Записаться"
+BIRTHDAY_BOOKING_BUTTON_TEXT = "✨ Записаться"
 BIRTHDAY_LOOP_INTERVAL_SECONDS = 3600
 
 

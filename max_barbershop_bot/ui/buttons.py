@@ -22,7 +22,7 @@ from max_barbershop_bot.max_api.models import MaxButton, MaxInlineKeyboard
 
 MENU_BOOKING_PAYLOAD = "menu:booking"
 REPEAT_VISIT_BOOKING_PAYLOAD_PREFIX = "repeat_visit:book:"
-REPEAT_VISIT_BOOKING_BUTTON_TEXT = "✂️ Записаться"
+REPEAT_VISIT_BOOKING_BUTTON_TEXT = "✨ Записаться"
 MENU_MY_BOOKINGS_PAYLOAD = "menu:my_bookings"
 MENU_MASTERS_PAYLOAD = "menu:masters"
 MENU_CONTACTS_PAYLOAD = "menu:contacts"
@@ -139,7 +139,7 @@ LOST_CLIENTS_BROADCAST_PAYLOAD = "lost_clients:broadcast"
 LOST_CLIENTS_BACK_PAYLOAD = "lost_clients:back"
 LOST_CLIENTS_HOME_PAYLOAD = "lost_clients:home"
 LOST_CLIENTS_BOOKING_PAYLOAD_PREFIX = "lost_clients:book:"
-LOST_CLIENTS_BOOKING_BUTTON_TEXT = "✂️ Записаться"
+LOST_CLIENTS_BOOKING_BUTTON_TEXT = "✨ Записаться"
 SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD = "segments:no_future_bookings"
 SEGMENTS_REFRESH_PAYLOAD = "segments:refresh"
 SEGMENTS_BROADCAST_PAYLOAD = "segments:broadcast"
@@ -282,7 +282,7 @@ def main_menu_keyboard(role: str | None = None) -> MaxInlineKeyboard:
 
     normalized_role = normalize_role(role)
     rows = [
-        [MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)],
+        [MaxButton(text="✨ Записаться", payload=MENU_BOOKING_PAYLOAD)],
         [MaxButton(text="📅 Мои записи", payload=MENU_MY_BOOKINGS_PAYLOAD)],
         [MaxButton(text="📍 Контакты", payload=MENU_CONTACTS_PAYLOAD)],
         [MaxButton(text="🆘 Поддержка", payload=MENU_SUPPORT_PAYLOAD)],
@@ -918,8 +918,8 @@ def client_segments_menu_keyboard() -> MaxInlineKeyboard:
             [MaxButton(text="😴 Не были 90 дней", payload=SEGMENTS_LOST_90_PAYLOAD)],
             [MaxButton(text="📅 Без будущей записи", payload=SEGMENTS_NO_FUTURE_BOOKINGS_PAYLOAD)],
             [MaxButton(text="❌ Отменили запись", payload=SEGMENTS_CANCELLED_PAYLOAD)],
-            [MaxButton(text="💈 По мастеру", payload=SEGMENTS_BY_MASTER_PAYLOAD)],
-            [MaxButton(text="✂️ По услуге", payload=SEGMENTS_BY_SERVICE_PAYLOAD)],
+            [MaxButton(text="👤 По мастеру", payload=SEGMENTS_BY_MASTER_PAYLOAD)],
+            [MaxButton(text="✨ По услуге", payload=SEGMENTS_BY_SERVICE_PAYLOAD)],
             [MaxButton(text="🎂 День рождения скоро", payload=SEGMENTS_BIRTHDAY_SOON_PAYLOAD)],
             [MaxButton(text="🔄 Обновить сегменты", payload=SEGMENTS_REFRESH_PAYLOAD)],
             [MaxButton(text="⬅️ Назад", payload=SEGMENTS_BACK_PAYLOAD)],
@@ -1095,7 +1095,7 @@ def booking_stale_keyboard() -> MaxInlineKeyboard:
 
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)],
+            [MaxButton(text="✨ Записаться", payload=MENU_BOOKING_PAYLOAD)],
             [MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)],
         ]
     )
@@ -1360,7 +1360,7 @@ def my_bookings_keyboard(*, include_booking: bool = False) -> MaxInlineKeyboard:
 
     rows: list[list[MaxButton]] = []
     if include_booking:
-        rows.append([MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)])
+        rows.append([MaxButton(text="✨ Записаться", payload=MENU_BOOKING_PAYLOAD)])
     else:
         rows.append([MaxButton(text="⬅️ Назад", payload=NAV_BACK_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
@@ -1419,7 +1419,7 @@ def my_bookings_main_keyboard(
         rows.pop()
     if rows and rows[-1] and rows[-1][0].payload == NAV_BACK_PAYLOAD:
         rows.pop()
-    rows.append([MaxButton(text="✂️ Записаться", payload=MENU_BOOKING_PAYLOAD)])
+    rows.append([MaxButton(text="✨ Записаться", payload=MENU_BOOKING_PAYLOAD)])
     rows.append([MaxButton(text="🏠 Главное меню", payload=NAV_HOME_PAYLOAD)])
     return MaxInlineKeyboard.from_rows(rows)
 
@@ -1814,7 +1814,7 @@ def cancellation_recovery_keyboard(event_id: int | str) -> MaxInlineKeyboard:
     clean_event_id = str(event_id).strip()
     return MaxInlineKeyboard.from_rows(
         [
-            [MaxButton(text="✂️ Подобрать новое время", payload=f"cancel_recovery:rebook:{clean_event_id}")],
+            [MaxButton(text="✨ Подобрать новое время", payload=f"cancel_recovery:rebook:{clean_event_id}")],
             [MaxButton(text="📅 Выбрать другую дату", payload=f"cancel_recovery:date:{clean_event_id}")],
             [MaxButton(text="Позже", payload=f"cancel_recovery:later:{clean_event_id}")],
         ]

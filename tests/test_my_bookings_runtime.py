@@ -24,7 +24,7 @@ def base_record(**overrides):
     record = {
         "id": "r1",
         "datetime": future_iso(),
-        "services": [{"id": "s1", "title": "Стрижка", "price": 1200}],
+        "services": [{"id": "s1", "title": "Услуга", "price": 1200}],
         "staff": {"id": "m1", "name": "Максим"},
         "client": {"id": "123", "phone": "+79198332692"},
         "attendance": "0",
@@ -157,7 +157,7 @@ def test_active_one_future_booking_root_card_matches_telegram_format() -> None:
     assert text.splitlines() == [
         "📅 Моя ближайшая запись",
         "",
-        "✂️ Услуга: Стрижка",
+        "✨ Услуга: Услуга",
         "👤 Мастер: Максим",
         "📅 Дата: 04.07.2026",
         "🕒 Время: 12:00",
@@ -257,7 +257,7 @@ def test_detail_future_card_field_order_and_formatting_matches_telegram() -> Non
         base_record(
             status="approved",
             duration=5400,
-            services=[{"id": "s1", "title": "Стрижка", "price": 1200}, {"id": "s2", "title": "Борода", "price": 800}],
+            services=[{"id": "s1", "title": "Услуга", "price": 1200}, {"id": "s2", "title": "Уход", "price": 800}],
         )
     ])
 
@@ -266,7 +266,7 @@ def test_detail_future_card_field_order_and_formatting_matches_telegram() -> Non
     assert text.splitlines() == [
         "📋 Активная запись",
         "",
-        "✂️ Услуга: Стрижка",
+        "✨ Услуга: Услуга",
         "👤 Мастер: Максим",
         "📅 Дата: 04.07.2026",
         "🕒 Время: 12:00",
@@ -279,14 +279,14 @@ def test_detail_future_card_field_order_and_formatting_matches_telegram() -> Non
 
 
 def test_detail_master_price_address_and_missing_status_fallbacks_match_telegram() -> None:
-    bookings, _ = visible([base_record(status=None, staff=None, duration=None, services=[{"id": "s1", "title": "Стрижка"}])])
+    bookings, _ = visible([base_record(status=None, staff=None, duration=None, services=[{"id": "s1", "title": "Услуга"}])])
 
     text = mb.format_booking_details_text(bookings[0], timezone_name=TZ, title="📋 Активная запись")
 
     assert text.splitlines() == [
         "📋 Активная запись",
         "",
-        "✂️ Услуга: Стрижка",
+        "✨ Услуга: Услуга",
         "👤 Мастер: Любой мастер",
         "📅 Дата: 04.07.2026",
         "🕒 Время: 12:00",

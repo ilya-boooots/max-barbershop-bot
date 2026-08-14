@@ -235,7 +235,7 @@ def format_contacts_text(contact_info: ContactInfo) -> str:
     """Format contacts exactly like the Telegram contacts screen where possible."""
 
     return (
-        "📍 Контакты Барбершоп\n\n"
+        "📍 Контакты салона\n\n"
         f"🏠 Адрес: {_display_value(contact_info.address)}\n"
         f"📞 Телефон: {_display_value(contact_info.phone)}\n"
         f"⏰ Режим работы: {_display_value(contact_info.schedule)}"

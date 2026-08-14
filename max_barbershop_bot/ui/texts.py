@@ -1,13 +1,13 @@
-"""Russian UI texts for the MAX barbershop bot."""
+"""Russian UI texts for the MAX beauty services bot."""
 
 from __future__ import annotations
 
-START_GREETING_TEXT = """Привет! 👋 Это MAX-версия бота барбершопа.
+START_GREETING_TEXT = """Привет! 👋 Это MAX-бот салона красоты.
 
-Скоро здесь появится запись, мои визиты, уведомления и связь с администратором."""
+Здесь можно записаться на услуги, посмотреть свои визиты, получить уведомления и связаться с администратором."""
 MAIN_MENU_TEXT = "✨ Выберите действие в меню ниже 👇"
 SECTION_SOON_TEXT = "Раздел скоро появится 🔧"
-REPEAT_VISIT_FALLBACK_TEXT = "Пора обновить стрижку? 😊\n\nОбычно к этому времени форма уже начинает теряться."
+REPEAT_VISIT_FALLBACK_TEXT = "Пора позаботиться о себе? 😊\n\nПодберём удобное время для следующего визита."
 
 SUPPORT_TEXT = """🆘 Поддержка
 
@@ -128,24 +128,24 @@ REGISTRATION_REQUIRED_TEXT = "📝 Сначала завершите регис�
 REGISTRATION_DECLINED_TEXT = "📝 Регистрация уже идет. Давайте закончим 🙂"
 REGISTRATION_NAME_CONFIRM_TEXT = "👉 Хотите использовать имя {name} для регистрации в системе?"
 
-BOOKING_HUB_TEXT = "✂️ Как начнём запись?"
-BOOKING_CATEGORY_TEXT = "✂️ Выберите категорию услуг 😊"
-BOOKING_SERVICE_TEXT = "Выберите услугу ✂️"
+BOOKING_HUB_TEXT = "✨ Как начнём запись?"
+BOOKING_CATEGORY_TEXT = "✨ Выберите категорию услуг 😊"
+BOOKING_SERVICE_TEXT = "Выберите услугу ✨"
 BOOKING_EMPTY_TEXT = "Сейчас нет доступных услуг для записи 🙏"
 BOOKING_CATEGORY_SERVICES_EMPTY_TEXT = "У этого мастера сейчас нет доступных услуг для записи 🙏"
-BOOKING_STAFF_FIRST_CATEGORY_TEXT = "💈 Отлично! Теперь выберите категорию услуг ✂️"
+BOOKING_STAFF_FIRST_CATEGORY_TEXT = "👤 Отлично! Теперь выберите категорию услуг ✨"
 BOOKING_DATETIME_FIRST_CATEGORY_TEXT = "🧾 Теперь выберите категорию услуг для выбранной даты/времени"
-BOOKING_DATETIME_FIRST_SERVICE_TEXT = "Выберите услугу для выбранной даты/времени ✂️"
+BOOKING_DATETIME_FIRST_SERVICE_TEXT = "Выберите услугу для выбранной даты/времени ✨"
 BOOKING_CATEGORY_EMPTY_TEXT = "Сейчас нет доступных услуг для записи 🙏"
-BOOKING_MASTER_TEXT = "Выберите мастера 💈"
+BOOKING_MASTER_TEXT = "Выберите мастера 👤"
 BOOKING_MASTERS_EMPTY_TEXT = "Для этой услуги сейчас нет доступных мастеров со свободными окнами 🙏"
 BOOKING_MASTER_SELECTED_TEXT = """Вы выбрали мастера: {master_name}
 
 Следующий шаг — выбор даты и времени. Скоро добавим 🔧"""
-BOOKING_DATES_TEXT = """✂️ Запись
+BOOKING_DATES_TEXT = """✨ Запись
 
 Выберите дату:"""
-BOOKING_SLOTS_TEXT = """✂️ Запись
+BOOKING_SLOTS_TEXT = """✨ Запись
 
 Выберите свободное время:"""
 BOOKING_STALE_DATE_TEXT = "На эту дату пока нет свободных окон 🙏"
@@ -171,8 +171,8 @@ BOOKING_CREATE_IN_PROGRESS_TEXT = "⏳ Уже выполняем действи�
 STAFF_MENU_TEXT = """👥 Управление персоналом
 
 Выберите действие:"""
-STAFF_LIST_TITLE_TEXT = "👥 Персонал ресторана"
-STAFF_LIST_EMPTY_TEXT = """👥 Персонал ресторана
+STAFF_LIST_TITLE_TEXT = "👥 Персонал салона"
+STAFF_LIST_EMPTY_TEXT = """👥 Персонал салона
 Всего: 0"""
 STAFF_CARD_TITLE_TEXT = "<b>Карточка сотрудника</b>"
 STAFF_CARD_STALE_TEXT = "Сотрудник не найден"
@@ -294,7 +294,7 @@ YCLIENTS_CONFIRM_TEXT = """Проверьте настройки YClients 🧩
 🏢 Company ID: {company_id}
 🔐 Partner token: {partner_token}
 👤 User token: {user_token}
-💈 Филиал: {branch_title}
+📍 Филиал: {branch_title}
 🕒 Часовой пояс: {branch_timezone}
 
 Если всё верно, сохраните настройки ✅"""

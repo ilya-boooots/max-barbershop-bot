@@ -48,8 +48,8 @@ def test_segment_menu_matches_reference_buttons():
         "😴 Не были 90 дней",
         "📅 Без будущей записи",
         "❌ Отменили запись",
-        "💈 По мастеру",
-        "✂️ По услуге",
+        "👤 По мастеру",
+        "✨ По услуге",
         "🎂 День рождения скоро",
         "🔄 Обновить сегменты",
         "⬅️ Назад",
@@ -578,7 +578,7 @@ def test_service_category_picker_and_handoff_match_telegram_meaning():
     assert client_segments.SERVICE_CATEGORIES_LOAD_ERROR_TEXT == "⚠️ Не удалось загрузить категории услуг из YClients. Попробуйте позже."
     assert client_segments._audience_key_from_segment_payload("segments:by_service:10", "by_service") == "by_service_category:10"
     source = inspect.getsource(client_segments._show_service_picker)
-    assert "✂️ Выберите категорию услуг" in source
+    assert "✨ Выберите категорию услуг" in source
     assert "list_service_categories" in source
     assert "SERVICE_CATEGORIES_EMPTY_TEXT" in source
     assert "SERVICE_CATEGORIES_LOAD_ERROR_TEXT" in source
@@ -595,7 +595,7 @@ def test_service_category_safe_callback_and_detail_formatting_match_telegram(mon
     )
 
     async def fake_services(settings):
-        return [{"id": "501", "category_id": "cat-long-value-that-needs-hash", "category": {"name": "Стрижки"}}]
+        return [{"id": "501", "category_id": "cat-long-value-that-needs-hash", "category": {"name": "Услуги"}}]
 
     async def fake_records(settings, *, date_from: str, date_to: str):
         return [
@@ -604,14 +604,14 @@ def test_service_category_safe_callback_and_detail_formatting_match_telegram(mon
             {"datetime": now.isoformat(), "client": {"id": "102", "phone": "+79990000002", "name": "Олег"}, "services": [{"id": "999"}]},
         ]
 
-    callback_id = segments._safe_service_category_callback_id("cat-long-value-that-needs-hash", "Стрижки")
+    callback_id = segments._safe_service_category_callback_id("cat-long-value-that-needs-hash", "Услуги")
     assert len(f"segments:by_service:{callback_id}".encode("utf-8")) <= 64
     monkeypatch.setattr(service, "_fetch_services", fake_services)
     monkeypatch.setattr(service, "_fetch_records", fake_records)
 
     result = asyncio.run(service.get_clients_by_service_category(callback_id))
 
-    assert result.title == "✂️ Клиенты категории: Стрижки"
+    assert result.title == "✨ Клиенты категории: Услуги"
     assert result.description == "Клиенты, которые пользовались услугами из выбранной категории."
     assert result.count == 1
     assert result.diagnostics["service_ids"] == ["501"]
@@ -628,7 +628,7 @@ def test_empty_service_category_detail_matches_telegram(monkeypatch):
     )
 
     async def fake_services(settings):
-        return [{"id": "501", "category_id": "10", "category": {"name": "Борода"}}]
+        return [{"id": "501", "category_id": "10", "category": {"name": "Уход"}}]
 
     async def fake_records(settings, *, date_from: str, date_to: str):
         return []

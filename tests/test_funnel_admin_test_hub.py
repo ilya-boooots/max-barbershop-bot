@@ -111,7 +111,7 @@ def test_feedback_test_creates_request_and_rating_buttons(db):
     "key, table, text, payload_prefix",
     [
         ("cancellation", "cancellation_recovery_events", "Видим, что вы отменили запись 😔\n\nМожем подобрать другое удобное время.", "cancel_recovery:"),
-        ("lost_client_30", "lost_client_events", "Давно вас не видели 😊\n\nСамое время обновить стрижку.", "lost_clients:book:"),
+        ("lost_client_30", "lost_client_events", "Давно вас не видели 😊\n\nХотите записаться снова? Подберём удобное время.", "lost_clients:book:"),
         ("lost_client_60", "lost_client_events", "Похоже, вы давно не заглядывали к нам.\n\nПодберём удобное время?", "lost_clients:book:"),
         ("lost_client_90", "lost_client_events", "Мы скучаем 😄\n\nДля вас есть специальное предложение на возвращение.", "lost_clients:book:"),
         ("birthday", "birthday_funnel_events", "Скоро ваш день рождения, поздравляем 🎉 😊\n\nХотим сделать вам приятный подарок - покажите это сообщение администратору при оплате.", "birthday_funnel:book:"),

@@ -1,4 +1,4 @@
-"""Screen builders for the MAX barbershop bot."""
+"""Screen builders for the MAX beauty services bot."""
 
 from __future__ import annotations
 

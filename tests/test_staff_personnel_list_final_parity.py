@@ -262,7 +262,7 @@ def test_list_regression_title_count_order_dedupe_labels_and_no_phone_username(d
 
     text = _list_text(db)
 
-    assert text.startswith("👥 Персонал ресторана\nВсего: 3")
+    assert text.startswith("👥 Персонал салона\nВсего: 3")
     assert text.index("1) 💻 Разработчик") < text.index("2) 🛡 Администратор") < text.index("3) 👑 Управляющий")
     assert text.count("Admin") == 1
     assert "@admin_user" not in text

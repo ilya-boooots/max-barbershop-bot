@@ -1,1 +1,1 @@
-"""Core helpers for MAX Barbershop Bot."""
+"""Core helpers for the MAX beauty services bot."""
